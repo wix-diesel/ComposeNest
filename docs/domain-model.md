@@ -116,9 +116,10 @@ RuntimeTargetには設定した接続先と、同じ対象であることを確�
 
 ### 5.1 TemplateRevision
 
-Templateの「ある版の定義」を不変の単位として扱う。以下を含む。
+Templateの「ある版の定義」を不変の単位として扱う。Schema 1ではtemplate.yamlとVersion別完全定義のパッケージ全体が1つのTemplateRevisionとなる。ファイル単位のrevisionや継承は設けず、1 Versionの修正でも全体のtemplateVersionを上げる。以下を含む。
 
-- Template ID、定義版、Schema版、内容の同一性を照合する情報。
+- Template ID、定義版、Schema版、正規化方式、意味の同一性を照合する情報。
+- マニフェストと列挙した全Versionの原文集合（相対パス・バイト列・各SHA-256）。意味のhashと原文hashは区別する。
 - サービスの種類、対応条件、イメージと選択可能なVersion。
 - 入力項目の型・初期値・Validation・機密指定・表示メタ情報。
 - 設定から実行構成を組み立てる対応、公開ポート、永続化slot、準備完了条件。
@@ -130,7 +131,7 @@ Templateの公開状態は「使用可能」「無効」「カタログから除
 
 ### 5.2 TemplateSnapshot
 
-Instanceが実際に使った定義内容を保持する値である。Template IDと版だけを外部ファイルへ参照する構造にしない。Templateの入力既定値とは別に、Instanceの確定値を保存する。
+Instanceが実際に使った定義内容を保持する値である。選択Versionだけでなく、そのパッケージ版の全Versionの完全定義・表示順・規則版・原文集合を保持する。Template IDと版だけを外部ファイルへ参照する構造にしない。カタログの新Versionは自動追加せず、元ファイル削除後もSnapshot内のVersionをCloneで選べる。Templateの入力既定値とは別に、Instanceの確定値を保存する。
 
 SnapshotはそのInstanceのPassword等の実値を含める場所ではない。実値はInstanceSpecに属する。Clone先はSnapshotを値として保持でき、元Instanceやカタログの寿命に依存しない。
 

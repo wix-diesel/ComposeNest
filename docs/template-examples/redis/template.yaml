@@ -1,0 +1,12 @@
+# Syntax reference only. Validate on all target OSes and both storage modes before distribution.
+schemaVersion: 1
+id: example.redis
+templateVersion: "1.0.0"
+name: Redis
+description: 認証と永続化を有効にした、開発用Redis環境です。
+author: ComposeNest specification examples
+homepage: https://hub.docker.com/_/redis
+
+defaultVersion: "8.2"
+versions:
+  "8.2": versions/8.2.yaml

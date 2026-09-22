@@ -8,7 +8,7 @@
 
 Cloneの詳細: [v1 Clone Policy仕様](clone-policy-spec.md)。型・用途別適用可否、組込み生成器、確認・確定・再試行と検証シナリオを定義している。
 
-Templateの詳細: [v1 Template Schema仕様](template-schema-spec.md)。読みやすい単一YAML、入力参照、Version差分、読込み検証と将来のユーザー作成Templateインポートを定義している。
+Templateの詳細: [v1 Template Schema仕様](template-schema-spec.md)。マニフェスト＋Version別完全定義、入力参照、パッケージ全体の読込み検証と将来のユーザー作成Templateインポートを定義している。
 
 ## 1. 目的と文書の範囲
 
@@ -125,10 +125,10 @@ React／Tauri／Rust／SQLiteの採用は変更しない。TypeScript／Viteは�
 | --- | --- | --- |
 | TPL-01 | PostgreSQLとRedisを同梱する | 両Templateから作成・接続・永続化・設定Cloneができる |
 | TPL-02 | 宣言定義からフォームを生成する | サービス固有のフォーム実装を追加せず、対応済み入力型で表示できる |
-| TPL-03 | ローカル定義ファイルの追加を読み込める | 再起動または再読込みで追加Templateを選択でき、本体の再ビルドを必要としない |
-| TPL-04 | ID、版、互換性、入力、Validation、保存先、Clone規則を検証する | 不正定義だけを無効化し、理由を示す。他のTemplateと既存Instanceは維持する |
+| TPL-03 | ローカル定義パッケージを読み込める | template.yamlとversions/*.yamlの追加を再起動または再読込みで反映。本体再ビルドは不要 |
+| TPL-04 | ID、版、互換性、入力、Validation、保存先、Clone規則を検証する | 1 Versionでも不正・欠損ならそのパッケージ全体を拒否し、ファイルとVersionを含む理由を示す。他Template・既存登録版・Instanceは維持する |
 | TPL-05 | 検証済みのサービスVersionのみ提示する | 未対応Versionを選べず、`latest`を既定値にしない |
-| TPL-06 | 使用した定義と版をInstanceごとに保持する | Templateの更新・削除後も既存Instanceを別定義へ勝手に置換しない |
+| TPL-06 | 使用した定義と版をInstanceごとに保持する | 全Versionの完全定義と原文集合をSnapshotへ保持し、更新・削除後も別定義へ置換・新Version追加をしない |
 | TPL-07 | 対応する入力型と実行能力を限定する | 文字列・整数・真偽値・選択肢・秘密文字列を扱い、任意ホストコードを実行しない |
 | TPL-08 | bind mountとnamed volumeの両方を表現する | 同梱2種類のTemplateで両方式を利用できる。永続化対象を暗黙の共有領域へ逃がさない |
 | TPL-09 | 日本語の項目名・説明・エラーを提供する | 日本語UIとして利用でき、内部キーと表示文字列を区別する |
@@ -137,7 +137,7 @@ React／Tauri／Rust／SQLiteの採用は変更しない。TypeScript／Viteは�
 
 Versionごとのマウント先や初期化方法の差はTemplateが吸収する。Template本体の版、Schema版、コンテナイメージのVersionを別の概念として扱う。未知のSchema版は拒否し、同一ID・同一版の重複を読み込み順で暗黙解決しない。
 
-Template Schema v1はinputs／service／versionsを基本とする単一YAMLとする。作者はホスト側パスやClone時の資源生成を記述しない。将来のファイル選択によるインポート画面では、内容・出所の確認後に検証した同一内容を登録する。インポートUI、ZIP・URL取得、オンラインカタログはv1必須に追加しない。
+Template Schema 1の標準は、共通メタ情報・Version一覧のtemplate.yamlと、Version別の完全定義ファイルで構成するパッケージとする。継承・差分マージは行わない。未実装の従来案に対する互換読込み・移行機能は設けない。登録・版管理はパッケージ全体で行う。作者はホスト側パスやClone時の資源生成を記述しない。将来のディレクトリ選択によるインポート画面でも、内容・出所の確認後に検証した同一原文集合を登録する。インポートUI、ZIP・URL取得、オンラインカタログはv1必須に追加しない。
 
 ### 6.3 保存設定（UC2・UC3）
 
@@ -379,7 +379,7 @@ AC-05・06・09・10・13は両Templateと両保存方式を組み合わせて�
 | OPN-03 | 依存バージョン | 実装開始時に安定版の組合せを検証してlock。更新は互換性テストを通す。利用者のDockerは自動更新しない | 基盤タスクで具体patch・Desktop同梱組合せを記録。設計書の番号は候補 |
 | OPN-04 | 管理ルート・権限 | 3.3節のシステム共通領域、管理OSユーザー1人、導入・初回設定時のみ昇格、通常GUIは一般権限 | 初期化処理・ACL・Image UID/GIDの実装と配布検証 |
 | OPN-05 | 平文秘密 | SQLiteを正本、実行用Composeに必要な値だけ複製。通常画面はマスキング、ログ等への不要な複製を抑止 | ファイル保護と漏えい抑止の検証。WAL・内部退避も同等に保護 |
-| OPN-06 | Template・Policy | 現行Schema・Policyをv1として固定しRustで検証。任意スクリプト・自由なCompose断片は追加しない | parser・機械検証Schema・適合性テストの実装 |
+| OPN-06 | Template・Policy | 分割形式をSchema 1、Clone Policyを仕様版1として固定しRustで検証。任意スクリプト・自由なCompose断片は追加しない | parser・機械検証Schema・適合性テストの実装 |
 | OPN-07 | Image固定 | 初回取得digest・platformを保存。再試行・再作成・解決済み同VersionのCloneで再利用。更新は明示的な別操作 | Image解決・再取得の結合検証。既存Instanceの更新機能はv1外 |
 | OPN-08 | 外部編集からの復帰 | 変更操作を保留。確認後に編集ファイルを退避し、保存設定から再生成。手編集内容は取り込まない | 差分・確認UI、所有照合と復帰処理の実装 |
 | OPN-09 | ポート編集失敗 | 旧・新予約を保持し、同じOperationで再試行または旧構成復帰。実体照合後に不要な予約を解放 | 停止状態の維持・障害注入試験 |

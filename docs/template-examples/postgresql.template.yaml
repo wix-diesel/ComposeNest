@@ -1,0 +1,72 @@
+# Syntax reference only. Validate each version on all target OSes and both storage modes before distribution.
+schemaVersion: 1
+id: example.postgresql
+templateVersion: "1.0.0"
+name: PostgreSQL
+description: アプリ開発用のPostgreSQL環境です。複製では設定だけを引き継ぎます。
+author: ComposeNest specification examples
+homepage: https://hub.docker.com/_/postgres
+
+defaultVersion: "18"
+versions:
+  "18":
+    image: postgres:18
+    platforms: [linux/amd64, linux/arm64]
+  "17":
+    image: postgres:17
+    platforms: [linux/amd64, linux/arm64]
+    service:
+      storage:
+        data:
+          label: PostgreSQLデータ
+          container: /var/lib/postgresql/data
+
+inputs:
+  database:
+    label: データベース名
+    type: string
+    default: app
+    validation:
+      minLength: 1
+      maxLength: 63
+      pattern: '[a-z][a-z0-9_]*'
+  username:
+    label: ユーザー名
+    type: string
+    default: app
+    validation:
+      minLength: 1
+      maxLength: 63
+      pattern: '[a-z][a-z0-9_]*'
+  password:
+    label: パスワード
+    type: secret
+    description: 自動生成します。必要に応じて表示・入力できます。
+
+service:
+  environment:
+    POSTGRES_DB: { input: database }
+    POSTGRES_USER: { input: username }
+    POSTGRES_PASSWORD: { input: password }
+  ports:
+    database:
+      label: 接続ポート
+      container: 5432
+      defaultHost: 5432
+  storage:
+    data:
+      label: PostgreSQLデータ
+      container: /var/lib/postgresql
+  healthcheck:
+    command: [pg_isready, -U, { input: username }, -d, { input: database }]
+    intervalSeconds: 5
+    timeoutSeconds: 3
+    startPeriodSeconds: 10
+    retries: 12
+  restart: "no"
+
+connections:
+  database:
+    label: PostgreSQLへの接続
+    port: database
+    inputs: [database, username, password]

@@ -1,0 +1,52 @@
+# Syntax reference only. Validate on all target OSes and both storage modes before distribution.
+schemaVersion: 1
+id: example.redis
+templateVersion: "1.0.0"
+name: Redis
+description: 認証と永続化を有効にした、開発用Redis環境です。
+author: ComposeNest specification examples
+homepage: https://hub.docker.com/_/redis
+
+defaultVersion: "8.2"
+versions:
+  "8.2":
+    image: redis:8.2
+    platforms: [linux/amd64, linux/arm64]
+
+inputs:
+  password:
+    label: パスワード
+    type: secret
+    description: 自動生成します。v1では端末内に平文保存されます。
+
+service:
+  environment:
+    REDISCLI_AUTH: { input: password }
+  command:
+    - redis-server
+    - --appendonly
+    - "yes"
+    - --requirepass
+    - { input: password }
+  ports:
+    redis:
+      label: 接続ポート
+      container: 6379
+      defaultHost: 6379
+  storage:
+    data:
+      label: Redisデータ
+      container: /data
+  healthcheck:
+    command: [redis-cli, -e, ping]
+    intervalSeconds: 5
+    timeoutSeconds: 3
+    startPeriodSeconds: 10
+    retries: 12
+  restart: "no"
+
+connections:
+  redis:
+    label: Redisへの接続
+    port: redis
+    inputs: [password]

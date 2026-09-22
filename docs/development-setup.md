@@ -20,10 +20,10 @@ Node.js 24.19.0はこの開発環境の実測値である。利用者の実行�
 
 ```text
 pnpm --dir apps/desktop install --frozen-lockfile
+pnpm --dir apps/desktop build
 cargo test --workspace
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-pnpm --dir apps/desktop build
 cargo run -p composenest-desktop
 ```
 

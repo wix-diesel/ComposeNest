@@ -6,6 +6,7 @@
   "packageManager": "pnpm@11.19.0",
   "scripts": {
     "build": "tsc --noEmit && vite build",
+    "check:contracts": "node scripts/check-contracts.mjs",
     "dev": "vite"
   },
   "dependencies": {

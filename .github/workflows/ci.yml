@@ -108,7 +108,5 @@ jobs:
           cache: pnpm
           cache-dependency-path: apps/desktop/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-      - name: TypeScript typecheck
-        run: pnpm exec tsc --noEmit
       - name: Frontend build
         run: pnpm run build

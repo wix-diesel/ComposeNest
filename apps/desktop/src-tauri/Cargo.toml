@@ -1,0 +1,14 @@
+[package]
+name = "composenest-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[build-dependencies]
+tauri-build = "=2.6.3"
+
+[dependencies]
+composenest-adapters = { path = "../../../crates/adapters" }
+composenest-application = { path = "../../../crates/application" }
+tauri = "=2.11.6"

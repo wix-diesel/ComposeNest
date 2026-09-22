@@ -1,7 +1,5 @@
 # 開発基盤
 
-更新日: 2026-09-22
-
 ## 採用版
 
 Issue #2で、次の組合せをWindowsで依存取得・型検査・Rustテスト・フロントエンドビルドに使用した。各依存の解決結果は`Cargo.lock`と`apps/desktop/pnpm-lock.yaml`へ固定する。
@@ -37,7 +35,7 @@ MSVC toolchainで`cargo clippy`を実行する場合は、Visual Studioの`VsDev
 
 ## 検証記録
 
-2026-09-22にWindowsで最終検証を実行し、次のコマンドが成功した。
+Windowsで最終検証を実行し、次のコマンドが成功した。
 
 - `pnpm --dir apps/desktop install --frozen-lockfile`
 - `pnpm --dir apps/desktop build`

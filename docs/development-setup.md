@@ -40,4 +40,4 @@ cargo run -p composenest-desktop
 
 2026-09-22に、`rustfmt`を追加したRust 1.98.1 MSVC toolchainで`cargo fmt --all -- --check`を成功させた。`cargo clippy -p composenest-domain -p composenest-application -p composenest-adapters --all-targets -- -D warnings`も成功している。
 
-同MSVC toolchainでの`cargo clippy --workspace --all-targets -- -D warnings`は、Visual C++ランタイムライブラリ`msvcrt.lib`が開発環境から見つからず、依存crateのリンク時に停止する。Windowsデスクトップcrateを含む全ワークスペースのlintには、MSVC Build Toolsの環境設定を読み込むか、`rustfmt`・`clippy`を含むRust 1.98.1 GNU toolchainを使用する。
+MSVC Build Toolsの`VsDevCmd.bat`で開発環境を読み込んだ後、`cargo clippy --workspace --all-targets -- -D warnings`も成功した。Windowsデスクトップcrateを含む全ワークスペースをMSVC toolchainで検証する場合は、同開発環境を読み込んでから実行する。

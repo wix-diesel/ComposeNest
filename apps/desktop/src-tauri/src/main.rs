@@ -14,7 +14,7 @@ fn get_bootstrap(
 ) -> ResponseEnvelope<BootstrapResponse> {
     let context = request.context();
     if let Err(error) = context.validate() {
-        return ResponseEnvelope::failure(context.request_id, error);
+        return ResponseEnvelope::failure(context.request_id, *error);
     }
     ResponseEnvelope::success(request.request_id, state.inner().clone().into())
 }

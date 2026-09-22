@@ -33,22 +33,22 @@ pub struct RequestContext {
 
 impl RequestContext {
     /// Validates the contract version and request identifier.
-    pub fn validate(&self) -> Result<(), ErrorDto> {
+    pub fn validate(&self) -> Result<(), Box<ErrorDto>> {
         if self.api_version != API_VERSION {
-            return Err(ErrorDto::new(
+            return Err(Box::new(ErrorDto::new(
                 "UNSUPPORTED_API_VERSION",
                 "apiVersion",
                 "このAPIバージョンはサポートされていません。",
                 false,
-            ));
+            )));
         }
         if self.request_id.is_empty() || self.request_id.len() > 128 {
-            return Err(ErrorDto::new(
+            return Err(Box::new(ErrorDto::new(
                 "INVALID_REQUEST_ID",
                 "requestId",
                 "requestIdは1〜128文字で指定してください。",
                 false,
-            ));
+            )));
         }
         Ok(())
     }
@@ -247,7 +247,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        Bootstrap, BootstrapRequest, BootstrapService, Clock, RequestContext, API_VERSION,
+        API_VERSION, Bootstrap, BootstrapRequest, BootstrapService, Clock, RequestContext,
     };
 
     struct FixedClock;

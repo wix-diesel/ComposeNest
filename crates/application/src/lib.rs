@@ -76,7 +76,7 @@ impl BootstrapRequest {
 }
 
 /// Public, non-sensitive initial application state.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BootstrapResponse {
     /// The product name to display.

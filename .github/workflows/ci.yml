@@ -108,5 +108,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: apps/desktop/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
+      - name: Check IPC contract
+        run: pnpm run check:contracts
       - name: Frontend build
         run: pnpm run build

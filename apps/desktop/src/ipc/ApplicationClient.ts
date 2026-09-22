@@ -1,27 +1,10 @@
+import { invoke } from "@tauri-apps/api/core";
 import {
   API_VERSION,
   type BootstrapRequest,
   type BootstrapResponse,
   type ResponseEnvelope,
 } from "../generated/ipc";
-
-interface TauriInternals {
-  invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
-}
-
-declare global {
-  interface Window {
-    __TAURI_INTERNALS__?: TauriInternals;
-  }
-}
-
-function invoke<T>(command: string, args: Record<string, unknown>): Promise<T> {
-  const internals = window.__TAURI_INTERNALS__;
-  if (internals === undefined) {
-    return Promise.reject(new Error("tauri_transport_unavailable"));
-  }
-  return internals.invoke<T>(command, args);
-}
 
 /** Typed boundary between React features and the Tauri transport. */
 export class ApplicationClient {

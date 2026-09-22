@@ -36,4 +36,6 @@ cargo run -p composenest-desktop
 
 2026-09-22にWindowsのNode.js 24.19.0、Rust 1.98.1 GNU toolchainで、依存取得、`pnpm --dir apps/desktop build`、Core 3 crateの単体テストを実行した。React/Viteの型検査とビルド、Domain・Application・Adapterのテストは成功している。
 
-デスクトップcrateのコンパイルとネイティブ画面起動は、検証環境にGNU linker用の`dlltool.exe`がないため未完了である。`rust-toolchain.toml`は`rustfmt`と`clippy`を要求するが、この環境のRust導入には両componentも存在しない。Windowsのネイティブ確認前に、選択したRust toolchainへ`rustfmt`・`clippy`とMinGW binutilsを追加して、`cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo run -p composenest-desktop`を実行する。
+同日にMinGWの`C:\\ProgramData\\mingw64\\mingw64\\bin`を`PATH`へ追加して、`dlltool.exe`を使用する`cargo check -p composenest-desktop`を成功させた。さらに`cargo run -p composenest-desktop`は実行ファイルのビルドと起動まで成功している。Windowsリソース用の`icons/icon.ico`を追加し、Tauriが生成する`src-tauri/gen/`は追跡対象外とした。
+
+`rust-toolchain.toml`は`rustfmt`と`clippy`を要求するが、この環境のRust導入には両componentが存在しない。選択したRust toolchainへ`rustfmt`・`clippy`を追加後、`cargo fmt --all -- --check`と`cargo clippy --workspace --all-targets -- -D warnings`を実行する。

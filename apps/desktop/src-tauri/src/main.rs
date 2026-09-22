@@ -10,4 +10,3 @@ fn main() -> tauri::Result<()> {
         .manage(bootstrap)
         .run(tauri::generate_context!())
 }
-}

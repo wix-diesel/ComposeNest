@@ -35,6 +35,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.98.1
+      - name: Install Ubuntu Tauri dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
 
@@ -46,6 +54,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.98.1
         with:
           components: clippy
+      - name: Install Ubuntu Tauri dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets -- -D warnings
 

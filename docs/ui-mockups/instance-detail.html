@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>開発用データベース | ComposeNest</title>
+<script src="assets/appearance.js"></script>
+<link rel="stylesheet" href="assets/styles.css">
+<link rel="stylesheet" href="assets/appearance.css">
+<script src="assets/mock.js" defer>
+</script>
+</head>
+<body data-page="instance-detail">
+<div class="app">
+<aside class="sidebar">
+<div class="brand">
+<span class="brand-mark">
+<svg aria-hidden="true" data-icon="nest" viewBox="0 0 24 24">
+</svg>
+</span>
+<span class="brand-text">ComposeNest</span>
+</div>
+<div class="nav-label">ワークスペース</div>
+<nav aria-label="メインメニュー">
+<button class="nav active" data-notice="環境一覧の画面遷移は省略しています。対応するHTMLを直接開いてください。" aria-current=page>
+<svg aria-hidden="true" data-icon="grid" viewBox="0 0 24 24">
+</svg>
+<span class="nav-text">環境一覧</span>
+<span class=count>6</span>
+</button>
+<button class="nav " data-notice="テンプレートの画面遷移は省略しています。対応するHTMLを直接開いてください。" >
+<svg aria-hidden="true" data-icon="layers" viewBox="0 0 24 24">
+</svg>
+<span class="nav-text">テンプレート</span>
+</button>
+<button class="nav " data-notice="保持データの画面遷移は省略しています。対応するHTMLを直接開いてください。" >
+<svg aria-hidden="true" data-icon="archive" viewBox="0 0 24 24">
+</svg>
+<span class="nav-text">保持データ</span>
+</button>
+<button class="nav " data-notice="Docker診断の画面遷移は省略しています。対応するHTMLを直接開いてください。" >
+<svg aria-hidden="true" data-icon="activity" viewBox="0 0 24 24">
+</svg>
+<span class="nav-text">Docker診断</span>
+</button>
+</nav>
+<div class="sidebar-bottom">
+<button class="nav " data-notice="設定の画面遷移は省略しています。settings.htmlを直接開いてください。">
+<svg aria-hidden="true" data-icon="settings" viewBox="0 0 24 24">
+</svg>
+<span class="nav-text">設定</span>
+</button>
+<div class="engine-card">
+<span class="dot">
+</span>Docker 接続済み<small>ローカル環境 · Linux</small>
+</div>
+<div class="user">
+<span class="avatar">L</span>
+<div style="font-size:11px">ローカルワークスペース<br>
+<small>このコンピューター</small>
+</div>
+</div>
+</div>
+</aside>
+<main class="main">
+<header class="topbar">
+<div class="crumb">
+<svg aria-hidden="true" data-icon="home" viewBox="0 0 24 24">
+</svg>
+<span>/</span>
+<strong>開発用データベース</strong>
+</div>
+<div class="topbar-right">
+<span>
+<span class="dot">
+</span>ローカル接続</span>
+<span class="mock-label">UI モック</span>
+</div>
+</header>
+<div class="workspace">
+<div class="page-heading">
+<div>
+<div class="eyebrow">環境一覧 / 環境の詳細</div>
+<h1>開発用データベース</h1>
+<p class="subtitle">PostgreSQL 18 · ローカルの開発環境</p>
+</div>
+<div class="actions">
+<button type="button" class="btn " data-notice="設定を複製のモックです。画面遷移は行いません。" >
+<svg aria-hidden="true" data-icon="copy" viewBox="0 0 24 24">
+</svg>設定を複製</button>
+<button type="button" class="btn " data-notice="編集のモックです。画面遷移は行いません。" >
+<svg aria-hidden="true" data-icon="edit" viewBox="0 0 24 24">
+</svg>編集</button>
+<button type="button" class="btn " data-action="toggle-runtime" >
+<svg aria-hidden="true" data-icon="stop" viewBox="0 0 24 24">
+</svg>停止</button>
+<button type="button" class="btn " data-action="restart" >
+<svg aria-hidden="true" data-icon="refresh" viewBox="0 0 24 24">
+</svg>再起動</button>
+</div>
+</div>
+<section class="panel">
+<div class="panel-title">
+<h2>環境の状態</h2>
+<small>最終確認 <span id="observed-at">14:32:08</span>
+</small>
+</div>
+<div class="info-grid">
+<div>
+<small>実行状態</small>
+<span id="runtime-state">
+<span class="badge ready">利用可能</span>
+</span>
+</div>
+<div>
+<small>直前の処理</small>
+<strong id="last-operation">起動 · 完了</strong>
+</div>
+<div>
+<small>構成の照合</small>
+<strong>✓ 保存した設定と一致</strong>
+</div>
+</div>
+</section>
+<div class="tabs detail-tabs" role="tablist" aria-label="環境の詳細">
+<button role="tab" id="tab-overview" aria-controls="panel-overview" aria-selected="true" tabindex="0" class="active" data-tab="overview">概要・接続情報</button>
+<button role="tab" id="tab-logs" aria-controls="panel-logs" aria-selected="false" tabindex="-1" class="" data-tab="logs">ログ</button>
+<button role="tab" id="tab-compose" aria-controls="panel-compose" aria-selected="false" tabindex="-1" class="" data-tab="compose">Compose</button>
+</div>
+<div id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
+<div class="two-column">
+<div>
+<section class="panel">
+<div class="panel-title">
+<h2>接続情報</h2>
+</div>
+<div class="connection-row">
+<span>ホスト</span>
+<span class="mono">127.0.0.1</span>
+<button class="icon-btn" data-copy="127.0.0.1" aria-label="ホストをコピー">
+<svg aria-hidden="true" data-icon="copy" viewBox="0 0 24 24">
+</svg>
+</button>
+</div>
+<div class="connection-row">
+<span>ポート</span>
+<span class="mono">5432</span>
+<button class="icon-btn" data-copy="5432" aria-label="ポートをコピー">
+<svg aria-hidden="true" data-icon="copy" viewBox="0 0 24 24">
+</svg>
+</button>
+</div>
+<div class="connection-row">
+<span>データベース</span>
+<span class="mono">app</span>
+<button class="icon-btn" data-copy="app" aria-label="データベースをコピー">
+<svg aria-hidden="true" data-icon="copy" viewBox="0 0 24 24">
+</svg>
+</button>
+</div>
+<div class="connection-row">
+<span>ユーザー名</span>
+<span class="mono">app</span>
+<button class="icon-btn" data-copy="app" aria-label="ユーザー名をコピー">
+<svg aria-hidden="true" data-icon="copy" viewBox="0 0 24 24">
+</svg>
+</button>
+</div>
+<div class="connection-row">
+<span>パスワード</span>
+<span class="mono" id="detail-secret">••••••••••••••</span>
+<div class="actions">
+<button type="button" class="btn " data-action="detail-secret" aria-pressed="false">表示</button>
+<button class="icon-btn" data-copy="MockOnly-7pQ2k9" aria-label="パスワードをコピー">
+<svg aria-hidden="true" data-icon="copy" viewBox="0 0 24 24">
+</svg>
+</button>
+</div>
+</div>
+</section>
+<section class="panel">
+<div class="panel-title">
+<h2>データの保存先</h2>
+</div>
+<span class="badge">bind mount</span>
+<div class="path mono">C:\ProgramData\ComposeNest\instances\cn-7f2a\data</div>
+<p style="font-size:11px">環境を停止・削除しても、このフォルダーのデータは残ります。</p>
+</section>
+</div>
+<aside>
+<section class="panel">
+<div class="panel-title">
+<h2>環境情報</h2>
+</div>
+<dl class="summary-list">
+<div>
+<dt>サービス</dt>
+<dd>PostgreSQL 18</dd>
+</div>
+<div>
+<dt>作成日時</dt>
+<dd>2026/09/22 12:30</dd>
+</div>
+<div>
+<dt>テンプレート版</dt>
+<dd>1.0.0</dd>
+</div>
+<div>
+<dt>環境ID</dt>
+<dd>
+<code>cn-7f2a</code>
+</dd>
+</div>
+<div>
+<dt>複製元</dt>
+<dd>なし</dd>
+</div>
+</dl>
+</section>
+<div class="notice ">
+<svg aria-hidden="true" data-icon="info" viewBox="0 0 24 24">
+</svg>
+<div>
+<strong>接続できるのは、この端末のみ</strong>
+<p>ホストとポートをお使いのアプリに設定してください。</p>
+</div>
+</div>
+</aside>
+</div>
+<div class="danger-zone">
+<div>
+<h3>環境を削除</h3>
+<p>コンテナを削除します。データは残ります。</p>
+</div>
+<button type="button" class="btn " data-action="delete" style="color:#ad6e57">環境を削除</button>
+</div>
+</div>
+<div id="panel-logs" role="tabpanel" aria-labelledby="tab-logs" hidden>
+<section class="panel">
+<div class="panel-title">
+<h2>サービスログ</h2>
+<div class="actions">
+<button type="button" class="btn " data-action="follow" aria-pressed="true">追従を停止</button>
+<button type="button" class="btn " data-action="reload-logs" >
+<svg aria-hidden="true" data-icon="refresh" viewBox="0 0 24 24">
+</svg>再読込み</button>
+</div>
+</div>
+<pre class="log" id="log-output">
+<span class="timestamp">2026-09-22 12:32:01</span>  LOG: starting PostgreSQL 18.0
+<span class="timestamp">2026-09-22 12:32:01</span>  LOG: listening on IPv4 address "0.0.0.0", port 5432
+<span class="timestamp">2026-09-22 12:32:01</span>  LOG: listening on Unix socket
+<span class="timestamp">2026-09-22 12:32:02</span>  LOG: database system was shut down
+<span class="timestamp">2026-09-22 12:32:02</span>  <span class="success">LOG: database system is ready to accept connections</span>
+<span class="timestamp">2026-09-22 14:30:01</span>  LOG: checkpoint starting: time
+<span class="timestamp">2026-09-22 14:30:01</span>  LOG: checkpoint complete</pre>
+<p class="footnote">サンプルログ · 表示上限 2,000行 / 2 MiB · 既知の秘密情報はマスキングして表示</p>
+</section>
+</div>
+<div id="panel-compose" role="tabpanel" aria-labelledby="tab-compose" hidden>
+<div class="notice ">
+<svg aria-hidden="true" data-icon="info" viewBox="0 0 24 24">
+</svg>
+<div>
+<strong>秘密情報を隠して表示しています</strong>
+<p>原文の表示にはパスワードが含まれます。共有する際は内容を確認してください。</p>
+</div>
+</div>
+<section class="panel">
+<div class="panel-title">
+<h2>compose.yaml</h2>
+<button type="button" class="btn " data-action="compose-secret" aria-pressed="false">原文を表示</button>
+</div>
+<pre class="log" id="compose-output">services:
+  main:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: app
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: &quot;••••••••&quot;
+    ports:
+      - &quot;127.0.0.1:5432:5432&quot;
+    volumes:
+      - type: bind
+        source: C:/ProgramData/ComposeNest/instances/cn-7f2a/data
+        target: /var/lib/postgresql
+    healthcheck:
+      test: [&quot;CMD&quot;, &quot;pg_isready&quot;, &quot;-U&quot;, &quot;app&quot;, &quot;-d&quot;, &quot;app&quot;]</pre>
+<div class="path mono">C:\ProgramData\ComposeNest\instances\cn-7f2a\compose.yaml</div>
+</section>
+</div>
+<footer class="page-footer">
+<span>ComposeNest <span class="muted"> / </span> ローカル開発を、もっと身近に。</span>
+<span>v1 デザインモック · サンプルデータ</span>
+</footer>
+</div>
+</main>
+</div>
+<div class="toast" role="status" hidden>
+</div>
+<dialog class="dialog" aria-labelledby="dialog-title">
+<h2 id="dialog-title">
+</h2>
+<p id="dialog-body">
+</p>
+<div class="actions">
+<button class="btn" data-action="close-dialog">閉じる</button>
+<button class="btn primary" id="dialog-confirm" hidden>確認</button>
+</div>
+</dialog>
+</body>
+</html>

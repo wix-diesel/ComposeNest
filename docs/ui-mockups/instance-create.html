@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>環境を作成 | ComposeNest</title>
+<script src="assets/appearance.js"></script>
+<link rel="stylesheet" href="assets/styles.css">
+<link rel="stylesheet" href="assets/appearance.css">
+<script src="assets/mock.js" defer>
+</script>
+</head>
+<body data-page="instance-create">
+<div class="app">
+<aside class="sidebar">
+<div class="brand">
+<span class="brand-mark">
+<svg aria-hidden="true" data-icon="nest" viewBox="0 0 24 24">
+</svg>
+</span>
+<span class="brand-text">ComposeNest</span>
+</div>
+<div class="nav-label">ワークスペース</div>
+<nav aria-label="メインメニュー">
+<button class="nav active" data-notice="環境一覧の画面遷移は省略しています。対応するHTMLを直接開いてください。" aria-current=page>
+<svg aria-hidden="true" data-icon="grid" viewBox="0 0 24 24">
+</svg>
+<span class="nav-text">環境一覧</span>
+<span class=count>6</span>
+</button>
+<button class="nav " data-notice="テンプレートの画面遷移は省略しています。対応するHTMLを直接開いてください。" >
+<svg aria-hidden="true" data-icon="layers" viewBox="0 0 24 24">
+</svg>
+<span class="nav-text">テンプレート</span>
+</button>
+<button class="nav " data-notice="保持データの画面遷移は省略しています。対応するHTMLを直接開いてください。" >
+<svg aria-hidden="true" data-icon="archive" viewBox="0 0 24 24">
+</svg>
+<span class="nav-text">保持データ</span>
+</button>
+<button class="nav " data-notice="Docker診断の画面遷移は省略しています。対応するHTMLを直接開いてください。" >
+<svg aria-hidden="true" data-icon="activity" viewBox="0 0 24 24">
+</svg>
+<span class="nav-text">Docker診断</span>
+</button>
+</nav>
+<div class="sidebar-bottom">
+<button class="nav " data-notice="設定の画面遷移は省略しています。settings.htmlを直接開いてください。">
+<svg aria-hidden="true" data-icon="settings" viewBox="0 0 24 24">
+</svg>
+<span class="nav-text">設定</span>
+</button>
+<div class="engine-card">
+<span class="dot">
+</span>Docker 接続済み<small>ローカル環境 · Linux</small>
+</div>
+<div class="user">
+<span class="avatar">L</span>
+<div style="font-size:11px">ローカルワークスペース<br>
+<small>このコンピューター</small>
+</div>
+</div>
+</div>
+</aside>
+<main class="main">
+<header class="topbar">
+<div class="crumb">
+<svg aria-hidden="true" data-icon="home" viewBox="0 0 24 24">
+</svg>
+<span>/</span>
+<strong>環境を作成</strong>
+</div>
+<div class="topbar-right">
+<span>
+<span class="dot">
+</span>ローカル接続</span>
+<span class="mock-label">UI モック</span>
+</div>
+</header>
+<div class="workspace">
+<div class="page-heading">
+<div>
+<div class="eyebrow">ワークスペース</div>
+<h1>環境を作成</h1>
+<p class="subtitle">用途に合わせて設定し、新しいPostgreSQL環境を作成します。</p>
+</div>
+<div class="actions">
+</div>
+</div>
+<div class="steps">
+<div class="step">
+<span>✓</span>テンプレート選択</div>
+<div class="line">
+</div>
+<div class="step active">
+<span>2</span>設定・確認</div>
+<div class="line">
+</div>
+<div class="step">
+<span>3</span>作成・起動</div>
+</div>
+<form id="create-form">
+<div class="two-column">
+<div>
+<section class="panel">
+<div class="panel-title">
+<h2>基本設定</h2>
+</div>
+<div class="field">
+<label for="environment-name">環境名 <span class="required">必須</span>
+</label>
+<input id="environment-name" name="environment-name" type="text" value="新しい開発用DB" required maxlength="100">
+</div>
+<div class="two-equal">
+<div class="field">
+<label for="version">PostgreSQL バージョン</label>
+<select id="version" name="version">
+<option>18</option>
+<option>17</option>
+</select>
+</div>
+<div class="field">
+<label for="port">接続ポート</label>
+<input id="port" name="port" type="number" value="5436" required min="1024" max="65535">
+<small>127.0.0.1 にのみ公開します。候補は作成時に再確認します。</small>
+</div>
+</div>
+</section>
+<section class="panel">
+<div class="panel-title">
+<h2>接続情報</h2>
+</div>
+<div class="two-equal">
+<div class="field">
+<label for="database">データベース名</label>
+<input id="database" name="database" type="text" value="app" required pattern="[a-z][a-z0-9_]*" maxlength="63">
+<small>英小文字で始まる英小文字・数字・_。</small>
+</div>
+<div class="field">
+<label for="username">ユーザー名</label>
+<input id="username" name="username" type="text" value="app" required pattern="[a-z][a-z0-9_]*" maxlength="63">
+</div>
+</div>
+<div class="field">
+<label for="password">パスワード</label>
+<div class="input-action">
+<input type="password" id="password" value="MockOnly-7pQ2k9" required minlength="8" autocomplete="off">
+<button type="button" class="btn " data-action="reveal" >表示</button>
+</div>
+<small>自動生成されたサンプル値です。</small>
+</div>
+<div class="notice ">
+<svg aria-hidden="true" data-icon="info" viewBox="0 0 24 24">
+</svg>
+<div>
+<strong>認証情報は暗号化せず保存されます</strong>
+<p>端末内の設定と生成されたComposeファイルに保存されます。</p>
+</div>
+</div>
+</section>
+<section class="panel">
+<div class="panel-title">
+<h2>データの保存先</h2>
+</div>
+<div class="radio-options">
+<label class="radio-option">
+<input type="radio" name="storage" value="bind mount" checked>
+<span>ホストフォルダー<small>bind mount · 管理ルート内に保存</small>
+</span>
+</label>
+<label class="radio-option">
+<input type="radio" name="storage" value="named volume">
+<span>Docker管理<small>named volume · 専用領域に保存</small>
+</span>
+</label>
+</div>
+<p class="footnote" id="storage-description">管理ルート配下に新しい専用フォルダーを割り当てます。</p>
+</section>
+<div class="form-footer">
+<small>作成前にポートと設定を再確認します。</small>
+<button class="btn primary" type="submit">
+<svg aria-hidden="true" data-icon="plus" viewBox="0 0 24 24">
+</svg>設定を確認して作成</button>
+</div>
+</div>
+<aside>
+<section class="panel">
+<div class="panel-title">
+<h2>作成する環境</h2>
+</div>
+<div class="summary-title">
+<span class="service-icon pg">
+<svg aria-hidden="true" data-icon="database" viewBox="0 0 24 24">
+</svg>
+</span>
+<div>
+<strong>PostgreSQL</strong>
+<p style="font-size:10px">テンプレート 1.0.0</p>
+</div>
+</div>
+<dl class="summary-list">
+<div>
+<dt>バージョン</dt>
+<dd>
+<span data-summary="version">18</span>
+</dd>
+</div>
+<div>
+<dt>接続先</dt>
+<dd>
+<span class="mono">127.0.0.1:<span data-summary="port">5436</span>
+</span>
+</dd>
+</div>
+<div>
+<dt>データ保存</dt>
+<dd>
+<span data-summary="storage">bind mount</span>
+</dd>
+</div>
+<div>
+<dt>公開範囲</dt>
+<dd>このコンピューターのみ</dd>
+</div>
+</dl>
+</section>
+<div class="notice ">
+<svg aria-hidden="true" data-icon="info" viewBox="0 0 24 24">
+</svg>
+<div>
+<strong>データは専用の新規領域へ</strong>
+<p>設定中は保存領域を作成しません。作成確定後に割り当てます。</p>
+</div>
+</div>
+</aside>
+</div>
+</form>
+<footer class="page-footer">
+<span>ComposeNest <span class="muted"> / </span> ローカル開発を、もっと身近に。</span>
+<span>v1 デザインモック · サンプルデータ</span>
+</footer>
+</div>
+</main>
+</div>
+<div class="toast" role="status" hidden>
+</div>
+<dialog class="dialog" aria-labelledby="dialog-title">
+<h2 id="dialog-title">
+</h2>
+<p id="dialog-body">
+</p>
+<div class="actions">
+<button class="btn" data-action="close-dialog">閉じる</button>
+<button class="btn primary" id="dialog-confirm" hidden>確認</button>
+</div>
+</dialog>
+</body>
+</html>

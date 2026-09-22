@@ -10,6 +10,7 @@ Dockerを管理するためのアプリ
 - [v1 Template Schema仕様](docs/template-schema-spec.md)
 - [v1 アーキテクチャ設計](docs/architecture-v1.md)
 - Template定義例: [PostgreSQL](docs/template-examples/postgresql.template.yaml)、[Redis](docs/template-examples/redis.template.yaml)
+- [画面ごとのHTML UIモック](docs/ui-mockups/README.md)（ブラウザで直接表示、ページ遷移なし）
 
 ## 実装タスク
 

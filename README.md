@@ -15,3 +15,7 @@ Dockerを管理するためのアプリ
 ## 実装タスク
 
 [v1 実装タスク一覧](https://github.com/wix-diesel/ComposeNest/issues/56)で、各タスクの依存関係と受入条件を管理します。原則として1 Issueを1 PRで扱い、レビュー可能な規模へ分割して進めます。
+
+## 開発
+
+[開発基盤の手順と採用版](docs/development-setup.md)を参照してください。

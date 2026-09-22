@@ -1,0 +1,25 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "ComposeNest",
+  "version": "0.1.0",
+  "identifier": "com.wix-diesel.composenest",
+  "build": {
+    "frontendDist": "../dist",
+    "beforeBuildCommand": "pnpm --dir .. build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "ComposeNest",
+        "width": 960,
+        "height": 640
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline';"
+    }
+  },
+  "bundle": {
+    "active": false
+  }
+}

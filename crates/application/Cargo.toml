@@ -1,0 +1,9 @@
+[package]
+name = "composenest-application"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+composenest-domain = { path = "../domain" }

@@ -1,17 +1,6 @@
-# Syntax reference only. Validate on all target OSes and both storage modes before distribution.
-schemaVersion: 1
-id: example.redis
-templateVersion: "1.0.0"
-name: Redis
-description: 認証と永続化を有効にした、開発用Redis環境です。
-author: ComposeNest specification examples
-homepage: https://hub.docker.com/_/redis
-
-defaultVersion: "8.2"
-versions:
-  "8.2":
-    image: redis:8.2
-    platforms: [linux/amd64, linux/arm64]
+# Syntax reference only; runtime validation is pending.
+image: redis:8.2
+platforms: [linux/amd64, linux/arm64]
 
 inputs:
   password:

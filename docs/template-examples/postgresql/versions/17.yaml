@@ -1,0 +1,53 @@
+# Syntax reference only; runtime validation is pending.
+image: postgres:17
+platforms: [linux/amd64, linux/arm64]
+
+inputs:
+  database:
+    label: データベース名
+    type: string
+    default: app
+    validation:
+      minLength: 1
+      maxLength: 63
+      pattern: '[a-z][a-z0-9_]*'
+  username:
+    label: ユーザー名
+    type: string
+    default: app
+    validation:
+      minLength: 1
+      maxLength: 63
+      pattern: '[a-z][a-z0-9_]*'
+  password:
+    label: パスワード
+    type: secret
+    description: 自動生成します。必要に応じて表示・入力できます。
+
+service:
+  environment:
+    POSTGRES_DB: { input: database }
+    POSTGRES_USER: { input: username }
+    POSTGRES_PASSWORD: { input: password }
+  ports:
+    database:
+      label: 接続ポート
+      container: 5432
+      defaultHost: 5432
+  storage:
+    data:
+      label: PostgreSQLデータ
+      container: /var/lib/postgresql/data
+  healthcheck:
+    command: [pg_isready, -U, { input: username }, -d, { input: database }]
+    intervalSeconds: 5
+    timeoutSeconds: 3
+    startPeriodSeconds: 10
+    retries: 12
+  restart: "no"
+
+connections:
+  database:
+    label: PostgreSQLへの接続
+    port: database
+    inputs: [database, username, password]

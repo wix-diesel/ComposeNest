@@ -1,28 +1,33 @@
 # ComposeNest Template Schema仕様 v1
 
 作成日: 2026-09-21\
-状態: 初版。Template作者向けの記述形式と読込み側の契約\
+更新日: 2026-09-22\
+状態: 採用済み。Schema 1はマニフェスト＋Version別完全定義。実装・実機検証は未完了\
 参照: [要件定義](requirements-v1.md)、[ドメインモデル](domain-model.md)、[Clone Policy仕様](clone-policy-spec.md)
 
 ## 1. 目的と設計方針
 
-Templateは「何を入力してもらい、その値でどのサービスを起動するか」を宣言するファイルである。作者がPostgreSQL、Redis等の設定知識を一度定義すれば、利用者は生成された日本語フォームから環境を作れる。
+Templateは「何を入力してもらい、その値でどのサービスを起動するか」を宣言するパッケージである。作者がPostgreSQL、Redis等の設定知識を一度定義すれば、利用者は生成された日本語フォームから環境を作れる。
 
 ユーザー作成Templateのインポートを将来提供することを前提に、同梱Templateだけに通じる暗黙の挙動を作らない。作者のためには読みやすいYAML、アプリのためには厳密な検証と版管理を採用する。
 
 優先する原則は次の5つ。
 
 1. **小さく書き始められる。** 名前、対応Version、入力、サービス設定で基本形を構成する。
-2. **役割が見える。** `inputs`はフォーム、`service`はコンテナ、`versions`はイメージとVersion差を表す。
+2. **役割が見える。** マニフェストは共通メタ情報とVersion一覧、各Versionファイルの`inputs`はフォーム、`service`はコンテナを表す。
 3. **安全処理を書かせない。** 名前・ポート・保存領域の分離はCoreが担当し、Templateはコンテナ内の待受ポートと保存先を指定する。
 4. **文字列をプログラムにしない。** 値の参照は`{ input: password }`のように明示する。シェル式や任意Composeの差込みは使わない。
 5. **登録と起動を分ける。** Templateの読込み・インポートではコンテナを起動せず、内容と出所を確認できるようにする。
 
 本仕様は宣言可能な範囲の基礎であり、任意のDockerコンテナを無条件に扱えるとは約束しない。v1は単一主要サービス、複数ポート、複数保存領域、環境変数、起動引数、Health Checkを対象とする。ユーザー作成Templateにも同じ制限を適用する。
 
+本形式を未実装段階のSchema 1の標準とする。従来案の単一ファイル・Version差分形式は受け付けず、互換読込み・移行機能は設けない。判断理由は[Version別ファイル設計](template-version-files-design.md)を参照する。
+
 ## 2. まず読む最小例
 
 次の例は、入力項目を持たないRedis環境を作る基本形である。認証なしの例は構文説明用であり、同梱候補は後述の認証付き例を使う。
+
+`redis-basic/template.yaml`:
 
 ```yaml
 schemaVersion: 1
@@ -33,9 +38,14 @@ description: データを保存する、単一のRedis環境です。
 
 defaultVersion: "8.2"
 versions:
-  "8.2":
-    image: redis:8.2
-    platforms: [linux/amd64, linux/arm64]
+  "8.2": versions/8.2.yaml
+```
+
+`redis-basic/versions/8.2.yaml`:
+
+```yaml
+image: redis:8.2
+platforms: [linux/amd64, linux/arm64]
 
 service:
   command: [redis-server, --appendonly, "yes"]
@@ -58,14 +68,14 @@ service:
 
 完全な定義例:
 
-- [PostgreSQL 17／18](template-examples/postgresql.template.yaml): 環境変数、秘密入力、Version別マウント先。
-- [Redis 8.2](template-examples/redis.template.yaml): 引数への入力値参照、認証付きHealth Check、永続化。
+- [PostgreSQL 17／18](template-examples/postgresql/template.yaml): 環境変数、秘密入力、Version別マウント先。
+- [Redis 8.2](template-examples/redis/template.yaml): 引数への入力値参照、認証付きHealth Check、永続化。
 
 例は構文・仕様の参照用である。使用イメージの起動・接続・永続化・両保存方式・各OSでの実機検証が済んだ配布物という意味ではない。
 
 ## 3. 全体構造と識別子
 
-ファイルはUTF-8の単一YAML文書とし、推奨拡張子は`.template.yaml`とする。1ファイルで1 Template、1 Templateで複数のサービスVersionを扱える。
+1ディレクトリを1 Templateパッケージとする。入口は`template.yaml`、Versionファイルは`versions/<name>.yaml`。各ファイルはUTF-8の単一YAML文書とする。Versionが1つでも同じ構成とし、ファイル名からVersionを推測しない。以下はマニフェストのキーである。
 
 | キー | 必須 | 型 | 意味・省略時 |
 | --- | --- | --- | --- |
@@ -78,10 +88,7 @@ service:
 | `homepage` | 任意 | 文字列 | 作者等のHTTPSページ。読込み時に取得しない |
 | `license` | 任意 | 文字列 | Template文書のライセンス表記。コンテナイメージのライセンスとは別 |
 | `defaultVersion` | 必須 | 文字列 | 初回作成で選ぶ`versions`のキー |
-| `versions` | 必須 | マップ | Versionごとのイメージ、対応CPU、必要な差分 |
-| `inputs` | 任意 | マップ | 共通入力項目。省略時は空 |
-| `service` | 必須 | マップ | 共通の実行設定。各Versionを解決した後の妥当性を検証 |
-| `connections` | 任意 | マップ | 接続情報の表示方法。省略時は公開ポートと入力値を標準表示 |
+| `versions` | 必須 | マップ | Versionキー→相対ファイルパス。記述順が表示順 |
 | `versionClone` | 任意 | 文字列 | `copy`または`ask`。省略時`copy` |
 | `storageClone` | 任意 | 文字列 | 保存方式の`copy`または`ask`。省略時`copy` |
 
@@ -93,51 +100,46 @@ service:
 
 表示名は1〜100文字、説明は1〜2,000文字を上限とする。文字数はUnicodeスカラー値で数える。入力値そのものと異なり、表示メタ情報の前後空白は正規化できる。表示文言はプレーンテキストとして扱い、HTML・スクリプトとして描画しない。
 
-## 4. Versionと差分の書き方
+## 4. Version別完全定義
 
-### 4.1 Version定義
+### 4.1 マニフェストとVersionファイル
 
 ```yaml
 defaultVersion: "18"
 versions:
-  "18":
-    image: postgres:18
-    platforms: [linux/amd64, linux/arm64]
-  "17":
-    image: postgres:17
-    platforms: [linux/amd64, linux/arm64]
-    service:
-      storage:
-        data:
-          label: PostgreSQLデータ
-          container: /var/lib/postgresql/data
+  "18": versions/18.yaml
+  "17": versions/17.yaml
 ```
 
-| Version内キー | 必須 | 意味 |
+各Versionファイルは次のキーだけを持つ。マニフェストにこれらのキーは置けず、Versionファイルにid・templateVersion・schemaVersion・Versionキー・Clone選択Policyを重複記述しない。単独のVersionファイルは登録できない。
+
+| キー | 必須 | 意味・省略時 |
 | --- | --- | --- |
-| `image` | 必須 | タグまたはdigest付きの完全なImage参照。入力値で補間しない |
-| `platforms` | 必須 | 対応するイメージのplatform配列。v1は`linux/amd64`、`linux/arm64`から選択 |
-| `inputs` | 任意 | 指定した場合、共通`inputs`を**全部置き換える** |
-| `service` | 任意 | 共通`service`の同じ直下キーを置き換える。下記の規則に従う |
-| `connections` | 任意 | 指定した場合、共通`connections`を**全部置き換える** |
+| `image` | 必須 | タグまたはdigest付きの固定Image参照。入力値で補間しない |
+| `platforms` | 必須 | `linux/amd64`、`linux/arm64`から選ぶ重複のない配列 |
+| `inputs` | 任意 | そのVersionの全入力項目。省略時は空 |
+| `service` | 必須 | そのVersionの完全な実行設定。healthcheck必須 |
+| `connections` | 任意 | そのVersionの接続表示。省略時は標準表示、空マップは追加カードなし |
 
-Versionキーは1〜64文字の英数字・ドット・ハイフン・アンダースコアとし、作者が分かりやすい名称を付けられる。Versionキーは必ず引用して文字列として書く。数値からの暗黙変換は行わない。
+Versionキーは1〜64文字の英数字・ドット・ハイフン・アンダースコア。必ず引用して文字列として書き、数値を暗黙変換しない。versionsとplatformsは1件以上とし、defaultVersionは列挙済みキーに一致させる。全Versionを検証し、同じ入力キーの型をVersion間で変えることは禁止する。意味が変わる場合も別キーを使う。
 
-versionsは1件以上、platformsは1件以上の重複のない配列とする。defaultVersionが存在すること、全Versionで解決できることを検証する。同じ入力キーの型をVersion間で変えることは禁止し、意味が変わる場合は別キーを使う。
+platformはホストOSではなくLinuxコンテナのアーキテクチャを表す。作者の宣言だけで実機検証済みと表示せず、実行対象とImageの対応は実行前に確認する。
 
-platformはホストOSではなくLinuxコンテナのアーキテクチャを表す。宣言されたplatformと実行対象・取得したイメージの対応を実行前に確認する。作者の宣言だけで検証済みとは表示しない。Ubuntuの対応CPUをこの宣言だけで確定することもない。
+### 4.2 継承・マージをしない
 
-### 4.2 深いマージをしない
+各Versionファイルだけで入力と実行設定が完結する。共通inputs／service、Version間参照、include、extends、YAMLアンカー、削除用null、差分マージは認めない。共通する内容も各ファイルへ明示的に記述する。
 
-Version内の`service.environment`があれば、共通の環境変数マップ全体を置き換える。`service.storage`なら保存slotマップ全体、`command`なら引数配列全体、`healthcheck`ならそのオブジェクト全体を置き換える。指定がない直下キーだけ共通値を使う。
+項目の追加は対象Versionへの追記、削除は対象Versionからの除去で表す。service・connectionsに削除したinputへの参照が残ればパッケージ全体の検証を失敗させる。他Versionの設定を引き継いで不足を補わない。空マップと省略の意味は各キーの規定に従う。
 
-例えば、共通の保存slotが`data`と`logs`の2つで、Version側に`data`だけを書いた場合、解決後の保存slotは`data`だけになる。差分表示と検証画面でこの結果を示す。残したいslotはVersion側にも書く。
+PostgreSQL例は17と18にそれぞれ完全定義を置き、Imageとdataのマウント先を独立して記述する。1つのVersionを修正しても、他Versionの内容は変化しない。ファイル単位の独立revisionは設けず、登録済み定義を変更するときはパッケージ全体のtemplateVersionを上げる。
 
-空マップ`{}`は対象マップを空にする意味。`null`による削除や、配列への追加マージ、YAMLアンカーによる継承は認めない。`healthcheck`はVersion解決後に必須なので空にはできない。
+### 4.3 Version選択と項目の増減
 
-この規則は定義作者が最終形を予想しやすいことを優先した判断である。追加・削除が多いVersionは`inputs`や`service`を明示して書き、複雑な継承言語には拡張しない。
+新規作成は選択VersionのDefault・secret初期化規則を使う。切替時は同じ安定キー・型の現在候補を保持して新制約で再検証し、追加項目には新規作成の初期化規則を適用する。不適合な値を無言で変更せず入力待ちにする。削除項目は確定Spec・送信対象から除外し、非表示の旧値を復活させない。
 
-PostgreSQL公式イメージでは18以降の推奨マウント位置が従来と異なる。この差をアプリ固有コードではなくVersion定義で表す。[PostgreSQL公式イメージ](https://hub.docker.com/_/postgres)
+CloneはSnapshot内の全Versionから選ぶ。元値のないcopyは入力待ちとし、Defaultで補わない。秘密候補の不適合は入力・明示再生成を求める。項目・slotの増減を差分表示し、全条件を再検証して計画版を進め、作成確認を無効にする。詳細は[Clone Policyの6節](clone-policy-spec.md#6-項目別の具体的な方針)に従う。
+
+稼働中InstanceのVersion変更やデータ移行は行わない。Clone先の全保存slotは新規領域となる。
 
 ## 5. 入力項目とフォーム
 
@@ -204,7 +206,7 @@ mode:
 
 optionsは1件以上で、valueは1〜256文字、labelは1〜100文字の文字列とする。valueの重複は拒否し、defaultがあればoptions内のvalueと一致する必要がある。select以外のoptions、secret以外のinitial、型に不適合なValidationキーは未知の設定として拒否する。
 
-入力マップの記述順をフォーム順として保持する。Versionで全置換した場合は置換後の記述順を使う。Policy実行順やポート探索順には使わない。正規化Snapshotには表示順を明示的な配列として保存する。
+選択Versionの入力マップの記述順をフォーム順として保持する。Policy実行順やポート探索順には使わない。正規化Snapshotには表示順を明示的な配列として保存する。
 
 ### 5.3 Validation
 
@@ -401,7 +403,7 @@ Schemaに適合したこと、作者の説明どおり動くこと、信頼で�
 
 | 段階 | 確認する内容 | 行ってはいけないこと |
 | --- | --- | --- |
-| 1. ファイル受付 | サイズ、UTF-8、単一ファイルであること | URLを自動取得、外部ファイルを展開 |
+| 1. パッケージ受付 | サイズ、UTF-8、マニフェストと列挙Versionファイルの安全な受付 | URL取得、パッケージ外参照、未列挙ファイルの取込み |
 | 2. YAML構文 | 重複キー、許可するデータ型、深さ | 不明タグの実行・任意オブジェクト生成 |
 | 3. 構造検証 | 必須キー、未知キー、型、値域 | 誤記を無視して起動設定から落とす |
 | 4. 意味検証 | 全Versionの解決、参照、Policy、Default、slot重複 | 選択DefaultのVersionだけ確認して他を未検証にする |
@@ -409,7 +411,7 @@ Schemaに適合したこと、作者の説明どおり動くこと、信頼で�
 | 6. 作成時検証 | RuntimeTarget、Image、platform、資源、生成Compose | インポート承認だけを起動許可とみなす |
 | 7. 起動後検証 | Ready、マウント、接続・永続化の期待 | 未検証の自作Templateを公式検証済みと表示 |
 
-任意のJSON Schema検証だけでは、参照の存在、Versionマージ、同一型、secret-v1互換性、実際のDocker環境まで判定できない。機械検証用Schemaは本書の構造契約を実装する補助であり、意味検証が別途必要となる。本段階ではアプリ用パーサーや検証器の実装には進めない。
+任意のJSON Schema検証だけでは、参照の存在、Versionファイルの対応、同一型、secret-v1互換性、実際のDocker環境まで判定できない。機械検証用Schemaは本書の構造契約を実装する補助であり、意味検証が別途必要となる。本段階ではアプリ用パーサーや検証器の実装には進めない。
 
 ### 11.1 YAMLの制限
 
@@ -422,13 +424,22 @@ Schemaに適合したこと、作者の説明どおり動くこと、信頼で�
 
 ### 11.2 大きさの上限
 
-v1は1ファイル256 KiB、深さ16、Version32件、inputs64件、環境変数128件、ports16件、storage16件、connections16件、選択肢128件、各argv64要素を上限とする。単一の固定文字列・説明以外の文字列値は最大16 KiB。型ごとの小さい上限がある場合はそちらを優先する。
+v1は1ファイル256 KiB、パッケージ合計8 MiB、文書総数33件、深さ16、Version32件。各Versionはinputs64件、環境変数128件、ports16件、storage16件、connections16件、選択肢128件、各argv64要素を上限とする。単一の固定文字列・説明以外の文字列値は最大16 KiB。型ごとの小さい上限がある場合はそちらを優先する。
 
 過大なファイルをすべてメモリーに展開した後で拒否する設計にしない。正規表現もサイズ上限内でコンパイルできることを確認する。上限超過のエラーは「この版で扱える上限」を明示する。
 
+### 11.3 パス・集合の固定と登録単位
+
+- 参照は`versions/<name>.yaml`のみ。nameは小文字英数字で始まる1〜64文字の小文字英数字・ドット・ハイフン・アンダースコア。末尾ドット、`..`、Windows予約名（最初のドット以前がcon、prn、aux、nul、com1〜9、lpt1〜9）を拒否する。
+- 区切りは`/`固定。絶対パス、ドライブ、UNC、逆スラッシュ、URL、環境変数、親参照、追加階層は認めない。同一パスまたは同一実体ファイルの複数Versionへの割当てを拒否する。
+- パッケージ・versionsディレクトリ・参照ファイルのsymlink／junction等を拒否する。実際に開いた対象がパッケージ内の通常ファイルかを検証し、文字列prefixだけで判定しない。
+- 読込み中に単体・累積サイズ上限を検査する。全原文のバイト列を固定し、検証・確認・登録は同じ集合を使う。取得中の変更・差替えを検出した場合は破棄して再読込みを求める。確認後は外部ファイルを読み直さない。
+- 未列挙ファイルは取込み・展開せず、未使用のVersion定義を作者向けに通知する。別のTemplateやファイルを探索して欠損を補わない。
+- 全Versionが有効な場合だけ、パッケージ全体を1つの不変版として原子的に登録する。1件でも欠損・不正ならその版全体を拒否し、他Template・既存登録版・Instanceを維持する。再読込み失敗を旧版の表示で成功と見せない。
+
 ## 12. 分かりやすいエラー
 
-エラーはファイル名、行・列（取得できる場合）、項目パス、理由、修正例を含める。全入力を丸ごと出力せず、秘密値は必ず伏せる。
+エラーはパッケージ、Version、相対ファイル名、行・列（取得できる場合）、項目パス、理由、修正例を含める。全入力を丸ごと出力せず、秘密値は必ず伏せる。
 
 | エラー例 | 日本語の案内例 |
 | --- | --- |
@@ -437,7 +448,7 @@ v1は1ファイル256 KiB、深さ16、Version32件、inputs64件、環境変数
 | 未定義`{ input: passwrod }` | `passwrod`という入力がありません。参照先のキーを確認してください |
 | secretに`default` | パスワードの固定値はTemplateに保存できません。自動生成または初回入力を使ってください |
 | storageに`host` | ホスト側の保存先はアプリが割り当てます。コンテナ内の保存先を`container`へ指定してください |
-| Version差分で参照先が消失 | Version「17」の解決後に入力「database」がありません。Version別inputsは全置換です |
+| Version内の参照先が消失 | Version「17」のversions/17.yamlに入力「database」がありません。参照先または入力定義を修正してください |
 | 未知schemaVersion | このアプリではSchema版「2」を扱えません。対応アプリを確認してください |
 
 誤記候補は提案するだけで自動修正しない。不正Templateは個別に無効化し、他Templateや既存Instanceを壊さない。
@@ -446,14 +457,14 @@ v1は1ファイル256 KiB、深さ16、Version32件、inputs64件、環境変数
 
 ### 13.1 版ごとの範囲
 
-v1必須は、従来のローカル定義ファイル追加・再読込みである。本仕様の検証、出所区分、不変版、Snapshotはこの段階から適用する。
+v1必須はローカルパッケージの追加・再読込みである。templates/local直下の各ディレクトリのtemplate.yamlだけを入口として検出する。単一.template.yamlやVersionファイルは入口として受け付けない。本仕様の検証、出所区分、不変版、Snapshotはこの段階から適用する。
 
-ユーザー向けのファイル選択によるインポート画面は将来機能として仕様の接続点を定める。v2のコンテナWeb版と同じリリースへ必ず含めるとは決めない。オンラインカタログ、URL直接取得、ZIPパッケージ、依存Template、署名配布の実装をv1へ増やさない。
+ユーザー向けのディレクトリ選択によるインポート画面は将来機能として仕様の接続点を定める。v2のコンテナWeb版と同じリリースへ必ず含めるとは決めない。オンラインカタログ、URL直接取得、ZIPパッケージ、依存Template、署名配布の実装をv1へ増やさない。
 
 ### 13.2 インポートの基本フロー
 
-1. ユーザーがローカルの単一YAMLを選ぶ。
-2. アプリがその時点のバイト列を読み、構文・構造・意味を検証する。追加のファイルやURLを取得しない。
+1. ユーザーがローカルのパッケージディレクトリを選ぶ。
+2. アプリがマニフェストと列挙Versionファイルのバイト列集合を固定し、構文・構造・意味を検証する。パッケージ外のファイルやURLを取得しない。
 3. 名前、作者（自己申告）、Template版、サービスVersion、イメージの取得先、公開ポート、保存slot、command、Health Check、秘密入力の有無を要約する。
 4. 「ユーザー作成・未検証」と出所を示し、登録操作を受け付ける。
 5. 検証した同じ内容を不変なTemplateRevisionとして登録する。確認後に元ファイルを読み直して別内容を登録しない。
@@ -486,12 +497,12 @@ v1必須は、従来のローカル定義ファイル追加・再読込みであ
 
 Snapshotには少なくとも以下を保持する。
 
-- 元定義、schemaVersion、Template ID・版、出所のアプリ側情報。
-- 選択Versionと定義全体、正規化方式の版。
+- マニフェストと全Versionの原文集合（相対パス・バイト列・各SHA-256）、schemaVersion、Template ID・版、出所のアプリ側情報。
+- 選択Versionとそのパッケージ版の全Versionの完全定義、正規化方式template-normalization-v1。
 - Clone Policy仕様版1、identity-v1／project-v1／storage-v1／secret-v1等の使用規則。
 - 定義の同一性を判定する情報と表示順。
 
-コメントやインデントは同一性に含めない。表示順、ラベル、Default、Policy、実行設定が変われば内容変更として扱う。正規化後の安定した直列化と内容ハッシュ方式は保存設計で固定し、プロセス依存のハッシュ値を使わない。
+正規化はtemplate-normalization-v1の安定JSONとSHA-256を使う。コメント、インデント、参照ファイルの配置名は意味の同一性に含めない。原文hashと意味のhashは区別し、同内容の再登録で既存原文を上書きしない。表示順、ラベル、Default、Policy、実行設定が変われば内容変更として扱う。表示順は明示配列としてhashに含め、プロセス依存のハッシュ値を使わない。新しいカタログのVersionを既存Snapshotへ自動追加せず、外部ファイルの更新・削除後も保存済みの全Versionから再生成・Cloneする。
 
 既存Snapshotへ新しい省略規則を適用し直さない。新アプリが旧Snapshotを扱える場合も、その定義時点の意味を維持する。未知版を「似ているから」と解釈せず、対応不可として案内する。
 
@@ -509,10 +520,10 @@ v1の基本契約は確定したImage参照を維持すること。digest指定�
 | 引数で動作・永続化・認証を設定 | argv配列とinput参照。Redis例で示す |
 | APIと管理画面など複数ポート | portsに独立slotを追加する |
 | データ・ログ等の複数保存先 | storageに独立slotを追加する |
-| Versionでマウント先や起動方法が変わる | Version別serviceで該当セクションを置換する |
+| Versionでマウント先や起動方法が変わる | Version別ファイルに独立した完全なserviceを書く |
 | 入力不要の開発用エミュレーター | inputsなしで、command・ports・storageを定義する |
 | 複数コンテナの依存関係が必須 | v1対象外。将来の複合Templateモデルが必要 |
-| 任意の設定ファイル、証明書、初期化スクリプトが必須 | v1では外部ファイルを取り込まない。将来のファイル生成・配布仕様が必要 |
+| 任意の設定ファイル、証明書、初期化スクリプトが必須 | Version定義以外の実行用ファイルは取り込まない。将来のファイル生成・配布仕様が必要 |
 | デバイス・特権・host networkが必須 | v1の安全範囲では非対応 |
 | 単一引数への値連結・複雑な条件付き構成が必須 | v1では非対応。必要に応じて明示的な拡張を検討 |
 
@@ -525,12 +536,12 @@ MongoDB、MinIO、Azurite、RabbitMQ等も、実際に選ぶImageの設定方式
 ## 16. 作者向けチェック手順
 
 1. 対象Imageの公式説明を確認し、必要な環境変数・引数・保存先・Health Checkを洗い出す。
-2. 近い定義例をコピーし、id・templateVersion・名前を変更する。利用者の実Passwordやホストパスを書き込まない。
-3. 最初は1 Versionでinputsとserviceを書く。ポートと保存領域のClone規則は追記しない。
+2. 近いパッケージ例をディレクトリごとコピーし、id・templateVersion・名前を変更する。利用者の実Passwordやホストパスを書き込まない。
+3. マニフェストに1 Versionを登録し、そのVersionファイルへ完全なinputsとserviceを書く。ポートと保存領域のClone規則は追記しない。
 4. 読込み検証で解決後のフォームと実行設定を確認する。
 5. 実際に作成・接続・停止・再起動・再作成を試す。保存すべきデータが残るか確認する。
 6. bind mountとnamed volumeで、元データありの設定Cloneを試す。先に元データがなく、双方が独立して動くことを確認する。
-7. Versionを追加する場合は、全Versionの解決結果と両方式を再検証する。
+7. Version追加時は新ファイルとマニフェストを更新し、登録済みならtemplateVersionを上げる。全Versionの構造・意味と、変更対象の両保存方式の動作を検証する。
 8. 定義を共有するときは、作者、取得先、検証した環境を別途示す。アプリ側の「検証済み」表示をファイル内で自己申告しない。
 
 Redis例のHealth Checkでは、認証情報をREDISCLI_AUTHから受け取り、`redis-cli -e`でコマンド失敗を終了コードへ反映する。起動側のrequirepass引数に秘密が現れる点はv1平文方針の範囲内で説明し、アプリログには出さない。[Redis CLI公式資料](https://redis.io/docs/latest/develop/tools/cli/)
@@ -554,7 +565,7 @@ Redis例のHealth Checkでは、認証情報をREDISCLI_AUTHから受け取り�
 | TS-T13 | clone: clearとDefault | CloneでDefaultを再適用せず入力待ちになる |
 | TS-T14 | storageのhost・volume実名・clone指定 | Coreの割当てに反する未知キーとして拒否 |
 | TS-T15 | 同一・親子storage target、同一container port | 解決後の各Versionで拒否 |
-| TS-T16 | Versionのenvironmentだけ置換 | 共通environmentと深く混ぜない。他serviceキーは維持 |
+| TS-T16 | Version別にenvironmentやinputsを追加・削除 | 各ファイルの完全定義だけを使用。他Versionから補完しない |
 | TS-T17 | `${...}`や`$`を含む秘密・固定文字列 | 再解釈せずCompose上で値を維持 |
 | TS-T18 | 同じID／版・同内容を再登録 | 重複を増やさず出所を昇格させない |
 | TS-T19 | 同じID／版・異なる内容を登録 | 上書き拒否。新しい版かIDを要求 |
@@ -565,13 +576,23 @@ Redis例のHealth Checkでは、認証情報をREDISCLI_AUTHから受け取り�
 | TS-T24 | 両方式で元にデータを入れてClone | 全保存slotが独立し、元データが先へコピーされない |
 | TS-T25 | Imageのplatform・マウントが宣言と不一致 | 実行時に不一致を示し、安全な利用可能状態と判定しない |
 | TS-T26 | 自作の悪意あるImage | 構造検証だけで安全と宣言しない。権限制限と出所表示を確認 |
+| TS-T27 | 未列挙ファイル・Versionファイルの単独受付 | 未列挙内容を取込みせず、単独登録は拒否 |
+| TS-T28 | 非既定Versionの欠損・不正 | パッケージ全体を拒否。他Templateと既存版は維持 |
+| TS-T29 | 絶対・親参照・URL・予約名・重複参照 | ファイル受付で拒否。3OSで結果が一致 |
+| TS-T30 | symlink／junction・開いた実体の差替え | 範囲外・通常ファイル以外を拒否し、取得中の変更で集合を破棄 |
+| TS-T31 | 単体・累積サイズ・文書数上限超過 | 上限超過の展開前に拒否 |
+| TS-T32 | コメント・配置名のみ変更／表示順変更 | 前者の意味hashは同じ、後者は異なる。原文hashは別保持 |
+| TS-T33 | 新Versionをカタログへ追加後に旧InstanceをClone | Snapshot内の全Versionだけを提示。新Versionを自動追加しない |
+| TS-T34 | マニフェストの共通inputs・Version内の別ファイル参照 | 未知キーとして拒否し、継承・差分解釈をしない |
+| TS-T35 | 同一入力キーをVersion間で型変更 | 全体検証で拒否。別キーの使用を案内 |
+| TS-T36 | 新規作成／Cloneで入力項目・slotが増減 | 選択先だけを対象に再検証。新規DefaultとCloneのcopy入力待ちを区別 |
 
-TS-T01〜23は構造・意味・登録の検証、TS-T24〜26は実行基盤・信頼境界を含む検証へ引き継ぐ。これらは検証すべきシナリオであり、現段階の実行済みテスト結果ではない。
+TS-T01〜23および27〜36は構造・意味・登録の検証、TS-T24〜26は実行基盤・信頼境界を含む検証へ引き継ぐ。これらは検証すべきシナリオであり、現段階の実行済みテスト結果ではない。
 
 ## 18. 上位仕様への具体化と次の成果物
 
-今回、読みやすい単一YAML形式、5つの入力型、明示的なinput参照、浅いVersion置換、Core固定項目、secretの安全な初期値、インポート時の検証と出所管理を定めた。通常の作者はClone生成器やホスト側命名を記述する必要がない。
+今回、Schema 1のマニフェスト＋Version別完全定義、5つの入力型、明示的なinput参照、継承なしの設定管理、Core固定項目、secretの安全な初期値、インポート時の検証と出所管理を定めた。通常の作者はClone生成器やホスト側命名を記述する必要がない。
 
-上位仕様で未決だったTemplateの宣言構文、slot定義、Version差、Policy省略時の固定化を具体化した。入力間の任意式、外部ファイル、自由なCompose断片は導入していない。ユーザー作成Templateのインポートは将来の明示的な利用フローとして位置づけ、v1のローカル追加にも同じ検証原則を適用する。
+上位仕様で未決だったTemplateの宣言構文、slot定義、Version差、Policy省略時の固定化を具体化した。入力間の任意式、パッケージ外参照、実行用外部ファイル、自由なCompose断片は導入していない。ユーザー作成Templateのインポートは将来の明示的な利用フローとして位置づけ、v1のローカル追加にも同じ検証原則を適用する。
 
 後続の[v1 アーキテクチャ設計](architecture-v1.md)で、Reactでのフォーム生成、Rustでの構文・意味検証、TemplateRevision／Snapshotの保存、SQLiteと生成物の整合、Docker CLI実行、管理ルートの権限、コンテナWeb版の境界を具体化した。機械検証用Schemaとパーサーの実装・適合性テストは、同書の責務分担に沿ってMVPタスクへ落とす。

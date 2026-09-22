@@ -122,9 +122,11 @@ UIの確認表示だけを根拠にせず、Coreが型、版、利用可能操�
 | --- | --- |
 | `management_scopes` | scope ID、所有OS利用者、管理ルート識別、既定保存方式 |
 | `runtime_targets` | 固定endpoint、Engine識別、platform、診断済み版、接続証拠 |
-| `template_revisions` | ID・版・内容hash・正規形・原文・登録元。IDと版の一意性 |
+| `template_revisions` | ID・版・Schema版・正規化方式・意味hash・全Versionの正規形・登録元。IDと版の一意性 |
+| `template_revision_files` | revision・相対パスの複合キー、原文BLOB・SHA-256。マニフェストと列挙Versionファイルを保持 |
 | `instances` | ID、表示名、正規化名、lifecycle、instance revision、project、target、clone元ID |
-| `template_snapshots` | Instance専有の使用定義、全Version、表示順、規則版。カタログに削除連鎖しない |
+| `template_snapshots` | Instance専有の全Versionの完全定義、選択Version、表示順、Schema・正規化・規則版。カタログに削除連鎖しない |
+| `template_snapshot_files` | snapshot・相対パスの複合キー、原文BLOB・SHA-256。カタログ原文に外部参照せず専有コピーを保持 |
 | `instance_specs` | instance ID・spec revisionの複合キー、入力値（秘密を含む）、Version・保存方式 |
 | `port_bindings` | spec revision・slotに対応するポート設定 |
 | `storage_allocations` | slot、方式、実体識別、所有証拠、Assigned／Retained、存在・初期化状態 |
@@ -166,7 +168,7 @@ WindowsはProgramData既知フォルダー配下のComposeNest、Ubuntuは`/var/
   owner.json                         scope・所有利用者・配置版（秘密なし）
   locks/backend.lock
   state/composenest.sqlite            設定・秘密・予約・処理記録の正本
-  templates/local/                   追加定義の読込み対象
+  templates/local/<package>/         template.yamlとversions/*.yamlの読込み対象
   instances/<instance-id>/
     artifacts/<artifact-id>/
       compose.yaml                   標準Compose、秘密を含み得る
@@ -202,11 +204,23 @@ SQLite内manifestを照合基準とし、manifestファイル自身もhash対象
 
 ## 7. Template処理とCompose生成
 
-読込みはサイズ制限付きUTF-8 → YAMLイベント検査 → 型付きAST → 全Version解決 → 意味検証 → 正規形 → 登録の順とする。展開前にalias・anchor・独自タグ・重複キー・複数文書・深さ超過を拒否できるパーサーを選ぶ。ライブラリ標準のYAML読込みだけで仕様を満たすとはみなさない。数・文字列・未設定の区別、未知キー拒否、Version差分の全置換規則はTemplate仕様に従う。
+Schema 1は共通メタ情報・Version一覧のtemplate.yamlとVersion別完全定義のパッケージを標準とする。未実装の単一ファイル案は受け付けず、互換Adapter・移行機能は設けない。読込みはマニフェストのサイズ制限付きUTF-8 → YAMLイベント・構造検査 → 列挙Versionファイルの安全な受付 → 全文書の型付きAST → 全Version意味検証 → 正規形 → 全体登録の順とする。展開前にalias・anchor・独自タグ・重複キー・複数文書・深さ超過を拒否できるパーサーを選ぶ。ライブラリ標準のYAML読込みだけで仕様を満たすとはみなさない。数・文字列・未設定の区別、未知キー拒否、マニフェストとVersion文書の許可キーはTemplate仕様に従う。継承・差分マージは行わない。
 
-正規化方式を`template-normalization-v1`とする。型付き内容をUTF-8の安定JSONへ直列化しSHA-256を計算する。オブジェクトキーは一定順、表示順の意味があるinputs／versions／connections／slotは順序配列を別途保持しhashに含める。コメント・空白は除外するが、ラベル・既定値・Policy・表示順は除外しない。出所情報はアプリ側で別保存し、Template作者の自己申告を信頼判定へ使用しない。
+正規化方式を`template-normalization-v1`とする。型付き内容をUTF-8の安定JSONへ直列化しSHA-256を計算する。オブジェクトキーは一定順、表示順の意味があるinputs／versions／connections／slotは順序配列を別途保持しhashに含める。意味hashにはマニフェストのメタ情報と全Versionの完全定義を含める。コメント・空白・参照ファイルの配置名は除外するが、ラベル・既定値・Policy・表示順は除外しない。原文hashは各ファイルの生バイト列から別計算し、同内容の再登録で既存原文を上書きしない。出所情報はアプリ側で別保存し、Template作者の自己申告を信頼判定へ使用しない。
 
-生成器はSnapshot＋確定Spec＋保存割当て＋Image解決記録から型付きComposeモデルを作り、YAML serializerで出力する。文字列連結でYAMLを作らない。`$`をCompose補間で変質させず、commandはargv配列、healthcheckはexec形式とする。入力値を再度Template構文として解釈しない。[Composeサービス仕様](https://docs.docker.com/reference/compose-file/services/)
+### 7.1 パッケージ受付と保存
+
+filesystem／template Adapterは同梱resourceとtemplates/local直下のパッケージのtemplate.yamlだけを検出し、versions/<name>.yamlへの明示参照を読む。Versionファイルを独立Templateとして走査しない。パス文法・予約名・リンク拒否・実体検査・重複参照・1ファイル256 KiB／全体8 MiB／33文書の上限はTemplate仕様11節に従う。開いたハンドルに基づく範囲・通常ファイル確認、取得中の変更検知をOS Adapterへ隔離し、3OSで検証する。
+
+全原文のバイト列集合を固定してから意味検証・確認へ渡す。取得中の変更や差替えを検出した集合は破棄し、確認後に元ファイルを再読込みしない。全Versionが成功した場合だけ、Application Serviceがrevisionと全原文行を1つのSQLiteトランザクションで登録する。1件の欠損・不正でパッケージ全体を拒否し、他Template・既存登録版・Instanceを維持する。失敗した再読込みを旧版の表示で成功と見せない。
+
+Instance確定時は全Versionの完全定義・表示順・規則版と原文集合をSnapshotへコピーし、Spec・割当てと同じ確定トランザクションで保存する。カタログ削除によるSnapshotの削除連鎖・外部参照は設けない。Cloneの選択肢は保存済み全Versionに限定し、カタログ更新による追加はしない。
+
+Reactは検証済みDTOと選択Versionのフォームだけを扱い、ファイル探索・マージを実装しない。新規作成の追加項目には初期化規則、CloneにはPolicyを適用する。削除項目を送信対象から除外し、候補・slotを再検証して確認を無効にする。秘密を無言で再生成しない。
+
+### 7.2 Compose生成
+
+生成器は外部のTemplateファイルを再読込みせず、Snapshot内の選択Versionの完全定義＋確定Spec＋保存割当て＋Image解決記録から型付きComposeモデルを作り、YAML serializerで出力する。文字列連結でYAMLを作らない。`$`をCompose補間で変質させず、commandはargv配列、healthcheckはexec形式とする。入力値を再度Template構文として解釈しない。[Composeサービス仕様](https://docs.docker.com/reference/compose-file/services/)
 
 | 生成項目 | 固定方針 |
 | --- | --- |
@@ -407,7 +421,7 @@ ReactのApplicationClientにHTTP実装を追加し、Tauriの代わりにHTTP Ad
 | --- | --- | --- |
 | Domain | 名前正規化、全PolicyとVersion差分、秘密の再生成条件、slot分離 | INV-01〜08、Clone Policyの全シナリオ |
 | SQLite | 同じPlanの同時確定、同名・同ポート、編集旧新予約、Retired保持 | INV-03・04・09・16、AC-07〜09 |
-| Template | 制限付きYAML、重複、全Version、出所偽装、正規形hash | Template SchemaのTS-T全件、AC-16・17 |
+| Template | 制限付きYAML、パッケージ内参照・実体、取得中差替え、全体登録、全Version、出所偽装、意味hash／原文hash | Template SchemaのTS-T全件、AC-16・17 |
 | Compose契約 | `$`・引用符・空白・日本語を環境変数／argvで往復し実値一致 | SEC-05・06、AC-19 |
 | Runtime | 対象固定、構成改変、Image固定、未知マウント、CLI終了後の実体 | ENV-03、REC-02・04、AC-10・15 |
 | 復旧 | 各外部操作の直前・直後・DB確定直前でプロセスを落とし再起動 | REC-03〜08、AC-09・14 |
@@ -436,7 +450,7 @@ Fake Adapterで障害位置を網羅し、Docker結合テストでは元デー�
 | OPN-03 | 安定版の組合せを検証してlock。更新は互換性テスト経由、Docker自動更新なし | 具体的な全依存patchとDesktop同梱組合せのビルド・実機照合 |
 | OPN-04 | システム共通領域、管理OSユーザー1人、初期設定時のみ昇格、GUIは一般権限 | インストーラー・ACL・Image UID/GIDの組合せ検証 |
 | OPN-05 | SQLiteを秘密の正本とし、生成Composeに必要な値を複製。通常表示をマスキング | ファイル保護・ログ等への不要な複製抑止を検証 |
-| OPN-06 | 現行Schema・Policyをv1として固定しRustで検証。任意スクリプト・自由なCompose断片なし | parser・機械検証Schema・適合性テストの実装 |
+| OPN-06 | 分割形式をSchema 1、Clone Policyを仕様版1として固定しRustで検証。任意スクリプト・自由なCompose断片なし | parser・機械検証Schema・適合性テストの実装 |
 | OPN-07 | 初回digest・platformを保存し再試行・再作成・解決済み同VersionのCloneで再利用 | pull／platform／消失Imageの結合検証。更新機能はv1外の明示操作として別設計 |
 | OPN-08 | 外部編集時は変更を保留、確認後に退避して保存設定から復帰。手編集の取込みなし | UIの差分・確認画面と復帰処理の実装 |
 | OPN-09 | 旧新予約を保持、同じOperationで再試行または旧構成復帰、実体照合後に予約解放 | 停止状態維持・障害注入試験 |

@@ -38,4 +38,6 @@ cargo run -p composenest-desktop
 
 同日にMinGWの`C:\\ProgramData\\mingw64\\mingw64\\bin`を`PATH`へ追加して、`dlltool.exe`を使用する`cargo check -p composenest-desktop`を成功させた。さらに`cargo run -p composenest-desktop`は実行ファイルのビルドと起動まで成功している。Windowsリソース用の`icons/icon.ico`を追加し、Tauriが生成する`src-tauri/gen/`は追跡対象外とした。
 
-`rust-toolchain.toml`は`rustfmt`と`clippy`を要求するが、この環境のRust導入には両componentが存在しない。選択したRust toolchainへ`rustfmt`・`clippy`を追加後、`cargo fmt --all -- --check`と`cargo clippy --workspace --all-targets -- -D warnings`を実行する。
+2026-09-22に、`rustfmt`を追加したRust 1.98.1 MSVC toolchainで`cargo fmt --all -- --check`を成功させた。`cargo clippy -p composenest-domain -p composenest-application -p composenest-adapters --all-targets -- -D warnings`も成功している。
+
+同MSVC toolchainでの`cargo clippy --workspace --all-targets -- -D warnings`は、Visual C++ランタイムライブラリ`msvcrt.lib`が開発環境から見つからず、依存crateのリンク時に停止する。Windowsデスクトップcrateを含む全ワークスペースのlintには、MSVC Build Toolsの環境設定を読み込むか、`rustfmt`・`clippy`を含むRust 1.98.1 GNU toolchainを使用する。

@@ -9,3 +9,8 @@ rust-version.workspace = true
 composenest-application = { path = "../application" }
 composenest-domain = { path = "../domain" }
 getrandom = "0.3"
+rusqlite = { version = "0.40.2", features = ["backup", "bundled"] }
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"

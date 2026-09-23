@@ -45,7 +45,6 @@ CREATE TABLE instances (
     revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0),
     project_name TEXT NOT NULL UNIQUE,
     clone_source_id TEXT REFERENCES instances(id) ON DELETE RESTRICT,
-    UNIQUE(target_id, project_name),
     FOREIGN KEY(target_id, scope_id) REFERENCES runtime_targets(id, scope_id)
 );
 CREATE UNIQUE INDEX unique_active_name ON instances(scope_id, normalized_name)

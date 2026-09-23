@@ -31,3 +31,14 @@ stat -c '%U:%G %a %n' /var/lib/composenest /var/lib/composenest/state
 bind先の所有者がImageのUID/GIDへ変わりアクセス不能なら、全員書込みへ緩めたり既存データを自動chownしたりしない。管理ルートと所有証拠の保護を維持し、操作を停止して新規作成時のnamed volumeを案内する。rootful Dockerの権限がある利用者はホストに対して強い権限を持つため、0600はDocker管理者からの秘匿を保証しない。
 
 本リポジトリのCIはUbuntu 24.04を使用しており、26.04でのGUI・Docker実機成功を代替しない。実機で検証したらOS、Docker、WebKitGTKの版、利用者UID/GID、実際の観測結果をこの表またはPRへ追記する。
+
+## 2026-09-23 ローカルPCでの確認
+
+Ubuntu 26.04.1 LTS x86_64、利用者`admlocal`（UID/GID 1000:1000）で確認した。Docker CLIは28.5.2、Composeはv2.40.3、WebKitGTK 4.1のランタイムは2.52.6。利用者は`docker`グループに所属せず、socketへの接続は`permission denied`となった。
+
+- `unshare --map-auto --map-root-user bash scripts/linux/test-initialize-management-root.sh`：成功。ユーザー名前空間内で所有者変更、一般ユーザーの0600ファイル作成、再実行、リンク拒否を確認した。ホストの`/var/lib/composenest`は変更していない。
+- `pnpm --dir apps/desktop run check:contracts`と`pnpm --dir apps/desktop build`：成功。
+- `cargo fmt --all -- --check`、Domain/Application/Adaptersの`cargo test`と`cargo clippy`：成功。
+- `cargo test --workspace`：GLibの開発用パッケージがなく、`glib-2.0.pc`を検出できずコンパイル前に停止。GUI起動は未確認。
+
+管理ルートのホスト上での初期化、rootful Dockerでのbind書込み、GUI起動は管理者認証と開発用パッケージ導入後に確認する。

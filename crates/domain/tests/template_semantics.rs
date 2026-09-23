@@ -74,6 +74,22 @@ fn rejects_missing_and_non_default_invalid_versions() {
 }
 
 #[test]
+fn rejects_duplicate_and_unlisted_version_definitions() {
+    let manifest = parse_manifest("test", MANIFEST.as_bytes()).unwrap();
+    let version = parse_version("test", "1", "versions/1.yaml", VERSION.as_bytes()).unwrap();
+    for extra in ["1", "3"] {
+        let definitions = [
+            ("1".into(), version.clone()),
+            ("2".into(), version.clone()),
+            (extra.into(), version.clone()),
+        ];
+        let error = resolve_template(manifest.clone(), &definitions).unwrap_err();
+        assert_eq!(error.path.as_ref(), "$.versions");
+        assert_eq!(error.version.as_deref(), Some(extra));
+    }
+}
+
+#[test]
 fn rejects_changed_input_type_across_versions() {
     let second = VERSION
         .replace("type: string", "type: integer")

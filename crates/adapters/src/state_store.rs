@@ -1,7 +1,8 @@
 //! SQLite implementation of the confirmed state ledgers.
 
 use composenest_application::state_store::{
-    InstanceRecord, StateStore, StorageMethod, StoreConflict, TemplateFile, TemplateRevision,
+    InstanceRecord, StateStore, StorageMethod, StoreConflict, TemplateCatalogItem, TemplateFile,
+    TemplateRevision,
 };
 use composenest_domain::identity::DisplayName;
 use rusqlite::{Connection, Error, ErrorCode, TransactionBehavior, params};
@@ -51,6 +52,22 @@ fn insert_template(
     revision: &TemplateRevision,
 ) -> Result<(), DatabaseError> {
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let existing = transaction.query_row(
+        "SELECT semantic_hash FROM template_revisions WHERE template_id = ?1 AND template_version = ?2",
+        params![revision.template_id, revision.version],
+        |row| row.get::<_, String>(0),
+    );
+    match existing {
+        Ok(hash) if hash == revision.semantic_hash => return Ok(()),
+        Ok(_) => {
+            return Err(DatabaseError::Sqlite(Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE),
+                None,
+            )));
+        }
+        Err(Error::QueryReturnedNoRows) => {}
+        Err(error) => return Err(DatabaseError::Sqlite(error)),
+    }
     transaction.execute(
         "INSERT INTO template_revisions VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6, ?7)",
         params![
@@ -79,10 +96,10 @@ fn insert_instance(
     instance: &InstanceRecord,
 ) -> Result<(), DatabaseError> {
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let version_path = format!("versions/{}.yaml", instance.selected_version);
     let exists: i64 = transaction.query_row(
-        "SELECT EXISTS(SELECT 1 FROM template_revision_files WHERE revision_id = ?1 AND relative_path = ?2)",
-        params![instance.template_revision_id, version_path], |row| row.get(0),
+        "SELECT EXISTS(SELECT 1 FROM template_revisions r, json_each(r.canonical_json, '$.versions') v \
+         WHERE r.id = ?1 AND json_extract(v.value, '$.key') = ?2)",
+        params![instance.template_revision_id, instance.selected_version], |row| row.get(0),
     )?;
     if exists == 0 {
         return Err(DatabaseError::Sqlite(Error::QueryReturnedNoRows));
@@ -199,6 +216,27 @@ impl StateStore for DatabaseWorker {
         let revision = revision.clone();
         self.write(move |db| insert_template(db, &revision))
             .map_err(map_error)
+    }
+
+    fn list_templates(&self) -> Result<Vec<TemplateCatalogItem>, StoreConflict> {
+        self.read(|db| {
+            let mut query = db.prepare(
+                "SELECT id, template_id, template_version, origin, semantic_hash, canonical_json \
+                 FROM template_revisions ORDER BY template_id, template_version",
+            )?;
+            let rows = query.query_map([], |row| {
+                Ok(TemplateCatalogItem {
+                    id: row.get(0)?,
+                    template_id: row.get(1)?,
+                    version: row.get(2)?,
+                    origin: row.get(3)?,
+                    semantic_hash: row.get(4)?,
+                    canonical_json: row.get(5)?,
+                })
+            })?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+        })
+        .map_err(map_error)
     }
 
     fn commit_instance(&self, instance: &InstanceRecord) -> Result<(), StoreConflict> {
@@ -325,6 +363,9 @@ fn update_instance(
 mod tests {
     use super::*;
     use composenest_application::state_store::{PortAllocation, StorageAllocation};
+    use composenest_application::template_catalog::{
+        CatalogError, TemplateOrigin, TemplatePackage, register_packages,
+    };
     use std::fs;
     use tempfile::TempDir;
 
@@ -355,9 +396,12 @@ mod tests {
             id: "revision".into(),
             template_id: "redis".into(),
             version: "1".into(),
-            normalization: "schema-1".into(),
-            semantic_hash: format!("{:x}", Sha256::digest(br#"{"versions":{"8":"complete"}}"#)),
-            canonical_json: r#"{"versions":{"8":"complete"}}"#.into(),
+            normalization: "template-normalization-v1".into(),
+            semantic_hash: format!(
+                "{:x}",
+                Sha256::digest(br#"{"versions":[{"key":"8","definition":"complete"}]}"#)
+            ),
+            canonical_json: r#"{"versions":[{"key":"8","definition":"complete"}]}"#.into(),
             origin: "bundled".into(),
             files: vec![
                 TemplateFile {
@@ -442,6 +486,126 @@ mod tests {
             .unwrap();
         assert_eq!(count(&worker, "template_snapshot_files"), 2);
         assert_eq!(count(&worker, "template_snapshots"), 1);
+    }
+
+    #[test]
+    fn same_meaning_keeps_first_bytes_and_origin_but_changed_meaning_conflicts() {
+        let (_root, worker) = store();
+        let first = revision();
+        worker.register_template(&first).unwrap();
+        let mut equivalent = first.clone();
+        equivalent.origin = "bundled".into();
+        equivalent.files[0].contents = b"# reformatted manifest".to_vec();
+        worker.register_template(&equivalent).unwrap();
+        assert_eq!(count(&worker, "template_revisions"), 1);
+        let (origin, contents): (String, Vec<u8>) = worker
+            .read(|db| {
+                Ok(db.query_row(
+                    "SELECT r.origin, f.contents FROM template_revisions r JOIN template_revision_files f ON r.id = f.revision_id WHERE f.relative_path = 'template.yaml'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(origin, first.origin);
+        assert_eq!(contents, first.files[0].contents);
+        let catalog = worker.list_templates().unwrap();
+        assert_eq!(catalog.len(), 1);
+        assert_eq!(catalog[0].origin, first.origin);
+        assert_eq!(catalog[0].semantic_hash, first.semantic_hash);
+
+        let mut changed = first.clone();
+        changed.canonical_json = r#"{"versions":[{"key":"8","definition":"changed"}]}"#.into();
+        changed.semantic_hash = format!("{:x}", Sha256::digest(changed.canonical_json.as_bytes()));
+        assert_eq!(
+            worker.register_template(&changed),
+            Err(StoreConflict::Duplicate)
+        );
+        assert_eq!(count(&worker, "template_revisions"), 1);
+    }
+
+    #[test]
+    fn reload_rejects_every_simultaneous_duplicate_and_keeps_other_templates() {
+        fn package(name: &str, id: &str, version: &str) -> TemplatePackage {
+            let manifest = format!(
+                "schemaVersion: 1\nid: {id}\ntemplateVersion: \"1.0.0\"\nname: Test\ndescription: Test template\ndefaultVersion: \"1\"\nversions:\n  \"1\": versions/1.yaml\n"
+            );
+            TemplatePackage {
+                name: name.into(),
+                origin: TemplateOrigin::Local,
+                files: vec![
+                    TemplateFile {
+                        relative_path: "template.yaml".into(),
+                        contents: manifest.into_bytes(),
+                    },
+                    TemplateFile {
+                        relative_path: "versions/1.yaml".into(),
+                        contents: format!(
+                            "image: example:{version}\nplatforms: [linux/amd64]\nservice:\n  healthcheck:\n    command: [check]\n"
+                        )
+                        .into_bytes(),
+                    },
+                ],
+            }
+        }
+
+        let (_root, worker) = store();
+        let results = register_packages(
+            &worker,
+            vec![
+                package("first", "example.same", "1"),
+                package("other", "example.other", "1"),
+                package("second", "example.same", "2"),
+            ],
+        );
+        assert!(matches!(
+            results[0].result,
+            Err(CatalogError::AmbiguousRevision)
+        ));
+        assert!(results[1].result.is_ok());
+        assert!(matches!(
+            results[2].result,
+            Err(CatalogError::AmbiguousRevision)
+        ));
+        assert_eq!(count(&worker, "template_revisions"), 1);
+
+        let reloaded = register_packages(&worker, vec![package("other", "example.other", "2")]);
+        assert!(matches!(
+            reloaded[0].result,
+            Err(CatalogError::Store(StoreConflict::Duplicate))
+        ));
+        assert_eq!(count(&worker, "template_revisions"), 1);
+    }
+
+    #[test]
+    fn snapshot_keeps_original_versions_when_catalog_adds_another_revision() {
+        let (_root, worker) = store();
+        let mut original = revision();
+        original.files[1].relative_path = "versions/custom.yaml".into();
+        worker.register_template(&original).unwrap();
+        worker
+            .commit_instance(&instance("one", "One", 6379))
+            .unwrap();
+
+        let mut newer = original.clone();
+        newer.id = "newer".into();
+        newer.version = "2".into();
+        newer.canonical_json =
+            r#"{"versions":[{"key":"8","definition":"complete"},{"key":"9","definition":"new"}]}"#
+                .into();
+        newer.semantic_hash = format!("{:x}", Sha256::digest(newer.canonical_json.as_bytes()));
+        worker.register_template(&newer).unwrap();
+        let snapshot: String = worker
+            .read(|db| {
+                Ok(db.query_row(
+                    "SELECT canonical_json FROM template_snapshots WHERE instance_id = 'one'",
+                    [],
+                    |row| row.get(0),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(snapshot, original.canonical_json);
+        assert_eq!(count(&worker, "template_snapshot_files"), 2);
     }
 
     #[test]

@@ -342,6 +342,8 @@ name = "composenest-adapters"
 version = "0.1.0"
 dependencies = [
  "composenest-application",
+ "composenest-domain",
+ "getrandom 0.3.4",
 ]
 
 [[package]]

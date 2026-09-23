@@ -37,6 +37,23 @@ pub struct TemplateRevision {
     pub files: Vec<TemplateFile>,
 }
 
+/// One persisted catalog revision, independent of current package files.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TemplateCatalogItem {
+    /// Immutable revision identifier.
+    pub id: String,
+    /// Stable template identifier.
+    pub template_id: String,
+    /// Author-defined revision string.
+    pub version: String,
+    /// Application-assigned source retained from first registration.
+    pub origin: String,
+    /// Hash of the complete normalized definition.
+    pub semantic_hash: String,
+    /// Canonical definition, including every complete service version.
+    pub canonical_json: String,
+}
+
 /// Data committed together with a private template snapshot.
 #[derive(Debug, Clone)]
 pub struct InstanceRecord {
@@ -129,6 +146,9 @@ pub trait StateStore {
 
     /// Registers a complete package or leaves no new revision or files.
     fn register_template(&self, revision: &TemplateRevision) -> Result<(), StoreConflict>;
+
+    /// Lists immutable revisions even when their source packages have changed or disappeared.
+    fn list_templates(&self) -> Result<Vec<TemplateCatalogItem>, StoreConflict>;
 
     /// Commits an instance, private snapshot, spec, ports and storage atomically.
     fn commit_instance(&self, instance: &InstanceRecord) -> Result<(), StoreConflict>;

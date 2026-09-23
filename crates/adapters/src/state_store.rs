@@ -1,10 +1,12 @@
 //! SQLite implementation of the confirmed state ledgers.
 
 use composenest_application::state_store::{
-    InstanceRecord, StateStore, StorageMethod, StoreConflict, TemplateFile, TemplateRevision,
+    InstanceRecord, StateStore, StorageMethod, StoreConflict, TemplateCatalogItem, TemplateFile,
+    TemplateRevision,
 };
 use composenest_domain::identity::DisplayName;
 use rusqlite::{Connection, Error, ErrorCode, TransactionBehavior, params};
+use serde_json::Value as JsonValue;
 use sha2::{Digest, Sha256};
 
 use crate::sqlite::{DatabaseError, DatabaseWorker};
@@ -46,11 +48,59 @@ fn valid_files(files: &[TemplateFile]) -> bool {
         })
 }
 
+fn valid_canonical_revision(revision: &TemplateRevision) -> bool {
+    let Ok(value) = serde_json::from_str::<JsonValue>(&revision.canonical_json) else {
+        return false;
+    };
+    if revision.normalization != "template-normalization-v1"
+        || value.get("normalization").and_then(JsonValue::as_str)
+            != Some(revision.normalization.as_str())
+        || value
+            .pointer("/manifest/schemaVersion")
+            .and_then(JsonValue::as_i64)
+            != Some(1)
+        || value.pointer("/manifest/id").and_then(JsonValue::as_str)
+            != Some(revision.template_id.as_str())
+        || value
+            .pointer("/manifest/templateVersion")
+            .and_then(JsonValue::as_str)
+            != Some(revision.version.as_str())
+    {
+        return false;
+    }
+    let Some(versions) = value.get("versions").and_then(JsonValue::as_array) else {
+        return false;
+    };
+    !versions.is_empty()
+        && versions.iter().all(|version| {
+            version
+                .get("key")
+                .and_then(JsonValue::as_str)
+                .is_some_and(|key| !key.is_empty())
+        })
+}
+
 fn insert_template(
     connection: &mut Connection,
     revision: &TemplateRevision,
 ) -> Result<(), DatabaseError> {
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let existing = transaction.query_row(
+        "SELECT semantic_hash FROM template_revisions WHERE template_id = ?1 AND template_version = ?2",
+        params![revision.template_id, revision.version],
+        |row| row.get::<_, String>(0),
+    );
+    match existing {
+        Ok(hash) if hash == revision.semantic_hash => return Ok(()),
+        Ok(_) => {
+            return Err(DatabaseError::Sqlite(Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE),
+                None,
+            )));
+        }
+        Err(Error::QueryReturnedNoRows) => {}
+        Err(error) => return Err(DatabaseError::Sqlite(error)),
+    }
     transaction.execute(
         "INSERT INTO template_revisions VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6, ?7)",
         params![
@@ -79,10 +129,10 @@ fn insert_instance(
     instance: &InstanceRecord,
 ) -> Result<(), DatabaseError> {
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let version_path = format!("versions/{}.yaml", instance.selected_version);
     let exists: i64 = transaction.query_row(
-        "SELECT EXISTS(SELECT 1 FROM template_revision_files WHERE revision_id = ?1 AND relative_path = ?2)",
-        params![instance.template_revision_id, version_path], |row| row.get(0),
+        "SELECT EXISTS(SELECT 1 FROM template_revisions r, json_each(r.canonical_json, '$.versions') v \
+         WHERE r.id = ?1 AND json_extract(v.value, '$.key') = ?2)",
+        params![instance.template_revision_id, instance.selected_version], |row| row.get(0),
     )?;
     if exists == 0 {
         return Err(DatabaseError::Sqlite(Error::QueryReturnedNoRows));
@@ -191,14 +241,41 @@ impl StateStore for DatabaseWorker {
 
     fn register_template(&self, revision: &TemplateRevision) -> Result<(), StoreConflict> {
         if !valid_files(&revision.files)
+            || !valid_canonical_revision(revision)
             || revision.semantic_hash
                 != format!("{:x}", Sha256::digest(revision.canonical_json.as_bytes()))
+            || revision.id
+                != format!(
+                    "{}:{}:{}",
+                    revision.template_id, revision.version, revision.semantic_hash
+                )
         {
             return Err(StoreConflict::InvalidInput);
         }
         let revision = revision.clone();
         self.write(move |db| insert_template(db, &revision))
             .map_err(map_error)
+    }
+
+    fn list_templates(&self) -> Result<Vec<TemplateCatalogItem>, StoreConflict> {
+        self.read(|db| {
+            let mut query = db.prepare(
+                "SELECT id, template_id, template_version, origin, semantic_hash, canonical_json \
+                 FROM template_revisions ORDER BY template_id, template_version",
+            )?;
+            let rows = query.query_map([], |row| {
+                Ok(TemplateCatalogItem {
+                    id: row.get(0)?,
+                    template_id: row.get(1)?,
+                    version: row.get(2)?,
+                    origin: row.get(3)?,
+                    semantic_hash: row.get(4)?,
+                    canonical_json: row.get(5)?,
+                })
+            })?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+        })
+        .map_err(map_error)
     }
 
     fn commit_instance(&self, instance: &InstanceRecord) -> Result<(), StoreConflict> {
@@ -325,6 +402,9 @@ fn update_instance(
 mod tests {
     use super::*;
     use composenest_application::state_store::{PortAllocation, StorageAllocation};
+    use composenest_application::template_catalog::{
+        CatalogError, TemplateOrigin, TemplatePackage, register_packages,
+    };
     use std::fs;
     use tempfile::TempDir;
 
@@ -351,13 +431,15 @@ mod tests {
     }
 
     fn revision() -> TemplateRevision {
+        let canonical_json = r#"{"manifest":{"id":"redis","schemaVersion":1,"templateVersion":"1"},"normalization":"template-normalization-v1","versions":[{"key":"8","definition":"complete"}]}"#;
+        let semantic_hash = format!("{:x}", Sha256::digest(canonical_json.as_bytes()));
         TemplateRevision {
-            id: "revision".into(),
+            id: format!("redis:1:{semantic_hash}"),
             template_id: "redis".into(),
             version: "1".into(),
-            normalization: "schema-1".into(),
-            semantic_hash: format!("{:x}", Sha256::digest(br#"{"versions":{"8":"complete"}}"#)),
-            canonical_json: r#"{"versions":{"8":"complete"}}"#.into(),
+            normalization: "template-normalization-v1".into(),
+            semantic_hash,
+            canonical_json: canonical_json.into(),
             origin: "bundled".into(),
             files: vec![
                 TemplateFile {
@@ -380,7 +462,7 @@ mod tests {
             name: name.into(),
             project_name: format!("cn-{id}"),
             clone_source_id: None,
-            template_revision_id: "revision".into(),
+            template_revision_id: revision().id,
             selected_version: "8".into(),
             storage_method: StorageMethod::Bind,
             inputs_json: "{}".into(),
@@ -442,6 +524,163 @@ mod tests {
             .unwrap();
         assert_eq!(count(&worker, "template_snapshot_files"), 2);
         assert_eq!(count(&worker, "template_snapshots"), 1);
+    }
+
+    #[test]
+    fn unsupported_canonical_shape_is_rejected_before_registration() {
+        let (_root, worker) = store();
+        let mut unsupported = revision();
+        unsupported.canonical_json = unsupported.canonical_json.replace(
+            r#""versions":[{"key":"8","definition":"complete"}]"#,
+            r#""versions":{"8":{"definition":"complete"}}"#,
+        );
+        unsupported.semantic_hash = format!(
+            "{:x}",
+            Sha256::digest(unsupported.canonical_json.as_bytes())
+        );
+        assert_eq!(
+            worker.register_template(&unsupported),
+            Err(StoreConflict::InvalidInput)
+        );
+
+        let mut unsupported = revision();
+        unsupported.normalization = "template-normalization-v2".into();
+        assert_eq!(
+            worker.register_template(&unsupported),
+            Err(StoreConflict::InvalidInput)
+        );
+        let mut unsupported = revision();
+        unsupported.id = "unrelated-revision".into();
+        assert_eq!(
+            worker.register_template(&unsupported),
+            Err(StoreConflict::InvalidInput)
+        );
+        assert_eq!(count(&worker, "template_revisions"), 0);
+    }
+
+    #[test]
+    fn same_meaning_keeps_first_bytes_and_origin_but_changed_meaning_conflicts() {
+        let (_root, worker) = store();
+        let first = revision();
+        worker.register_template(&first).unwrap();
+        let mut equivalent = first.clone();
+        equivalent.origin = "bundled".into();
+        equivalent.files[0].contents = b"# reformatted manifest".to_vec();
+        worker.register_template(&equivalent).unwrap();
+        assert_eq!(count(&worker, "template_revisions"), 1);
+        let (origin, contents): (String, Vec<u8>) = worker
+            .read(|db| {
+                Ok(db.query_row(
+                    "SELECT r.origin, f.contents FROM template_revisions r JOIN template_revision_files f ON r.id = f.revision_id WHERE f.relative_path = 'template.yaml'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(origin, first.origin);
+        assert_eq!(contents, first.files[0].contents);
+        let catalog = worker.list_templates().unwrap();
+        assert_eq!(catalog.len(), 1);
+        assert_eq!(catalog[0].origin, first.origin);
+        assert_eq!(catalog[0].semantic_hash, first.semantic_hash);
+
+        let mut changed = first.clone();
+        changed.canonical_json = changed.canonical_json.replace("complete", "changed");
+        changed.semantic_hash = format!("{:x}", Sha256::digest(changed.canonical_json.as_bytes()));
+        changed.id = format!("redis:1:{}", changed.semantic_hash);
+        assert_eq!(
+            worker.register_template(&changed),
+            Err(StoreConflict::Duplicate)
+        );
+        assert_eq!(count(&worker, "template_revisions"), 1);
+    }
+
+    #[test]
+    fn reload_rejects_every_simultaneous_duplicate_and_keeps_other_templates() {
+        fn package(name: &str, id: &str, version: &str) -> TemplatePackage {
+            let manifest = format!(
+                "schemaVersion: 1\nid: {id}\ntemplateVersion: \"1.0.0\"\nname: Test\ndescription: Test template\ndefaultVersion: \"1\"\nversions:\n  \"1\": versions/1.yaml\n"
+            );
+            TemplatePackage {
+                name: name.into(),
+                origin: TemplateOrigin::Local,
+                files: vec![
+                    TemplateFile {
+                        relative_path: "template.yaml".into(),
+                        contents: manifest.into_bytes(),
+                    },
+                    TemplateFile {
+                        relative_path: "versions/1.yaml".into(),
+                        contents: format!(
+                            "image: example:{version}\nplatforms: [linux/amd64]\nservice:\n  healthcheck:\n    command: [check]\n"
+                        )
+                        .into_bytes(),
+                    },
+                ],
+            }
+        }
+
+        let (_root, worker) = store();
+        let results = register_packages(
+            &worker,
+            vec![
+                package("first", "example.same", "1"),
+                package("other", "example.other", "1"),
+                package("second", "example.same", "2"),
+            ],
+        );
+        assert!(matches!(
+            results[0].result,
+            Err(CatalogError::AmbiguousRevision)
+        ));
+        assert!(results[1].result.is_ok());
+        assert!(matches!(
+            results[2].result,
+            Err(CatalogError::AmbiguousRevision)
+        ));
+        assert_eq!(count(&worker, "template_revisions"), 1);
+
+        let reloaded = register_packages(&worker, vec![package("other", "example.other", "2")]);
+        assert!(matches!(
+            reloaded[0].result,
+            Err(CatalogError::Store(StoreConflict::Duplicate))
+        ));
+        assert_eq!(count(&worker, "template_revisions"), 1);
+    }
+
+    #[test]
+    fn snapshot_keeps_original_versions_when_catalog_adds_another_revision() {
+        let (_root, worker) = store();
+        let mut original = revision();
+        original.files[1].relative_path = "versions/custom.yaml".into();
+        worker.register_template(&original).unwrap();
+        worker
+            .commit_instance(&instance("one", "One", 6379))
+            .unwrap();
+
+        let mut newer = original.clone();
+        newer.version = "2".into();
+        newer.canonical_json = newer
+            .canonical_json
+            .replace("\"templateVersion\":\"1\"", "\"templateVersion\":\"2\"")
+            .replace(
+                r#"{"key":"8","definition":"complete"}"#,
+                r#"{"key":"8","definition":"complete"},{"key":"9","definition":"new"}"#,
+            );
+        newer.semantic_hash = format!("{:x}", Sha256::digest(newer.canonical_json.as_bytes()));
+        newer.id = format!("redis:2:{}", newer.semantic_hash);
+        worker.register_template(&newer).unwrap();
+        let snapshot: String = worker
+            .read(|db| {
+                Ok(db.query_row(
+                    "SELECT canonical_json FROM template_snapshots WHERE instance_id = 'one'",
+                    [],
+                    |row| row.get(0),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(snapshot, original.canonical_json);
+        assert_eq!(count(&worker, "template_snapshot_files"), 2);
     }
 
     #[test]

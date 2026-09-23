@@ -1,5 +1,8 @@
 //! Domain values and invariants for ComposeNest.
 
+pub mod identity;
+pub mod instance;
+
 /// Returns the application title displayed by supported clients.
 #[must_use]
 pub const fn application_title() -> &'static str {

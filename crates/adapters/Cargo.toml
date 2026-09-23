@@ -18,4 +18,7 @@ thiserror = "2"
 tempfile = "3"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_UI_Shell", "Win32_System_Com"] }
+windows-sys = { version = "0.61.2", features = ["Win32_UI_Shell", "Win32_System_Com", "Win32_Storage_FileSystem", "Win32_Foundation", "Win32_Security"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

@@ -34,3 +34,4 @@ impl RandomSource for SystemRandom {
 pub mod operation_journal;
 pub mod sqlite;
 pub mod state_store;
+pub mod template_package;

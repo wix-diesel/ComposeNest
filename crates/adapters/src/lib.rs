@@ -5,6 +5,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use composenest_application::Clock;
 use composenest_domain::clone_policy::{RandomError, RandomSource};
 
+#[cfg(windows)]
+pub mod windows_management_root;
+
 /// Reads the current time from the operating system.
 pub struct SystemClock;
 

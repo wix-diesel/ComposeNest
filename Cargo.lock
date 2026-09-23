@@ -344,6 +344,7 @@ dependencies = [
  "composenest-application",
  "composenest-domain",
  "getrandom 0.3.4",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

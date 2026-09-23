@@ -9,3 +9,6 @@ rust-version.workspace = true
 composenest-application = { path = "../application" }
 composenest-domain = { path = "../domain" }
 getrandom = "0.3"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_UI_Shell", "Win32_System_Com"] }

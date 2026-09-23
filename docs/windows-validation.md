@@ -23,7 +23,7 @@ $probe = Join-Path $root 'state\permission-probe.txt'
 Remove-Item -LiteralPath $probe
 ```
 
-自動検証は `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\windows\Test-ManagementRoot.ps1`。日本語・空白を含む一時パスで、再実行、所有者不一致の拒否、一般利用者による状態ファイル作成、Users／Everyone の ACE が付かないことを確認する。このテストは ProgramData の実ディレクトリを変更しない。
+自動検証は `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\windows\Test-ManagementRoot.ps1`。日本語・空白を含む一時パスで、再実行、別の実在利用者 SID に対する所有者不一致の拒否、一般利用者による状態ファイル作成、Users／Everyone の ACE が付かないことを確認する。`data` 子領域だけ読取り拒否にしても、親 `data` と `state` にアクセスできることも検証する。このテストは ProgramData の実ディレクトリを変更しない。
 
 ## 実機検証記録（2026-09-23）
 

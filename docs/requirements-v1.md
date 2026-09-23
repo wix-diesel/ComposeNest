@@ -47,10 +47,10 @@ v1はデスクトップアプリからローカルDockerを管理する。v2は�
 | OS | 配布CPU | v1の範囲 | 未決事項 |
 | --- | --- | --- | --- |
 | Windows | x86_64 | 64bit OSのみ。ARM版・32bit版は対象外 | OS最低版・Docker提供形態 |
-| macOS | ARM64（Apple Silicon） | Intel版・Universal版は必須にしない | macOS最低版 |
+| macOS | ARM64（Apple Silicon） | macOS 15以上。Intel版・Universal版は必須にしない | Docker Desktopを含む最低版実機受入 |
 | Linux | x86_64（64bit）のみ | Ubuntu 26.04のみ。他ディストリビューション・他版・ARM64は対象外。debで配布 | 配布・実機検証 |
 
-Windowsは従来のx86系限定と64bit OS限定を合わせ、x86_64として確定する。Ubuntuはユーザー指定の26.04・64bitに加え、推奨方針の採用によりx86_64のみとする。Windows／macOS最低版は引き続き未決。対応するDocker実行基盤とアプリの配布CPUの組合せは別途検証し、方針の確定を検証完了とみなさない。
+Windowsは従来のx86系限定と64bit OS限定を合わせ、x86_64として確定する。Ubuntuはユーザー指定の26.04・64bitに加え、推奨方針の採用によりx86_64のみとする。Windows最低版は引き続き未決。macOS最低版はIssue #6で15とし、Docker Desktopの現行版が現行macOSと直前2世代をサポートする方針を基準とする。対応するDocker実行基盤とアプリの配布CPUの組合せは別途検証し、方針の確定を検証完了とみなさない。
 
 Docker／Composeは現在の最新安定版を基準とする。2026-09-21に公式情報で確認した版は、Docker Engine／CLI 29.8.1とCompose 5.5.1である。[Docker公式リリースノート](https://docs.docker.com/engine/release-notes/29/)、[Compose公式リリース](https://github.com/docker/compose/releases/tag/v5.5.1)
 
@@ -370,12 +370,12 @@ AC-05・06・09・10・13は両Templateと両保存方式を組み合わせて�
 
 ## 13. 決定事項と実装・検証の残件
 
-2026-09-21にOPN-02のUbuntu x86_64限定と、OPN-03〜12の推奨方針をユーザーが採用した。方針の決定と、実装・実機検証の完了は区別する。Windows／macOS最低版は今回の採用対象に具体値を含めていないため、引き続き未決とする。
+2026-09-21にOPN-02のUbuntu x86_64限定と、OPN-03〜12の推奨方針をユーザーが採用した。方針の決定と、実装・実機検証の完了は区別する。当時はWindows／macOS最低版が未決だったが、macOSはIssue #6で15を下限とした。Windows最低版とmacOS 15でのDocker Desktopを含む実機受入は残る。
 
 | ID | 項目 | 採用済み方針 | 残件・実施時期 |
 | --- | --- | --- | --- |
 | OPN-01 | WindowsのCPU・ビット数 | 解決済み: x86_64の64bit OSのみ | DEC-01に反映 |
-| OPN-02 | LinuxのCPU・ディストリビューション、各OS最低版 | Ubuntu 26.04のx86_64（64bit）のみ | Windows／macOS最低版の決定と3OS実機受入 |
+| OPN-02 | LinuxのCPU・ディストリビューション、各OS最低版 | Ubuntu 26.04のx86_64（64bit）のみ。macOS 15以上はIssue #6で追加 | Windows最低版の決定と3OS実機受入 |
 | OPN-03 | 依存バージョン | 実装開始時に安定版の組合せを検証してlock。更新は互換性テストを通す。利用者のDockerは自動更新しない | 基盤タスクで具体patch・Desktop同梱組合せを記録。設計書の番号は候補 |
 | OPN-04 | 管理ルート・権限 | 3.3節のシステム共通領域、管理OSユーザー1人、導入・初回設定時のみ昇格、通常GUIは一般権限 | 初期化処理・ACL・Image UID/GIDの実装と配布検証 |
 | OPN-05 | 平文秘密 | SQLiteを正本、実行用Composeに必要な値だけ複製。通常画面はマスキング、ログ等への不要な複製を抑止 | ファイル保護と漏えい抑止の検証。WAL・内部退避も同等に保護 |

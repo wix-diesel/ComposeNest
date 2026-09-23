@@ -1,6 +1,6 @@
 # macOS ARM64 管理ルート・権限検証
 
-Issue #6 の初回セットアップと検証手順。対象 CPU は Apple Silicon で、macOS 14 を最低版の検証候補とする。通常 GUI は昇格せずに起動し、初期化だけを管理者権限で実行する。初期化先と異なるユーザーを所有者にしたい場合でも、昇格したプロセスの UID を所有者として推測しない。
+Issue #6 の初回セットアップと検証手順。対象 CPU は Apple Silicon で、v1 の最低版は macOS 15 とする。2026-09-23 時点の [macOS 27 公開](https://www.apple.com/newsroom/2026/09/major-updates-for-apples-software-platforms-are-now-available/)と、[Docker Desktop の対応方針](https://docs.docker.com/desktop/setup/install/mac-install/)（現行と直前 2 世代）を基準とする。通常 GUI は昇格せずに起動し、初期化だけを管理者権限で実行する。初期化先と異なるユーザーを所有者にしたい場合でも、昇格したプロセスの UID を所有者として推測しない。
 
 ## 初回セットアップ
 
@@ -44,8 +44,8 @@ sudo bash scripts/macos/test-initialize-management-root.sh
 
 | 項目 | 手順・期待結果 | 結果 |
 | --- | --- | --- |
-| 環境 | `sw_vers`, `uname -m`, `docker version`, `docker compose version`, `id`を記録 | macOS 26.6.1 の環境記録は後述。最低版候補 macOS 14 と Docker Desktop の実機照合は未実施 |
-| Host Adapter | `cargo test -p composenest-adapters`で `/Library/Application Support/ComposeNest` を解決するテストを実行 | macOS 26.6.1 ARM64 で成功。macOS 14 CI でも確認する |
+| 環境 | `sw_vers`, `uname -m`, `docker version`, `docker compose version`, `id`を記録 | macOS 26.6.1 の環境記録は後述。最低版 macOS 15 と Docker Desktop の実機照合は未実施 |
+| Host Adapter | `cargo test -p composenest-adapters`で `/Library/Application Support/ComposeNest` を解決するテストを実行 | macOS 26.6.1 ARM64 で成功。macOS 15 CI でも確認する |
 | GUI と一般権限 | 初期化後、通常利用者で `cargo run -p composenest-desktop`を起動し、画面表示・`get_bootstrap`成功・プロセス UID を確認 | 通常利用者 UID 501 でプロセス起動を確認。管理ルートを使う GUI 操作と画面表示・IPC 成功は未確認 |
 | 管理ルート | 上記初期化後、通常利用者が `state` へ書込み、別ユーザーが読めないことを確認 | 実際の管理ルートを UID/GID 501:20、0700、ACL なしで初期化。通常利用者による `state` の 0600 ファイル書込みに成功。別ユーザーの読取り拒否は CI の一時パスで確認 |
 | Image UID/GID | 専用の bind 子領域で UID/GID を変更する Image を起動し、親 `data`、`state`、`ownership` の保護が維持されることを確認 | 一時共有中、コンテナ UID/GID 12345:12345 の書込みに成功。コンテナ内 `chown` 後もホスト子領域は 501:20 で、親 `data`・`state`・`ownership` は 501:20、0700 を維持 |

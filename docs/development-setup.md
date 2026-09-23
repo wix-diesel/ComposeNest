@@ -1,5 +1,7 @@
 # 開発基盤
 
+Ubuntuの管理ルート初期化と実機検証は[Ubuntu 26.04 権限・実機検証](ubuntu-validation.md)を参照。
+
 ## 採用版
 
 Issue #2で、次の組合せをWindowsで依存取得・型検査・Rustテスト・フロントエンドビルドに使用した。各依存の解決結果は`Cargo.lock`と`apps/desktop/pnpm-lock.yaml`へ固定する。

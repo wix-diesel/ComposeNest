@@ -19,6 +19,13 @@ env:
   NODE_VERSION: 24.19.0
 
 jobs:
+  linux-root-permissions:
+    name: Linux management root permissions
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo bash scripts/linux/test-initialize-management-root.sh
+
   rust-fmt:
     name: Rust format
     runs-on: ubuntu-24.04

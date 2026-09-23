@@ -398,10 +398,10 @@ Rustの実装候補はTokio（非同期プロセス）、rusqlite（専用DB wor
 | 対象 | 本書での初期検証案 | 配布と権限処理 |
 | --- | --- | --- |
 | Windows x86_64 | Windows 11 24H2以上、Docker Desktop Linux backend | 署名付きNSIS installer。ProgramData初期ACL設定、WebView2前提を確認 |
-| macOS ARM64 | macOS 14以上、Docker Desktop | 署名・notarization済みappと管理ルート初期化を含むpkg |
+| macOS ARM64 | macOS 15以上、Docker Desktop | 署名・notarization済みappと管理ルート初期化を含むpkg |
 | Ubuntu 26.04 x86_64（64bit）のみ | ローカルrootful Docker Engine | debと利用者指定の初期セットアップ。WebKitGTK等の必要依存を宣言 |
 
-Ubuntu 26.04のx86_64（64bit）のみという範囲と、3OSの配布形式はユーザー採用済み。Ubuntu ARM64はv1対象外とする。表のWindows／macOS最低版は引き続き検証案であり、今回の採用で具体値まで確定していない。各組合せの実機受入が必要であり、rootless／user namespace remap、他のDesktop代替基盤を検証なしで対応済みとしない。Docker導入は利用者の前提のままとする。各OSのビルド・実行依存は[Tauri前提条件](https://v2.tauri.app/start/prerequisites/)を基に配布検証する。
+Ubuntu 26.04のx86_64（64bit）のみという範囲と、3OSの配布形式はユーザー採用済み。Ubuntu ARM64はv1対象外とする。Windows最低版は引き続き検証案である。macOS最低版15は、Issue #6のmacOS 15 ARM64 CIとmacOS 26.6.1 ARM64実機の結果を根拠にユーザーが受け入れた。macOS 15上でDocker Desktopを実行したわけではなく、リリース前には追加確認する。各組合せの配布受入が必要であり、rootless／user namespace remap、他のDesktop代替基盤を検証なしで対応済みとしない。Docker導入は利用者の前提のままとする。各OSのビルド・実行依存は[Tauri前提条件](https://v2.tauri.app/start/prerequisites/)を基に配布検証する。
 
 採用済み方針として、v1は署名済みパッケージによる手動更新とし、管理ルートと残存データをアンインストールで自動消去しない。既存のApache-2.0ライセンスを維持し、同梱依存の配布条件と通知をリリース時に確認する。
 
@@ -446,7 +446,7 @@ Fake Adapterで障害位置を網羅し、Docker結合テストでは元デー�
 
 | 既存ID | 採用済み方針 | 残件 |
 | --- | --- | --- |
-| OPN-02 | Ubuntu 26.04のx86_64（64bit）のみ | Windows／macOS最低版の決定と3OS実機受入 |
+| OPN-02 | Ubuntu 26.04のx86_64（64bit）のみ。macOS 15以上はIssue #6で追加 | Windows最低版の決定と3OS実機受入 |
 | OPN-03 | 安定版の組合せを検証してlock。更新は互換性テスト経由、Docker自動更新なし | 具体的な全依存patchとDesktop同梱組合せのビルド・実機照合 |
 | OPN-04 | システム共通領域、管理OSユーザー1人、初期設定時のみ昇格、GUIは一般権限 | インストーラー・ACL・Image UID/GIDの組合せ検証 |
 | OPN-05 | SQLiteを秘密の正本とし、生成Composeに必要な値を複製。通常表示をマスキング | ファイル保護・ログ等への不要な複製抑止を検証 |

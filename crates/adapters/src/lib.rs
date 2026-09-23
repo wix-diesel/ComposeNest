@@ -8,6 +8,9 @@ use composenest_domain::clone_policy::{RandomError, RandomSource};
 #[cfg(windows)]
 pub mod windows_management_root;
 
+#[cfg(target_os = "macos")]
+pub mod macos_management_root;
+
 /// Reads the current time from the operating system.
 pub struct SystemClock;
 

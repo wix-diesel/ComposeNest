@@ -2,7 +2,7 @@
 
 作成日: 2026-09-21\
 更新日: 2026-09-22\
-状態: 採用済み。Schema 1はマニフェスト＋Version別完全定義。実装・実機検証は未完了\
+状態: 採用済み。Schema 1はマニフェスト＋Version別完全定義。構文・構造検証を実装済み。意味検証・実機検証は未完了\
 参照: [要件定義](requirements-v1.md)、[ドメインモデル](domain-model.md)、[Clone Policy仕様](clone-policy-spec.md)
 
 ## 1. 目的と設計方針
@@ -411,7 +411,9 @@ Schemaに適合したこと、作者の説明どおり動くこと、信頼で�
 | 6. 作成時検証 | RuntimeTarget、Image、platform、資源、生成Compose | インポート承認だけを起動許可とみなす |
 | 7. 起動後検証 | Ready、マウント、接続・永続化の期待 | 未検証の自作Templateを公式検証済みと表示 |
 
-任意のJSON Schema検証だけでは、参照の存在、Versionファイルの対応、同一型、secret-v1互換性、実際のDocker環境まで判定できない。機械検証用Schemaは本書の構造契約を実装する補助であり、意味検証が別途必要となる。本段階ではアプリ用パーサーや検証器の実装には進めない。
+任意のJSON Schema検証だけでは、参照の存在、Versionファイルの対応、同一型、secret-v1互換性、実際のDocker環境まで判定できない。機械検証用Schemaは本書の構造契約を実装する補助であり、意味検証が別途必要となる。
+
+構造検証用の機械可読Schemaは[マニフェスト](template-manifest-v1.schema.json)と[Version別完全定義](template-version-v1.schema.json)に分ける。YAML固有の禁止構文・重複キー・原文の位置と順序はRustパーサーで検査し、JSON Schemaだけを読込み判定には使わない。
 
 ### 11.1 YAMLの制限
 

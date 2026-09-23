@@ -115,3 +115,28 @@ fn enforces_file_and_depth_limits() {
             .contains("depth limit")
     );
 }
+
+#[test]
+fn command_requires_a_nonempty_executable() {
+    let source = "image: redis:8.2\nplatforms: [linux/amd64]\nservice:\n  healthcheck:\n    command: [\"\"]\n";
+    let error = parse_version("redis", "8.2", "versions/8.2.yaml", source.as_bytes()).unwrap_err();
+    assert_eq!(error.path.as_ref(), "$.service.healthcheck.command[0]");
+}
+
+#[test]
+fn connection_inputs_must_be_unique() {
+    let source = VERSION.replace("inputs: [password]", "inputs: [password, password]");
+    let error = parse_version("redis", "8.2", "versions/8.2.yaml", source.as_bytes()).unwrap_err();
+    assert_eq!(error.path.as_ref(), "$.connections.redis.inputs[1]");
+}
+
+#[test]
+fn reports_the_failing_field_and_one_based_line() {
+    let source = "image: redis:8.2\nplatforms: [linux/amd64]\nservice:\n  healthcheck:\n    command: [echo, { input: password, onMissing: omit }]\n";
+    let error = parse_version("redis", "8.2", "versions/8.2.yaml", source.as_bytes()).unwrap_err();
+    assert_eq!(
+        error.path.as_ref(),
+        "$.service.healthcheck.command[1].onMissing"
+    );
+    assert_eq!(error.position.unwrap().line, 5);
+}

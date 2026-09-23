@@ -115,7 +115,7 @@ pub(super) fn validate_input(
             _ => &[][..],
         };
         object(value, &format!("{path}.validation"), context, &[], allowed)?;
-        for (key, item) in map(value, path, context)? {
+        for (key, item) in map(value, &format!("{path}.validation"), context)? {
             if key == "pattern" {
                 let pattern = string(item, &format!("{path}.validation.{key}"), context)?;
                 if pattern.chars().count() > 256 {
@@ -271,7 +271,7 @@ fn validate_command(node: &Node, path: &str, context: &Context<'_>) -> Result<()
     for (index, item) in items.iter().enumerate() {
         validate_value(item, &format!("{path}[{index}]"), context)?;
     }
-    string(&items[0], &format!("{path}[0]"), context)?;
+    string_length(&items[0], &format!("{path}[0]"), context, 1, 16 * 1024)?;
     Ok(())
 }
 
@@ -285,7 +285,7 @@ fn validate_value(node: &Node, path: &str, context: &Context<'_>) -> Result<(), 
                 if !path.contains(".environment.") {
                     return Err(context.error(
                         Some(value.position),
-                        path,
+                        &format!("{path}.onMissing"),
                         "onMissing is only allowed in environment",
                     ));
                 }
@@ -361,11 +361,20 @@ pub(super) fn validate_connection(
     )?;
     string(field(node, "port"), &format!("{path}.port"), context)?;
     if let Some(value) = optional(node, "inputs") {
+        let mut seen = std::collections::HashSet::new();
         for (index, item) in sequence(value, &format!("{path}.inputs"), context)?
             .iter()
             .enumerate()
         {
-            string(item, &format!("{path}.inputs[{index}]"), context)?;
+            let item_path = format!("{path}.inputs[{index}]");
+            let key = string(item, &item_path, context)?;
+            if !seen.insert(key) {
+                return Err(context.error(
+                    Some(item.position),
+                    &item_path,
+                    "duplicate connection input",
+                ));
+            }
         }
     }
     Ok(())

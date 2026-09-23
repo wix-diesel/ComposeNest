@@ -14,6 +14,7 @@ pub struct Position {
 
 impl From<Marker> for Position {
     fn from(marker: Marker) -> Self {
+        // yaml-rust2 starts lines at 1 and columns at 0.
         Self {
             line: marker.line(),
             column: marker.col() + 1,

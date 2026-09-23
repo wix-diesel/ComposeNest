@@ -4,7 +4,7 @@ use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use rusqlite::{Connection, OpenFlags, TransactionBehavior};
@@ -42,7 +42,8 @@ pub enum DatabaseError {
 
 /// Serializes SQLite writes on one thread while holding the management-root lock.
 pub struct DatabaseWorker {
-    sender: Sender<Job>,
+    sender: Option<Sender<Job>>,
+    thread: Option<JoinHandle<()>>,
     database_path: PathBuf,
 }
 
@@ -52,7 +53,7 @@ impl DatabaseWorker {
         let root = management_root.to_path_buf();
         let (sender, receiver) = mpsc::channel::<Job>();
         let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
-        thread::Builder::new()
+        let thread = thread::Builder::new()
             .name("composenest-db".into())
             .spawn(move || match open_database(&root) {
                 Ok((path, mut connection, _lock)) => {
@@ -70,7 +71,8 @@ impl DatabaseWorker {
             .recv()
             .map_err(|_| DatabaseError::WorkerStopped)??;
         Ok(Self {
-            sender,
+            sender: Some(sender),
+            thread: Some(thread),
             database_path,
         })
     }
@@ -84,6 +86,8 @@ impl DatabaseWorker {
     {
         let (sender, receiver) = mpsc::sync_channel(1);
         self.sender
+            .as_ref()
+            .ok_or(DatabaseError::WorkerStopped)?
             .send(Box::new(move |connection| {
                 let _ = sender.send(operation(connection));
             }))
@@ -104,6 +108,15 @@ impl DatabaseWorker {
         let result = operation(&transaction)?;
         transaction.commit()?;
         Ok(result)
+    }
+}
+
+impl Drop for DatabaseWorker {
+    fn drop(&mut self) {
+        self.sender.take();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 

@@ -19,6 +19,17 @@ env:
   NODE_VERSION: 24.19.0
 
 jobs:
+  windows-root-permissions:
+    name: Windows management root permissions
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - name: Test Windows host adapter
+        run: cargo test -p composenest-adapters
+      - name: Test management root ACL
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\windows\Test-ManagementRoot.ps1
+
   linux-root-permissions:
     name: Linux management root permissions
     runs-on: ubuntu-24.04

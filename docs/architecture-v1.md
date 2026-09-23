@@ -401,7 +401,7 @@ Rustの実装候補はTokio（非同期プロセス）、rusqlite（専用DB wor
 | macOS ARM64 | macOS 15以上、Docker Desktop | 署名・notarization済みappと管理ルート初期化を含むpkg |
 | Ubuntu 26.04 x86_64（64bit）のみ | ローカルrootful Docker Engine | debと利用者指定の初期セットアップ。WebKitGTK等の必要依存を宣言 |
 
-Ubuntu 26.04のx86_64（64bit）のみという範囲と、3OSの配布形式はユーザー採用済み。Ubuntu ARM64はv1対象外とする。Windows最低版は引き続き検証案である。macOS最低版はIssue #6で15に更新したが、Docker Desktopを含む実機受入は未完了。各組合せの実機受入が必要であり、rootless／user namespace remap、他のDesktop代替基盤を検証なしで対応済みとしない。Docker導入は利用者の前提のままとする。各OSのビルド・実行依存は[Tauri前提条件](https://v2.tauri.app/start/prerequisites/)を基に配布検証する。
+Ubuntu 26.04のx86_64（64bit）のみという範囲と、3OSの配布形式はユーザー採用済み。Ubuntu ARM64はv1対象外とする。Windows最低版は引き続き検証案である。macOS最低版15は、Issue #6のmacOS 15 ARM64 CIとmacOS 26.6.1 ARM64実機の結果を根拠にユーザーが受け入れた。macOS 15上でDocker Desktopを実行したわけではなく、リリース前には追加確認する。各組合せの配布受入が必要であり、rootless／user namespace remap、他のDesktop代替基盤を検証なしで対応済みとしない。Docker導入は利用者の前提のままとする。各OSのビルド・実行依存は[Tauri前提条件](https://v2.tauri.app/start/prerequisites/)を基に配布検証する。
 
 採用済み方針として、v1は署名済みパッケージによる手動更新とし、管理ルートと残存データをアンインストールで自動消去しない。既存のApache-2.0ライセンスを維持し、同梱依存の配布条件と通知をリリース時に確認する。
 

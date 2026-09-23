@@ -47,7 +47,7 @@ v1はデスクトップアプリからローカルDockerを管理する。v2は�
 | OS | 配布CPU | v1の範囲 | 未決事項 |
 | --- | --- | --- | --- |
 | Windows | x86_64 | 64bit OSのみ。ARM版・32bit版は対象外 | OS最低版・Docker提供形態 |
-| macOS | ARM64（Apple Silicon） | macOS 15以上。Intel版・Universal版は必須にしない | Docker Desktopを含む最低版実機受入 |
+| macOS | ARM64（Apple Silicon） | macOS 15以上。Intel版・Universal版は必須にしない | macOS 15実機での追加検証はリリース前の確認事項 |
 | Linux | x86_64（64bit）のみ | Ubuntu 26.04のみ。他ディストリビューション・他版・ARM64は対象外。debで配布 | 配布・実機検証 |
 
 Windowsは従来のx86系限定と64bit OS限定を合わせ、x86_64として確定する。Ubuntuはユーザー指定の26.04・64bitに加え、推奨方針の採用によりx86_64のみとする。Windows最低版は引き続き未決。macOS最低版はIssue #6で15とし、Docker Desktopの現行版が現行macOSと直前2世代をサポートする方針を基準とする。対応するDocker実行基盤とアプリの配布CPUの組合せは別途検証し、方針の確定を検証完了とみなさない。
@@ -370,7 +370,7 @@ AC-05・06・09・10・13は両Templateと両保存方式を組み合わせて�
 
 ## 13. 決定事項と実装・検証の残件
 
-2026-09-21にOPN-02のUbuntu x86_64限定と、OPN-03〜12の推奨方針をユーザーが採用した。方針の決定と、実装・実機検証の完了は区別する。当時はWindows／macOS最低版が未決だったが、macOSはIssue #6で15を下限とした。Windows最低版とmacOS 15でのDocker Desktopを含む実機受入は残る。
+2026-09-21にOPN-02のUbuntu x86_64限定と、OPN-03〜12の推奨方針をユーザーが採用した。方針の決定と、実装・実機検証の完了は区別する。当時はWindows／macOS最低版が未決だったが、macOSはIssue #6で15を下限とし、macOS 15 ARM64 CIとmacOS 26.6.1 ARM64実機の結果を根拠にユーザーが受け入れた。macOS 15実機でDocker Desktopを動かした結果とは区別し、リリース前の追加検証事項とする。Windows最低版と3OSの配布受入は残る。
 
 | ID | 項目 | 採用済み方針 | 残件・実施時期 |
 | --- | --- | --- | --- |

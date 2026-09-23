@@ -44,7 +44,7 @@ sudo bash scripts/macos/test-initialize-management-root.sh
 
 | 項目 | 手順・期待結果 | 結果 |
 | --- | --- | --- |
-| 環境 | `sw_vers`, `uname -m`, `docker version`, `docker compose version`, `id`を記録 | macOS 26.6.1 の環境記録は後述。最低版 macOS 15 と Docker Desktop の実機照合は未実施 |
+| 環境 | `sw_vers`, `uname -m`, `docker version`, `docker compose version`, `id`を記録 | macOS 26.6.1 の環境記録は後述。macOS 15実機でのDocker Desktop実行は未実施 |
 | Host Adapter | `cargo test -p composenest-adapters`で `/Library/Application Support/ComposeNest` を解決するテストを実行 | macOS 26.6.1 ARM64 と macOS 15 ARM64 CI で成功 |
 | GUI と一般権限 | 初期化後、通常利用者で `cargo run -p composenest-desktop`を起動し、画面表示・`get_bootstrap`成功・プロセス UID を確認 | 通常利用者 UID 501 でプロセス起動を確認。管理ルートを使う GUI 操作と画面表示・IPC 成功は未確認 |
 | 管理ルート | 上記初期化後、通常利用者が `state` へ書込み、別ユーザーが読めないことを確認 | 実際の管理ルートを UID/GID 501:20、0700、ACL なしで初期化。通常利用者による `state` の 0600 ファイル書込みに成功。別ユーザーの読取り拒否は CI の一時パスで確認 |
@@ -54,7 +54,7 @@ sudo bash scripts/macos/test-initialize-management-root.sh
 
 bind 先の所有者が Image の UID/GID に変わりアクセス不能になった場合、全員書込みへ緩めたり既存データを自動 `chown` したりしない。管理ルートと所有証拠の保護を維持し、操作を停止して新規作成時の named volume を案内する。Docker Desktop の管理権限を持つ利用者からの秘匿を 0600 だけで保証するものではない。
 
-macOS CI の成功は Docker Desktop を含む実機受入の代替ではない。実機で確認したら、macOS、Docker Desktop、Engine、Compose、利用者 UID/GID、実際の観測結果をこの表または PR に追記する。
+2026-09-23、macOS 15 ARM64 CIとこのPCのmacOS 26.6.1 ARM64実機での管理ルート・Docker bind結果を根拠に、ユーザーはv1の最低版 macOS 15 を受け入れた。これはmacOS 15実機でDocker Desktopが動いたとの主張ではない。リリース前にmacOS 15実機を利用できる場合は、Docker Desktop、GUI、bindの追加確認を行い、macOS、Docker Desktop、Engine、Compose、利用者 UID/GID、観測結果を追記する。
 
 ## 2026-09-23 ローカル PC での確認
 

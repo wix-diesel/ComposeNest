@@ -22,15 +22,24 @@ check_directory() {
     echo "Refusing existing directory with different owner or mode: $path" >&2
     return 1
   fi
+  local acl_listing
+  acl_listing=$(ls -lde "$path") || return 1
+  if [[ $acl_listing == *$'\n'* ]]; then
+    echo "Refusing directory with ACL entries: $path" >&2
+    return 1
+  fi
 }
 
 create_directory() {
   local path=$1 username=$2 group=$3 uid=$4 gid=$5
   if [[ -e $path || -L $path ]]; then
     check_directory "$path" "$uid" "$gid"
+  elif [[ $(id -u) == "$uid" ]]; then
+    install -d -m 0700 "$path"
   else
     install -d -m 0700 -o "$username" -g "$group" "$path"
   fi
+  check_directory "$path" "$uid" "$gid"
 }
 
 initialize_root() {

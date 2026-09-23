@@ -1,6 +1,7 @@
 # 開発基盤
 
 Ubuntuの管理ルート初期化と実機検証は[Ubuntu 26.04 権限・実機検証](ubuntu-validation.md)を参照。
+Windowsの管理ルート初期化と実機検証は[Windows 管理ルート・権限検証](windows-validation.md)を参照。
 
 ## 採用版
 

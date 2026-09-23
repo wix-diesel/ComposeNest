@@ -20,25 +20,24 @@ fn get_bootstrap(
     ResponseEnvelope::success(request.request_id, state.inner().clone().into())
 }
 
-fn management_root() -> PathBuf {
+fn management_root() -> std::io::Result<PathBuf> {
     #[cfg(target_os = "windows")]
     {
-        PathBuf::from(std::env::var_os("PROGRAMDATA").unwrap_or_else(|| r"C:\ProgramData".into()))
-            .join("ComposeNest")
+        composenest_adapters::windows_management_root::management_root()
     }
     #[cfg(target_os = "macos")]
     {
-        PathBuf::from("/Library/Application Support/ComposeNest")
+        Ok(PathBuf::from("/Library/Application Support/ComposeNest"))
     }
     #[cfg(target_os = "linux")]
     {
-        PathBuf::from("/var/lib/composenest")
+        Ok(PathBuf::from("/var/lib/composenest"))
     }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bootstrap = BootstrapService::new(SystemClock).bootstrap();
-    let database = DatabaseWorker::start(&management_root())?;
+    let database = DatabaseWorker::start(&management_root()?)?;
 
     tauri::Builder::default()
         .manage(bootstrap)

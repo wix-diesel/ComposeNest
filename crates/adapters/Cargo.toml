@@ -10,6 +10,7 @@ composenest-application = { path = "../application" }
 composenest-domain = { path = "../domain" }
 getrandom = "0.3"
 rusqlite = { version = "0.40.2", features = ["backup", "bundled"] }
+serde_json = "1.0"
 sha2 = "0.10"
 thiserror = "2"
 

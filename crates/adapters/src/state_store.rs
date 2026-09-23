@@ -6,6 +6,7 @@ use composenest_application::state_store::{
 };
 use composenest_domain::identity::DisplayName;
 use rusqlite::{Connection, Error, ErrorCode, TransactionBehavior, params};
+use serde_json::Value as JsonValue;
 use sha2::{Digest, Sha256};
 
 use crate::sqlite::{DatabaseError, DatabaseWorker};
@@ -44,6 +45,22 @@ fn valid_files(files: &[TemplateFile]) -> bool {
                 && !path.contains("..")
                 && !path.contains('\\')
                 && !path.contains('\0')
+        })
+}
+
+fn valid_canonical_versions(canonical_json: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<JsonValue>(canonical_json) else {
+        return false;
+    };
+    let Some(versions) = value.get("versions").and_then(JsonValue::as_array) else {
+        return false;
+    };
+    !versions.is_empty()
+        && versions.iter().all(|version| {
+            version
+                .get("key")
+                .and_then(JsonValue::as_str)
+                .is_some_and(|key| !key.is_empty())
         })
 }
 
@@ -208,6 +225,8 @@ impl StateStore for DatabaseWorker {
 
     fn register_template(&self, revision: &TemplateRevision) -> Result<(), StoreConflict> {
         if !valid_files(&revision.files)
+            || revision.normalization != "template-normalization-v1"
+            || !valid_canonical_versions(&revision.canonical_json)
             || revision.semantic_hash
                 != format!("{:x}", Sha256::digest(revision.canonical_json.as_bytes()))
         {
@@ -486,6 +505,29 @@ mod tests {
             .unwrap();
         assert_eq!(count(&worker, "template_snapshot_files"), 2);
         assert_eq!(count(&worker, "template_snapshots"), 1);
+    }
+
+    #[test]
+    fn unsupported_canonical_shape_is_rejected_before_registration() {
+        let (_root, worker) = store();
+        let mut unsupported = revision();
+        unsupported.canonical_json = r#"{"versions":{"8":{"definition":"complete"}}}"#.into();
+        unsupported.semantic_hash = format!(
+            "{:x}",
+            Sha256::digest(unsupported.canonical_json.as_bytes())
+        );
+        assert_eq!(
+            worker.register_template(&unsupported),
+            Err(StoreConflict::InvalidInput)
+        );
+
+        let mut unsupported = revision();
+        unsupported.normalization = "template-normalization-v2".into();
+        assert_eq!(
+            worker.register_template(&unsupported),
+            Err(StoreConflict::InvalidInput)
+        );
+        assert_eq!(count(&worker, "template_revisions"), 0);
     }
 
     #[test]

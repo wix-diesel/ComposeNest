@@ -65,6 +65,7 @@ impl OperationJournal for DatabaseWorker {
             || intent.phase.is_empty()
             || receipt.scope_id.is_empty()
             || receipt.request_id.is_empty()
+            || receipt.plan_id.as_deref() == Some("")
             || receipt.request_hash.len() != 64
             || !receipt
                 .request_hash

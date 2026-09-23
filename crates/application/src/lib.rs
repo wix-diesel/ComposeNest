@@ -3,6 +3,8 @@
 use composenest_domain::application_title;
 use serde::{Deserialize, Serialize};
 
+pub mod state_store;
+
 /// The first version of the desktop IPC contract.
 pub const API_VERSION: u16 = 1;
 

@@ -9,7 +9,10 @@ use std::time::Duration;
 
 use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 
-const MIGRATIONS: &[&str] = &[include_str!("../../../migrations/0001_initial.sql")];
+const MIGRATIONS: &[&str] = &[
+    include_str!("../../../migrations/0001_initial.sql"),
+    include_str!("../../../migrations/0002_state_store.sql"),
+];
 const DATABASE_FILE: &str = "composenest.sqlite";
 
 type Job = Box<dyn FnOnce(&mut Connection) + Send>;
@@ -318,7 +321,7 @@ mod tests {
                 Ok((foreign_keys, journal_mode, synchronous, version))
             })
             .unwrap();
-        assert_eq!(settings, (1, "wal".into(), 2, 1));
+        assert_eq!(settings, (1, "wal".into(), 2, 2));
         assert!(matches!(
             DatabaseWorker::start(root.path()),
             Err(DatabaseError::AlreadyRunning)
@@ -333,7 +336,7 @@ mod tests {
                     )?)
                 })
                 .unwrap(),
-            1
+            2
         );
     }
 

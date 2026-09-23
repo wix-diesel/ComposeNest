@@ -95,6 +95,7 @@ impl DatabaseWorker {
     {
         let mut connection =
             Connection::open_with_flags(&self.database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        connection.busy_timeout(Duration::from_secs(5))?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         let transaction = connection.transaction()?;
         let result = operation(&transaction)?;

@@ -47,9 +47,9 @@ sudo bash scripts/macos/test-initialize-management-root.sh
 | 環境 | `sw_vers`, `uname -m`, `docker version`, `docker compose version`, `id`を記録 | macOS 26.6.1 の環境記録は後述。最低版候補 macOS 14 と Docker Desktop の実機照合は未実施 |
 | Host Adapter | `cargo test -p composenest-adapters`で `/Library/Application Support/ComposeNest` を解決するテストを実行 | macOS 26.6.1 ARM64 で成功。macOS 14 CI でも確認する |
 | GUI と一般権限 | 初期化後、通常利用者で `cargo run -p composenest-desktop`を起動し、画面表示・`get_bootstrap`成功・プロセス UID を確認 | 通常利用者 UID 501 でプロセス起動を確認。管理ルートを使う GUI 操作と画面表示・IPC 成功は未確認 |
-| 管理ルート | 上記初期化後、通常利用者が `state` へ書込み、別ユーザーが読めないことを確認 | 一時パスの非昇格テストは成功。実際の管理ルートは管理者認証待ち |
-| Image UID/GID | 専用の bind 子領域で UID/GID を変更する Image を起動し、親 `data`、`state`、`ownership` の保護が維持されることを確認 | 一時パスの所有者変更は macOS CI で確認する。Docker Desktop の管理ルート配下では未実施 |
-| 日本語・空白パスと bind | 日本語・空白を含む管理ルート配下の一時 bind パスへコンテナから書込み、ホストで内容を確認 | ユーザー所有の一時パスで成功。管理ルート配下は初期化後に確認する |
+| 管理ルート | 上記初期化後、通常利用者が `state` へ書込み、別ユーザーが読めないことを確認 | 実際の管理ルートを UID/GID 501:20、0700、ACL なしで初期化。通常利用者による `state` の 0600 ファイル書込みに成功。別ユーザーの読取り拒否は CI の一時パスで確認 |
+| Image UID/GID | 専用の bind 子領域で UID/GID を変更する Image を起動し、親 `data`、`state`、`ownership` の保護が維持されることを確認 | 一時共有中、コンテナ UID/GID 12345:12345 の書込みに成功。コンテナ内 `chown` 後もホスト子領域は 501:20 で、親 `data`・`state`・`ownership` は 501:20、0700 を維持 |
+| 日本語・空白パスと bind | 日本語・空白を含む管理ルート配下の一時 bind パスへコンテナから書込み、ホストで内容を確認 | 初期設定では `bind source path does not exist`。Docker Desktop に `…/ComposeNest/data` だけを一時共有すると成功。検証後は共有を削除して元の設定へ戻した |
 | CLI 子プロセス終了 | Docker CLI の終了後、コンテナ状態を再照合する | 検証用 CLI は SIGTERM 後も残り、SIGKILL 後に終了。コンテナは稼働を継続し、確認後に削除した。Adapter は未実装 |
 
 bind 先の所有者が Image の UID/GID に変わりアクセス不能になった場合、全員書込みへ緩めたり既存データを自動 `chown` したりしない。管理ルートと所有証拠の保護を維持し、操作を停止して新規作成時の named volume を案内する。Docker Desktop の管理権限を持つ利用者からの秘匿を 0600 だけで保証するものではない。
@@ -62,7 +62,10 @@ Apple Silicon の macOS 26.6.1（build 25G76）、利用者 `wixdiesel`（UID/GI
 
 - `pnpm --dir apps/desktop install --frozen-lockfile`、`pnpm --dir apps/desktop run check:contracts`、`pnpm --dir apps/desktop run build`：成功。
 - `cargo fmt --all -- --check`、`cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`：成功。Host Adapter の `/Library/Application Support/ComposeNest` 解決テストを含む。
-- `bash -n scripts/macos/initialize-management-root.sh scripts/macos/test-initialize-management-root.sh` と、非昇格の `bash scripts/macos/test-initialize-management-root.sh`：成功。管理者認証が必要な所有者変更試験と実際の管理ルート初期化は保留。PR の macOS CI で所有者変更試験を実行する。
+- `bash -n scripts/macos/initialize-management-root.sh scripts/macos/test-initialize-management-root.sh` と、非昇格の `bash scripts/macos/test-initialize-management-root.sh`：成功。PR の macOS CI でも昇格した所有者変更試験を含めて成功。
+- 初期化スクリプトを管理者認証で実行し、実際の管理ルートと管理ディレクトリが UID/GID 501:20、0700、ACL なしであることを確認した。通常利用者から `state` に 0600 の検証ファイルを作成・読込み後、削除した。
 - `cargo run -p composenest-desktop`：通常利用者 UID 501 のプロセス起動を確認して終了した。画面表示と IPC の目視確認は未実施。
 - Docker Desktop 4.86.0、Docker CLI／Engine 29.7.2、Compose v5.3.1、Linux VM は ARM64。既存のローカル `postgres:17-alpine` Image から、日本語・空白を含む一時 bind パスへ書き込み、ホストで内容を確認した。
+- 同じ Image から管理ルートの `data/日本語 path` への bind は、当初 Docker daemon が `bind source path does not exist` と応答した。Docker Desktop の File sharing に `…/ComposeNest/data` だけを一時追加して Engine を再起動すると、bind 書込みとホスト側の読取りが成功した。コンテナ UID/GID 12345:12345 からの書込みも成功し、ホスト側の所有者は 501:20 のままだった。コンテナ内で `chown 12345:12345` しても同様で、親 `data`、`state`、`ownership` は 501:20、0700 を維持した。
+- 検証用ファイル・ディレクトリを削除し、追加した共有を削除して Engine を再起動した。共有一覧が元の 5 件だけであることと、既存の稼働コンテナが `healthy` に戻ったことを確認した。現設定では管理ルート配下の bind は利用できない。v1 の導入案内と診断では、この共有前提を扱う必要がある。
 - 同じ Image の検証用コンテナで、ホスト側 `docker run` の CLI へ SIGTERM を送ったが終了しなかった。SIGKILL で CLI が終了した後もコンテナは稼働を継続した。状態確認後、検証用コンテナを削除した。今後の Docker CLI Adapter は終了後に Engine を再照合する必要がある。

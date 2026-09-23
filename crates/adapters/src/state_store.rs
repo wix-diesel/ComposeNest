@@ -16,7 +16,7 @@ fn method_name(method: StorageMethod) -> &'static str {
     }
 }
 
-fn map_error(error: DatabaseError) -> StoreConflict {
+pub(crate) fn map_error(error: DatabaseError) -> StoreConflict {
     match error {
         DatabaseError::Sqlite(Error::SqliteFailure(code, _)) => match code.extended_code {
             rusqlite::ffi::SQLITE_CONSTRAINT_FOREIGNKEY => StoreConflict::Missing,

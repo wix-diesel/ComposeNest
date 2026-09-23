@@ -12,6 +12,7 @@ use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 const MIGRATIONS: &[&str] = &[
     include_str!("../../../migrations/0001_initial.sql"),
     include_str!("../../../migrations/0002_state_store.sql"),
+    include_str!("../../../migrations/0003_operation_journal.sql"),
 ];
 const DATABASE_FILE: &str = "composenest.sqlite";
 
@@ -334,7 +335,7 @@ mod tests {
                 Ok((foreign_keys, journal_mode, synchronous, version))
             })
             .unwrap();
-        assert_eq!(settings, (1, "wal".into(), 2, 2));
+        assert_eq!(settings, (1, "wal".into(), 2, 3));
         assert!(matches!(
             DatabaseWorker::start(root.path()),
             Err(DatabaseError::AlreadyRunning)
@@ -349,7 +350,7 @@ mod tests {
                     )?)
                 })
                 .unwrap(),
-            2
+            3
         );
     }
 

@@ -3,6 +3,7 @@
 use composenest_domain::application_title;
 use serde::{Deserialize, Serialize};
 
+pub mod operation_journal;
 pub mod state_store;
 
 /// The first version of the desktop IPC contract.

@@ -1,8 +1,8 @@
 CREATE TABLE operations (
     id TEXT PRIMARY KEY,
     instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE RESTRICT,
-    kind TEXT NOT NULL CHECK (kind IN ('create', 'clone', 'start', 'stop', 'restart', 'edit_port', 'delete', 'recover')),
-    status TEXT NOT NULL DEFAULT 'Pending' CHECK (status IN ('Pending', 'Running', 'Failed', 'AwaitingDecision', 'OutcomeUnknown', 'Succeeded', 'Abandoned')),
+    kind TEXT NOT NULL CHECK (kind IN ('create', 'clone', 'start', 'stop', 'restart', 'rename', 'edit_port', 'delete', 'recover')),
+    status TEXT NOT NULL DEFAULT 'Accepted' CHECK (status IN ('Accepted', 'Executing', 'Failed', 'AwaitingDecision', 'OutcomeUnknown', 'Succeeded', 'Abandoned')),
     phase TEXT NOT NULL,
     attempt INTEGER NOT NULL DEFAULT 1 CHECK (attempt > 0),
     expected_instance_revision INTEGER NOT NULL CHECK (expected_instance_revision > 0),

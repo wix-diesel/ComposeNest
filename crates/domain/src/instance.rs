@@ -271,6 +271,8 @@ pub enum OperationKind {
     Rename,
     EditPort,
     Delete,
+    /// Restores managed state after a confirmed reconciliation decision.
+    Recover,
 }
 
 /// Progress of one change intent, independent of current runtime state.

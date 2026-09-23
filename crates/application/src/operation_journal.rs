@@ -1,6 +1,7 @@
 //! Persistence boundary for operation intent, progress, and idempotent requests.
 
 use crate::state_store::StoreConflict;
+pub use composenest_domain::instance::{OperationKind, OperationStatus};
 
 /// An operation that has been durably accepted for an instance.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,67 +20,6 @@ pub struct OperationIntent {
     pub old_spec_revision: Option<u64>,
     /// Intended configuration revision, if applicable.
     pub new_spec_revision: Option<u64>,
-}
-
-/// Supported external operation intentions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OperationKind {
-    Create,
-    Clone,
-    Start,
-    Stop,
-    Restart,
-    EditPort,
-    Delete,
-    Recover,
-}
-
-impl OperationKind {
-    /// Returns the stable database representation.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Create => "create",
-            Self::Clone => "clone",
-            Self::Start => "start",
-            Self::Stop => "stop",
-            Self::Restart => "restart",
-            Self::EditPort => "edit_port",
-            Self::Delete => "delete",
-            Self::Recover => "recover",
-        }
-    }
-}
-
-/// Status retained until success or explicit abandonment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OperationStatus {
-    Pending,
-    Running,
-    Failed,
-    AwaitingDecision,
-    OutcomeUnknown,
-    Succeeded,
-    Abandoned,
-}
-
-impl OperationStatus {
-    /// Returns the stable database representation.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Pending => "Pending",
-            Self::Running => "Running",
-            Self::Failed => "Failed",
-            Self::AwaitingDecision => "AwaitingDecision",
-            Self::OutcomeUnknown => "OutcomeUnknown",
-            Self::Succeeded => "Succeeded",
-            Self::Abandoned => "Abandoned",
-        }
-    }
-
-    /// Whether a new operation may replace this one.
-    pub fn is_resolved(self) -> bool {
-        matches!(self, Self::Succeeded | Self::Abandoned)
-    }
 }
 
 /// Identity and result of a confirmed request or plan.

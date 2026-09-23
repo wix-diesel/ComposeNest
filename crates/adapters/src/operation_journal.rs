@@ -1,21 +1,38 @@
 //! SQLite operation journal and durable request receipts.
 
 use composenest_application::operation_journal::{
-    OperationIntent, OperationJournal, OperationStatus, RequestReceipt, StepIntent, StepOutcome,
+    OperationIntent, OperationJournal, OperationKind, OperationStatus, RequestReceipt, StepIntent,
+    StepOutcome,
 };
 use composenest_application::state_store::StoreConflict;
-use rusqlite::{Connection, Error, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
-use crate::sqlite::{DatabaseError, DatabaseWorker};
+use crate::sqlite::DatabaseWorker;
+use crate::state_store::map_error;
 
-fn conflict(error: DatabaseError) -> StoreConflict {
-    match error {
-        DatabaseError::Sqlite(Error::SqliteFailure(code, _))
-            if code.code == rusqlite::ErrorCode::ConstraintViolation =>
-        {
-            StoreConflict::Duplicate
-        }
-        _ => StoreConflict::Backend,
+fn kind_name(kind: OperationKind) -> &'static str {
+    match kind {
+        OperationKind::Create => "create",
+        OperationKind::Clone => "clone",
+        OperationKind::Start => "start",
+        OperationKind::Stop => "stop",
+        OperationKind::Restart => "restart",
+        OperationKind::Rename => "rename",
+        OperationKind::EditPort => "edit_port",
+        OperationKind::Delete => "delete",
+        OperationKind::Recover => "recover",
+    }
+}
+
+fn status_name(status: OperationStatus) -> &'static str {
+    match status {
+        OperationStatus::Accepted => "Accepted",
+        OperationStatus::Executing => "Executing",
+        OperationStatus::Failed => "Failed",
+        OperationStatus::AwaitingDecision => "AwaitingDecision",
+        OperationStatus::OutcomeUnknown => "OutcomeUnknown",
+        OperationStatus::Succeeded => "Succeeded",
+        OperationStatus::Abandoned => "Abandoned",
     }
 }
 
@@ -116,7 +133,7 @@ impl OperationJournal for DatabaseWorker {
             transaction.execute(
                 "INSERT INTO operations (id, instance_id, kind, phase, expected_instance_revision, old_spec_revision, new_spec_revision)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![intent.id, intent.instance_id, intent.kind.as_str(), intent.phase, expected, old, new],
+                params![intent.id, intent.instance_id, kind_name(intent.kind), intent.phase, expected, old, new],
             )?;
             transaction.execute(
                 "INSERT INTO request_receipts (scope_id, request_id, plan_id, confirmed_revision, request_hash, instance_id, operation_id)
@@ -127,7 +144,7 @@ impl OperationJournal for DatabaseWorker {
             transaction.commit()?;
             Ok(Ok(receipt))
         })
-        .map_err(conflict)?
+        .map_err(map_error)?
     }
 
     fn receipt(
@@ -136,7 +153,7 @@ impl OperationJournal for DatabaseWorker {
         request_id: &str,
     ) -> Result<Option<RequestReceipt>, StoreConflict> {
         self.read(|db| Ok(find_receipt(db, scope_id, request_id, None)?))
-            .map_err(conflict)
+            .map_err(map_error)
     }
 
     fn plan_receipt(
@@ -154,7 +171,7 @@ impl OperationJournal for DatabaseWorker {
                 )
                 .optional()?)
         })
-        .map_err(conflict)
+        .map_err(map_error)
     }
 
     fn record_step(&self, step: &StepIntent) -> Result<(), StoreConflict> {
@@ -174,7 +191,7 @@ impl OperationJournal for DatabaseWorker {
             )?;
             Ok(count)
         })
-        .map_err(conflict)
+        .map_err(map_error)
         .and_then(|count| if count == 1 { Ok(()) } else { Err(StoreConflict::Missing) })
     }
 
@@ -194,7 +211,7 @@ impl OperationJournal for DatabaseWorker {
             )?;
             Ok(count)
         })
-        .map_err(conflict)
+        .map_err(map_error)
         .and_then(|count| {
             if count == 1 {
                 Ok(())
@@ -211,7 +228,7 @@ impl OperationJournal for DatabaseWorker {
         let (operation_id, phase) = (operation_id.to_owned(), phase.to_owned());
         self.write(move |db| {
             let mut statement = db.prepare(
-                "UPDATE operations SET attempt = attempt + 1, status = 'Running', phase = ?2
+                "UPDATE operations SET attempt = attempt + 1, status = 'Executing', phase = ?2
                  WHERE id = ?1 AND status IN ('Failed', 'AwaitingDecision', 'OutcomeUnknown')
                  RETURNING attempt",
             )?;
@@ -219,7 +236,7 @@ impl OperationJournal for DatabaseWorker {
                 .query_row(params![operation_id, phase], |row| row.get::<_, i64>(0))
                 .optional()?)
         })
-        .map_err(conflict)?
+        .map_err(map_error)?
         .map(|attempt| attempt as u64)
         .ok_or(StoreConflict::InvalidLifecycle)
     }
@@ -241,11 +258,16 @@ impl OperationJournal for DatabaseWorker {
                  WHERE id = ?1 AND status NOT IN ('Succeeded', 'Abandoned')
                    AND (?2 != 'Succeeded' OR NOT EXISTS (
                        SELECT 1 FROM operation_steps WHERE operation_id = ?1 AND outcome IS NULL))",
-                params![operation_id, status.as_str(), phase, status.is_resolved()],
+                params![
+                    operation_id,
+                    status_name(status),
+                    phase,
+                    !status.is_unresolved()
+                ],
             )?;
             Ok(count)
         })
-        .map_err(conflict)
+        .map_err(map_error)
         .and_then(|count| {
             if count == 1 {
                 Ok(())
@@ -259,7 +281,7 @@ impl OperationJournal for DatabaseWorker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use composenest_application::operation_journal::{ExpectedResult, OperationKind, StepCommand};
+    use composenest_application::operation_journal::{ExpectedResult, StepCommand};
     use std::fs;
     use tempfile::TempDir;
 
@@ -411,5 +433,74 @@ mod tests {
             worker.accept(&intent("second"), &same_plan),
             Err(StoreConflict::Duplicate)
         );
+    }
+
+    #[test]
+    fn missing_spec_is_not_reported_as_duplicate() {
+        let (_root, worker) = store();
+        let mut operation = intent("missing-spec");
+        operation.old_spec_revision = Some(99);
+        assert_eq!(
+            worker.accept(&operation, &receipt("missing-spec")),
+            Err(StoreConflict::Missing)
+        );
+        assert_eq!(worker.receipt("scope", "missing-spec"), Ok(None));
+        assert_eq!(
+            worker.accept(&intent("valid"), &receipt("valid")),
+            Ok(receipt("valid"))
+        );
+        let invalid_status = worker
+            .write(|db| {
+                db.execute(
+                    "UPDATE operations SET status = 'invalid' WHERE id = 'valid'",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap_err();
+        assert_eq!(map_error(invalid_status), StoreConflict::InvalidInput);
+    }
+
+    #[test]
+    fn journal_uses_domain_kind_and_status_vocabulary() {
+        let (_root, worker) = store();
+        let mut operation = intent("rename");
+        operation.kind = OperationKind::Rename;
+        worker.accept(&operation, &receipt("rename")).unwrap();
+        let persisted: (String, String) = worker
+            .read(|db| {
+                Ok(db.query_row(
+                    "SELECT kind, status FROM operations WHERE id = 'rename'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(persisted, ("rename".into(), "Accepted".into()));
+        worker
+            .set_status("rename", OperationStatus::Executing, "run")
+            .unwrap();
+        worker
+            .set_status("rename", OperationStatus::Failed, "observe")
+            .unwrap();
+        worker
+            .set_status("rename", OperationStatus::Abandoned, "done")
+            .unwrap();
+        let mut recovery = intent("recover");
+        recovery.kind = OperationKind::Recover;
+        worker.accept(&recovery, &receipt("recover")).unwrap();
+        worker
+            .set_status("recover", OperationStatus::Executing, "run")
+            .unwrap();
+        let persisted: (String, String) = worker
+            .read(|db| {
+                Ok(db.query_row(
+                    "SELECT kind, status FROM operations WHERE id = 'recover'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(persisted, ("recover".into(), "Executing".into()));
     }
 }

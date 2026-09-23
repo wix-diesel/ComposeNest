@@ -388,7 +388,7 @@ bind mountとnamed volumeを両方提供する。前者はVolume Path、後者�
 
 Docker Desktopのbind mountはホストとLinux VM間の共有機構を利用する。ホスト依存のパスを含むComposeが、別OSへそのまま移せるとは約束しない。標準形式の生成と、環境全体の移植性は区別する。[bind mount公式仕様](https://docs.docker.com/engine/storage/bind-mounts/)
 
-LinuxはUbuntu 26.04のx86_64（64bit）のみ対応する。Windows／macOS最低版、Docker提供形態の組合せはリリース前の検証マトリクスで定める。「全Linux環境」を無条件に保証しない。
+LinuxはUbuntu 26.04のx86_64（64bit）のみ対応する。macOS最低版はIssue #6で15とし、Windows最低版とDocker提供形態の組合せはリリース前の検証マトリクスで定める。「全Linux環境」を無条件に保証しない。
 
 ## 18. セキュリティ上考慮すべき事項
 
@@ -480,7 +480,7 @@ OSSとしては、Template作成ガイドと検証手順を使って、作者以
 
 | 優先度 | 未決事項 | 決定する成果物・判断材料 |
 | --- | --- | --- |
-| 最優先 | Windows／macOS最低版、Docker Desktop同梱版との整合 | Windows x86_64・64bit、macOS ARM64、Ubuntu 26.04 x86_64・64bit、Docker／Composeの採用方針は確定 |
+| 最優先 | Windows最低版、macOS 15とDocker Desktop同梱版との整合 | Windows x86_64・64bit、macOS 15以上のARM64、Ubuntu 26.04 x86_64・64bit、Docker／Composeの採用方針は確定。macOS 15のDocker実機受入は未完了 |
 | 最優先 | 管理ルートの他OSパス案、所有者・ACL・初期作成、named volumeの命名 | WindowsはProgramData配下で確定。既定bind mount・named volume選択可能も確定 |
 | 最優先 | 平文秘密情報の正本・生成物の配置とファイル権限 | アーキテクチャ。v1は暗号化しない。直接CLI起動の要件は検討外 |
 | 最優先 | EditとDeleteの確定範囲、残存データの案内方法 | 要件定義。初心者の誤認と復旧可能性 |

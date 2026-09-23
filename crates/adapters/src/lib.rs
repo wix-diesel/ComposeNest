@@ -32,3 +32,4 @@ impl RandomSource for SystemRandom {
 }
 
 pub mod sqlite;
+pub mod state_store;

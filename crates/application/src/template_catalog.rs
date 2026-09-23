@@ -199,7 +199,7 @@ fn canonical_json(template: &ResolvedTemplate) -> String {
             })
         })
         .collect();
-    json!({
+    stable_json(json!({
         "normalization": "template-normalization-v1",
         "manifest": manifest,
         "versions": versions,
@@ -212,8 +212,25 @@ fn canonical_json(template: &ResolvedTemplate) -> String {
             "versionClone": template.version_clone,
             "storageClone": template.storage_clone,
         }
-    })
+    }))
     .to_string()
+}
+
+fn stable_json(value: JsonValue) -> JsonValue {
+    match value {
+        JsonValue::Object(fields) => {
+            let mut fields: Vec<_> = fields.into_iter().collect();
+            fields.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+            JsonValue::Object(
+                fields
+                    .into_iter()
+                    .map(|(key, value)| (key, stable_json(value)))
+                    .collect(),
+            )
+        }
+        JsonValue::Array(items) => JsonValue::Array(items.into_iter().map(stable_json).collect()),
+        other => other,
+    }
 }
 
 fn canonical_node(node: &Node, parent: &str) -> JsonValue {

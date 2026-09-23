@@ -48,10 +48,26 @@ fn valid_files(files: &[TemplateFile]) -> bool {
         })
 }
 
-fn valid_canonical_versions(canonical_json: &str) -> bool {
-    let Ok(value) = serde_json::from_str::<JsonValue>(canonical_json) else {
+fn valid_canonical_revision(revision: &TemplateRevision) -> bool {
+    let Ok(value) = serde_json::from_str::<JsonValue>(&revision.canonical_json) else {
         return false;
     };
+    if revision.normalization != "template-normalization-v1"
+        || value.get("normalization").and_then(JsonValue::as_str)
+            != Some(revision.normalization.as_str())
+        || value
+            .pointer("/manifest/schemaVersion")
+            .and_then(JsonValue::as_i64)
+            != Some(1)
+        || value.pointer("/manifest/id").and_then(JsonValue::as_str)
+            != Some(revision.template_id.as_str())
+        || value
+            .pointer("/manifest/templateVersion")
+            .and_then(JsonValue::as_str)
+            != Some(revision.version.as_str())
+    {
+        return false;
+    }
     let Some(versions) = value.get("versions").and_then(JsonValue::as_array) else {
         return false;
     };
@@ -225,10 +241,14 @@ impl StateStore for DatabaseWorker {
 
     fn register_template(&self, revision: &TemplateRevision) -> Result<(), StoreConflict> {
         if !valid_files(&revision.files)
-            || revision.normalization != "template-normalization-v1"
-            || !valid_canonical_versions(&revision.canonical_json)
+            || !valid_canonical_revision(revision)
             || revision.semantic_hash
                 != format!("{:x}", Sha256::digest(revision.canonical_json.as_bytes()))
+            || revision.id
+                != format!(
+                    "{}:{}:{}",
+                    revision.template_id, revision.version, revision.semantic_hash
+                )
         {
             return Err(StoreConflict::InvalidInput);
         }
@@ -411,16 +431,15 @@ mod tests {
     }
 
     fn revision() -> TemplateRevision {
+        let canonical_json = r#"{"manifest":{"id":"redis","schemaVersion":1,"templateVersion":"1"},"normalization":"template-normalization-v1","versions":[{"key":"8","definition":"complete"}]}"#;
+        let semantic_hash = format!("{:x}", Sha256::digest(canonical_json.as_bytes()));
         TemplateRevision {
-            id: "revision".into(),
+            id: format!("redis:1:{semantic_hash}"),
             template_id: "redis".into(),
             version: "1".into(),
             normalization: "template-normalization-v1".into(),
-            semantic_hash: format!(
-                "{:x}",
-                Sha256::digest(br#"{"versions":[{"key":"8","definition":"complete"}]}"#)
-            ),
-            canonical_json: r#"{"versions":[{"key":"8","definition":"complete"}]}"#.into(),
+            semantic_hash,
+            canonical_json: canonical_json.into(),
             origin: "bundled".into(),
             files: vec![
                 TemplateFile {
@@ -443,7 +462,7 @@ mod tests {
             name: name.into(),
             project_name: format!("cn-{id}"),
             clone_source_id: None,
-            template_revision_id: "revision".into(),
+            template_revision_id: revision().id,
             selected_version: "8".into(),
             storage_method: StorageMethod::Bind,
             inputs_json: "{}".into(),
@@ -511,7 +530,10 @@ mod tests {
     fn unsupported_canonical_shape_is_rejected_before_registration() {
         let (_root, worker) = store();
         let mut unsupported = revision();
-        unsupported.canonical_json = r#"{"versions":{"8":{"definition":"complete"}}}"#.into();
+        unsupported.canonical_json = unsupported.canonical_json.replace(
+            r#""versions":[{"key":"8","definition":"complete"}]"#,
+            r#""versions":{"8":{"definition":"complete"}}"#,
+        );
         unsupported.semantic_hash = format!(
             "{:x}",
             Sha256::digest(unsupported.canonical_json.as_bytes())
@@ -523,6 +545,12 @@ mod tests {
 
         let mut unsupported = revision();
         unsupported.normalization = "template-normalization-v2".into();
+        assert_eq!(
+            worker.register_template(&unsupported),
+            Err(StoreConflict::InvalidInput)
+        );
+        let mut unsupported = revision();
+        unsupported.id = "unrelated-revision".into();
         assert_eq!(
             worker.register_template(&unsupported),
             Err(StoreConflict::InvalidInput)
@@ -557,8 +585,9 @@ mod tests {
         assert_eq!(catalog[0].semantic_hash, first.semantic_hash);
 
         let mut changed = first.clone();
-        changed.canonical_json = r#"{"versions":[{"key":"8","definition":"changed"}]}"#.into();
+        changed.canonical_json = changed.canonical_json.replace("complete", "changed");
         changed.semantic_hash = format!("{:x}", Sha256::digest(changed.canonical_json.as_bytes()));
+        changed.id = format!("redis:1:{}", changed.semantic_hash);
         assert_eq!(
             worker.register_template(&changed),
             Err(StoreConflict::Duplicate)
@@ -630,12 +659,16 @@ mod tests {
             .unwrap();
 
         let mut newer = original.clone();
-        newer.id = "newer".into();
         newer.version = "2".into();
-        newer.canonical_json =
-            r#"{"versions":[{"key":"8","definition":"complete"},{"key":"9","definition":"new"}]}"#
-                .into();
+        newer.canonical_json = newer
+            .canonical_json
+            .replace("\"templateVersion\":\"1\"", "\"templateVersion\":\"2\"")
+            .replace(
+                r#"{"key":"8","definition":"complete"}"#,
+                r#"{"key":"8","definition":"complete"},{"key":"9","definition":"new"}"#,
+            );
         newer.semantic_hash = format!("{:x}", Sha256::digest(newer.canonical_json.as_bytes()));
+        newer.id = format!("redis:2:{}", newer.semantic_hash);
         worker.register_template(&newer).unwrap();
         let snapshot: String = worker
             .read(|db| {

@@ -65,6 +65,21 @@ fn comments_whitespace_and_file_names_do_not_change_meaning() {
 }
 
 #[test]
+fn ordinary_object_key_order_does_not_change_meaning() {
+    let original = prepare_revision(package(MANIFEST, VERSION)).unwrap();
+    let reordered_manifest = MANIFEST.replace(
+        "schemaVersion: 1\nid: example.test\ntemplateVersion: \"1.0.0\"",
+        "templateVersion: \"1.0.0\"\nid: example.test\nschemaVersion: 1",
+    );
+    let reordered_version = VERSION.replace(
+        "image: example:1\nplatforms: [linux/amd64]",
+        "platforms: [linux/amd64]\nimage: example:1",
+    );
+    let reordered = prepare_revision(package(&reordered_manifest, &reordered_version)).unwrap();
+    assert_eq!(original.semantic_hash, reordered.semantic_hash);
+}
+
+#[test]
 fn display_order_and_effective_fields_change_meaning() {
     let original = prepare_revision(package(MANIFEST, VERSION)).unwrap();
     let reordered = MANIFEST.replace(

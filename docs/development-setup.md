@@ -48,3 +48,22 @@ Windowsで最終検証を実行し、次のコマンドが成功した。
 - `cargo clippy --workspace --all-targets -- -D warnings`（MSVC Build Tools環境）
 - `cargo check -p composenest-desktop`（MinGWの`dlltool.exe`を使用）
 - `cargo run -p composenest-desktop`
+
+## SQLite 起動基盤（Issue #10）
+
+起動時に管理ルートの `locks/backend.lock` をOSロックし、`state/composenest.sqlite` を開く。Linuxでは先に `scripts/linux/initialize-management-root.sh` で管理ルートを用意する。起動処理は schema version を確認し、未知の新版を拒否してから `foreign_keys=ON`、WAL、`synchronous=FULL` を設定する。migration は専用DB workerで順に適用し、失敗した場合はトランザクション全体をロールバックする。書込みは専用キュー、読取りは別接続の短いトランザクションで行う。Docker CLI の実行はDBトランザクション外で行う。
+
+既存DBを更新するときは `state/migration-backups/` にSQLite Backup APIで整合した退避を作り、`quick_check` と版を確認する。退避は自動削除しない。更新が成功し、アプリの状態を確認できた後に、配布・運用手順で不要な退避を整理する。復旧時はアプリを停止し、DBとWALの整合を確認した上で退避を扱う。DB、WAL、SHM、退避は秘密を含み得る。Unixでは管理ディレクトリを0700、各ファイルを0600相当に制限する。Windowsでは管理ルートのACL設定を配布検証で確認する必要がある。
+
+`rusqlite 0.40.2` の `bundled` 機能を使用し、同梱SQLiteは `libsqlite3-sys 0.38.2` の 3.53.2 である。設計書の3.53.4は未確定の候補版である。
+
+### Windows 実機検証（2026-09-23）
+
+Windows 11 Home x64（build 26200）、非昇格の通常利用者、Rust 1.98.1 と Node.js 24.19.0 で PR #78 の head `2f4047d` を検証した。事前に `C:\ProgramData\ComposeNest` と `state`・`locks` を初期化済みで、所有者は通常利用者、継承を切った ACL はその利用者・SYSTEM・Administrators のみだった。
+
+- `pnpm --dir apps/desktop install --frozen-lockfile`、`pnpm --dir apps/desktop run check:contracts`、`pnpm --dir apps/desktop build`：成功。
+- `cargo test --workspace --locked`：27 テスト成功。SQLite の初期化、単一 worker、未知の新版拒否、migration のロールバック、WAL 内データの退避を含む。
+- `cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo build -p composenest-desktop --locked`：成功。
+- ビルドしたデスクトップアプリを非昇格で起動し、5 秒後もプロセスが継続していることを確認。`state/composenest.sqlite` と `locks/backend.lock` が作成され、DB の `user_version=1`、`schema_migrations` が 1 行だった。両ファイルの ACL は保護済み親ディレクトリから利用者・SYSTEM・Administrators のみを継承していた。確認後、検証プロセスを終了した。
+
+この実機検証は build 26200 のみを対象とする。GUI 画面の目視確認と Windows 11 24H2 での検証は未実施。

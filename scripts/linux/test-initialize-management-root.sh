@@ -22,7 +22,7 @@ runuser -u "$username" -- sh -c 'umask 077; printf secret > "$1"' sh "$root/stat
 [[ $(stat -c '%u:%g:%a' "$root/state/test.sqlite") == "$uid:$gid:600" ]]
 
 # A container may own a bind data child without gaining access to state.
-mkdir -- "$root/data/image-owned"
+mkdir -m 0700 -- "$root/data/image-owned"
 chown 12345:12345 -- "$root/data/image-owned"
 [[ $(stat -c '%u:%a' "$root/data") == "$uid:700" ]]
 runuser -u "$username" -- test -w "$root/data"

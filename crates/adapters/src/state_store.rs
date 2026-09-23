@@ -617,6 +617,7 @@ mod tests {
                         .into_bytes(),
                     },
                 ],
+                warnings: Vec::new(),
             }
         }
 

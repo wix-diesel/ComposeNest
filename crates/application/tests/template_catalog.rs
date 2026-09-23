@@ -24,6 +24,7 @@ fn package(manifest: &str, version: &str) -> TemplatePackage {
                 contents: version.as_bytes().to_vec(),
             },
         ],
+        warnings: Vec::new(),
     }
 }
 

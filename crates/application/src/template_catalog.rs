@@ -37,6 +37,8 @@ pub struct TemplatePackage {
     pub origin: TemplateOrigin,
     /// The manifest and explicitly referenced version documents.
     pub files: Vec<TemplateFile>,
+    /// Unlisted version filenames to show to the package author, never imported.
+    pub warnings: Vec<String>,
 }
 
 /// A package-specific registration failure.
@@ -59,6 +61,8 @@ pub struct CatalogEntry {
     pub package: String,
     /// Registered immutable revision or a package-specific error.
     pub result: Result<TemplateRevision, CatalogError>,
+    /// Warnings from package discovery, including unlisted version files.
+    pub warnings: Vec<String>,
 }
 
 /// Validates each fixed package and registers complete revisions independently.
@@ -73,19 +77,20 @@ pub fn register_packages(
         .into_iter()
         .map(|package| {
             let name = package.name.clone();
+            let warnings = package.warnings.clone();
             let identity = package_identity(&package);
-            (name, identity, prepare_revision(package))
+            (name, warnings, identity, prepare_revision(package))
         })
         .collect();
     let mut counts = HashMap::new();
-    for (_, identity, _) in &prepared {
+    for (_, _, identity, _) in &prepared {
         if let Some(identity) = identity {
             *counts.entry(identity.clone()).or_insert(0usize) += 1;
         }
     }
     prepared
         .drain(..)
-        .map(|(package, _, result)| {
+        .map(|(package, warnings, _, result)| {
             let result = result.and_then(|revision| {
                 if counts[&(revision.template_id.clone(), revision.version.clone())] > 1 {
                     return Err(CatalogError::AmbiguousRevision);
@@ -95,7 +100,11 @@ pub fn register_packages(
                     .map_err(CatalogError::Store)?;
                 Ok(revision)
             });
-            CatalogEntry { package, result }
+            CatalogEntry {
+                package,
+                result,
+                warnings,
+            }
         })
         .collect()
 }

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/wix-diesel/ComposeNest/blob/main/docs/template-manifest-v1.schema.json",
+  "title": "ComposeNest Schema 1 manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "templateVersion", "name", "description", "defaultVersion", "versions"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$" },
+    "templateVersion": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+    "description": { "type": "string", "minLength": 1, "maxLength": 2000 },
+    "author": { "type": "string" },
+    "homepage": { "type": "string", "pattern": "^https://" },
+    "license": { "type": "string" },
+    "defaultVersion": { "type": "string" },
+    "versions": {
+      "type": "object", "minProperties": 1, "maxProperties": 32,
+      "propertyNames": { "pattern": "^[A-Za-z0-9._-]{1,64}$" },
+      "additionalProperties": { "type": "string", "pattern": "^versions/[a-z0-9][a-z0-9._-]{0,63}\\.yaml$" }
+    },
+    "versionClone": { "enum": ["copy", "ask"] },
+    "storageClone": { "enum": ["copy", "ask"] }
+  }
+}

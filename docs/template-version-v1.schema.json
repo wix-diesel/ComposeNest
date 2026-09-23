@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/wix-diesel/ComposeNest/blob/main/docs/template-version-v1.schema.json",
+  "title": "ComposeNest Schema 1 full version definition",
+  "type": "object", "additionalProperties": false,
+  "required": ["image", "platforms", "service"],
+  "properties": {
+    "image": { "type": "string" },
+    "platforms": { "type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": true, "items": { "enum": ["linux/amd64", "linux/arm64"] } },
+    "inputs": { "type": "object", "maxProperties": 64, "propertyNames": { "$ref": "#/$defs/slotKey" }, "additionalProperties": { "$ref": "#/$defs/input" } },
+    "service": { "$ref": "#/$defs/service" },
+    "connections": { "type": "object", "maxProperties": 16, "propertyNames": { "$ref": "#/$defs/slotKey" }, "additionalProperties": { "$ref": "#/$defs/connection" } }
+  },
+  "$defs": {
+    "slotKey": { "pattern": "^[a-z][a-z0-9-]{0,31}$" },
+    "value": { "oneOf": [
+      { "type": ["string", "integer", "boolean"] },
+      { "type": "object", "additionalProperties": false, "required": ["input"], "properties": {
+        "input": { "type": "string" }, "onMissing": { "const": "omit" }
+      } }
+    ] },
+    "commandValue": { "oneOf": [
+      { "type": ["string", "integer", "boolean"] },
+      { "type": "object", "additionalProperties": false, "required": ["input"], "properties": { "input": { "type": "string" } } }
+    ] },
+    "command": { "type": "array", "minItems": 1, "maxItems": 64,
+      "prefixItems": [{ "type": "string", "minLength": 1 }], "items": { "$ref": "#/$defs/commandValue" } },
+    "input": { "type": "object", "additionalProperties": false, "required": ["label", "type"], "properties": {
+      "label": { "type": "string" }, "type": { "enum": ["string", "integer", "boolean", "select", "secret"] },
+      "description": { "type": "string" }, "required": { "type": "boolean" },
+      "default": { "type": ["string", "integer", "boolean"] },
+      "options": { "type": "array", "minItems": 1, "maxItems": 128, "items": { "type": "object", "additionalProperties": false,
+        "required": ["value", "label"], "properties": { "value": { "type": "string" }, "label": { "type": "string" } } } },
+      "validation": { "type": "object", "additionalProperties": false, "properties": {
+        "minLength": { "type": "integer" }, "maxLength": { "type": "integer" }, "pattern": { "type": "string" },
+        "min": { "type": "integer" }, "max": { "type": "integer" }
+      } },
+      "clone": { "enum": ["copy", "regenerate", "clear", "ask"] },
+      "initial": { "enum": ["generate", "ask"] }, "advanced": { "type": "boolean" }
+    }, "allOf": [
+      { "if": { "properties": { "type": { "const": "select" } }, "required": ["type"] }, "then": {
+        "required": ["options"], "properties": { "default": { "type": "string" } }
+      }, "else": { "not": { "required": ["options"] } } },
+      { "if": { "properties": { "type": { "const": "secret" } }, "required": ["type"] }, "then": {
+        "not": { "required": ["default"] }
+      }, "else": { "not": { "required": ["initial"] }, "properties": { "clone": { "enum": ["copy", "clear", "ask"] } } } },
+      { "if": { "properties": { "type": { "const": "integer" } }, "required": ["type"] }, "then": {
+        "properties": { "default": { "type": "integer" }, "validation": { "type": "object", "additionalProperties": false,
+          "properties": { "min": { "type": "integer" }, "max": { "type": "integer" } } } }
+      } },
+      { "if": { "properties": { "type": { "const": "boolean" } }, "required": ["type"] }, "then": {
+        "properties": { "default": { "type": "boolean" }, "validation": { "maxProperties": 0 } }
+      } },
+      { "if": { "properties": { "type": { "const": "select" } }, "required": ["type"] }, "then": {
+        "properties": { "validation": { "maxProperties": 0 } }
+      } },
+      { "if": { "properties": { "type": { "enum": ["string", "secret"] } }, "required": ["type"] }, "then": {
+        "properties": { "default": { "type": "string" }, "validation": { "type": "object", "additionalProperties": false,
+          "properties": { "minLength": { "type": "integer" }, "maxLength": { "type": "integer" }, "pattern": { "type": "string", "maxLength": 256 } } } }
+      } }
+    ] },
+    "port": { "type": "object", "additionalProperties": false, "required": ["label", "container"], "properties": {
+      "label": { "type": "string" }, "container": { "type": "integer", "minimum": 1, "maximum": 65535 },
+      "defaultHost": { "type": "integer", "minimum": 1024, "maximum": 65535 }
+    } },
+    "storage": { "type": "object", "additionalProperties": false, "required": ["label", "container"], "properties": {
+      "label": { "type": "string" }, "container": { "type": "string" }
+    } },
+    "healthcheck": { "type": "object", "additionalProperties": false, "required": ["command"], "properties": {
+      "command": { "$ref": "#/$defs/command" },
+      "intervalSeconds": { "type": "integer", "minimum": 1, "maximum": 300 },
+      "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 300 },
+      "startPeriodSeconds": { "type": "integer", "minimum": 0, "maximum": 600 },
+      "retries": { "type": "integer", "minimum": 1, "maximum": 120 }
+    } },
+    "service": { "type": "object", "additionalProperties": false, "required": ["healthcheck"], "properties": {
+      "environment": { "type": "object", "maxProperties": 128, "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }, "additionalProperties": { "$ref": "#/$defs/value" } },
+      "command": { "$ref": "#/$defs/command" },
+      "ports": { "type": "object", "maxProperties": 16, "propertyNames": { "$ref": "#/$defs/slotKey" }, "additionalProperties": { "$ref": "#/$defs/port" } },
+      "storage": { "type": "object", "maxProperties": 16, "propertyNames": { "$ref": "#/$defs/slotKey" }, "additionalProperties": { "$ref": "#/$defs/storage" } },
+      "healthcheck": { "$ref": "#/$defs/healthcheck" },
+      "restart": { "enum": ["no", "on-failure", "always", "unless-stopped"] },
+      "memoryLimitMiB": { "type": "integer", "minimum": 16, "maximum": 1048576 }
+    } },
+    "connection": { "type": "object", "additionalProperties": false, "required": ["label", "port"], "properties": {
+      "label": { "type": "string" }, "port": { "type": "string" },
+      "inputs": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+    } }
+  }
+}

@@ -3,6 +3,7 @@
 pub mod clone_policy;
 pub mod identity;
 pub mod instance;
+pub mod template;
 
 /// Returns the application title displayed by supported clients.
 #[must_use]

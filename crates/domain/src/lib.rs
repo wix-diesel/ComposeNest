@@ -1,5 +1,6 @@
 //! Domain values and invariants for ComposeNest.
 
+pub mod clone_policy;
 pub mod identity;
 pub mod instance;
 

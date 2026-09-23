@@ -1,6 +1,6 @@
 //! Protected SQLite startup, ordered migrations, and a dedicated write worker.
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
@@ -26,6 +26,9 @@ pub enum DatabaseError {
     /// A database path is a link, has an unexpected type, or is insufficiently protected.
     #[error("unsafe database path: {0}")]
     UnsafePath(PathBuf),
+    /// Another application instance currently holds the backend lock.
+    #[error("another ComposeNest instance is already running")]
+    AlreadyRunning,
     /// The database was written by an application with a newer schema.
     #[error("unsupported database schema version {0}")]
     NewerSchema(i64),
@@ -109,7 +112,11 @@ fn open_database(root: &Path) -> Result<(PathBuf, Connection, File), DatabaseErr
     let lock_path = locks.join("backend.lock");
     create_or_check_file(&lock_path)?;
     let lock = OpenOptions::new().read(true).write(true).open(&lock_path)?;
-    lock.try_lock().map_err(io::Error::other)?;
+    match lock.try_lock() {
+        Ok(()) => {}
+        Err(TryLockError::WouldBlock) => return Err(DatabaseError::AlreadyRunning),
+        Err(TryLockError::Error(error)) => return Err(error.into()),
+    }
 
     let database_path = state.join(DATABASE_FILE);
     let existed = database_path.exists();
@@ -311,7 +318,10 @@ mod tests {
             })
             .unwrap();
         assert_eq!(settings, (1, "wal".into(), 2, 1));
-        assert!(DatabaseWorker::start(root.path()).is_err());
+        assert!(matches!(
+            DatabaseWorker::start(root.path()),
+            Err(DatabaseError::AlreadyRunning)
+        ));
         assert_eq!(
             worker
                 .read(|connection| {

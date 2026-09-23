@@ -126,13 +126,9 @@ fn rejects_oversized_documents_before_parsing() {
     let oversized = format!("{MANIFEST}{}", " ".repeat(256 * 1024));
     fs::write(root.path().join("large/template.yaml"), oversized).unwrap();
     let results = read_packages(root.path(), TemplateOrigin::Local).unwrap();
-    assert!(
-        results[0]
-            .as_ref()
-            .err()
-            .unwrap()
-            .reason
-            .contains("256 KiB")
+    assert_eq!(
+        results[0].as_ref().err().unwrap().reason,
+        "document exceeds the 256 KiB file limit"
     );
 }
 
@@ -149,7 +145,10 @@ fn rejects_package_when_cumulative_size_exceeds_eight_mebibytes() {
     }
     fs::write(package.join("template.yaml"), manifest).unwrap();
     let results = read_packages(root.path(), TemplateOrigin::Local).unwrap();
-    assert!(results[0].as_ref().err().unwrap().reason.contains("8 MiB"));
+    assert_eq!(
+        results[0].as_ref().err().unwrap().reason,
+        "package exceeds the 8 MiB total limit"
+    );
 }
 
 #[test]

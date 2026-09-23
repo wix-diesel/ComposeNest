@@ -195,10 +195,11 @@ fn read_package(
 fn read_capped(file: &mut File, total: &mut usize) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
     file.take((FILE_LIMIT + 1) as u64).read_to_end(&mut bytes)?;
-    if bytes.len() > FILE_LIMIT || total.saturating_add(bytes.len()) > PACKAGE_LIMIT {
-        return Err(invalid(
-            "package exceeds the 256 KiB file or 8 MiB total limit",
-        ));
+    if bytes.len() > FILE_LIMIT {
+        return Err(invalid("document exceeds the 256 KiB file limit"));
+    }
+    if total.saturating_add(bytes.len()) > PACKAGE_LIMIT {
+        return Err(invalid("package exceeds the 8 MiB total limit"));
     }
     file.seek(SeekFrom::Start(0))?;
     let mut verification = Vec::new();

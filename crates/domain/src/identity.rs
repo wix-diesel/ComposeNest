@@ -30,9 +30,6 @@ impl DisplayName {
         if normalized.chars().count() > 100 {
             return Err(DisplayNameError::TooLong);
         }
-        if normalized.chars().any(char::is_control) {
-            return Err(DisplayNameError::ControlCharacter);
-        }
         Ok(Self(normalized))
     }
 

@@ -31,6 +31,7 @@ impl RandomSource for SystemRandom {
     }
 }
 
+pub mod docker_cli;
 pub mod operation_journal;
 pub mod sqlite;
 pub mod state_store;

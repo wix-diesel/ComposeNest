@@ -87,6 +87,10 @@ pub struct DockerCli {
     directory: PathBuf,
     config_directory: PathBuf,
     endpoint: OsString,
+    #[cfg(windows)]
+    system_root: OsString,
+    #[cfg(windows)]
+    system_drive: Option<OsString>,
     gate: Arc<Mutex<()>>,
     blocked: Arc<AtomicBool>,
 }
@@ -115,11 +119,21 @@ impl DockerCli {
         if endpoint.is_empty() || !is_local_endpoint(&endpoint) {
             return Err(CliError::InvalidConfiguration("endpoint must be local"));
         }
+        #[cfg(windows)]
+        let system_root = std::env::var_os("SystemRoot")
+            .filter(|value| !value.is_empty())
+            .ok_or(CliError::InvalidConfiguration(
+                "SystemRoot is required on Windows",
+            ))?;
         Ok(Self {
             executable,
             directory,
             config_directory,
             endpoint,
+            #[cfg(windows)]
+            system_root,
+            #[cfg(windows)]
+            system_drive: std::env::var_os("SystemDrive"),
             gate: Arc::new(Mutex::new(())),
             blocked: Arc::new(AtomicBool::new(false)),
         })
@@ -174,6 +188,13 @@ impl DockerCli {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        #[cfg(windows)]
+        {
+            command.env("SystemRoot", &self.system_root);
+            if let Some(system_drive) = &self.system_drive {
+                command.env("SystemDrive", system_drive);
+            }
+        }
         configure_platform(&mut command);
         let started_at = SystemTime::now();
         let mut child = command.spawn()?;

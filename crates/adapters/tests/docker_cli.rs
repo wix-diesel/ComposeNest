@@ -8,8 +8,10 @@ use tempfile::TempDir;
 fn fixture(script: &str) -> (TempDir, DockerCli) {
     let root = tempfile::tempdir().expect("temporary directory");
     let executable = root.path().join("docker mock 日本語.sh");
-    fs::write(&executable, format!("#!/bin/sh\nshift 2\n{script}\n")).expect("write fixture");
-    fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).expect("permissions");
+    let staged = root.path().join("staged-script");
+    fs::write(&staged, format!("#!/bin/sh\nshift 2\n{script}\n")).expect("write fixture");
+    fs::set_permissions(&staged, fs::Permissions::from_mode(0o700)).expect("permissions");
+    fs::rename(&staged, &executable).expect("publish fixture");
     let cli = DockerCli::new(
         executable,
         root.path().to_path_buf(),

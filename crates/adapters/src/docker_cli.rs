@@ -72,8 +72,8 @@ pub enum CliError {
     #[error("CLI outcome is unknown: {0}")]
     OutcomeUnknown(io::Error),
     /// A previous CLI may still be alive; further changes are prohibited.
-    #[error("previous CLI termination could not be confirmed")]
-    TerminationUnconfirmed,
+    #[error("previous CLI termination could not be confirmed ({0})")]
+    TerminationUnconfirmed(&'static str),
 }
 
 /// Runs one Docker executable against a fixed local endpoint.
@@ -146,7 +146,7 @@ impl DockerCli {
             .await
             .map_err(|_| {
                 self.blocked.store(true, Ordering::Release);
-                CliError::TerminationUnconfirmed
+                CliError::TerminationUnconfirmed("supervisor task")
             })?
     }
 
@@ -158,7 +158,7 @@ impl DockerCli {
     ) -> Result<CliOutcome, CliError> {
         let _guard = self.gate.lock().await;
         if self.blocked.load(Ordering::Acquire) {
-            return Err(CliError::TerminationUnconfirmed);
+            return Err(CliError::TerminationUnconfirmed("earlier attempt"));
         }
         let mut command = Command::new(&self.executable);
         command
@@ -185,7 +185,7 @@ impl DockerCli {
             Err(error) => {
                 if child.kill().await.is_err() {
                     self.blocked.store(true, Ordering::Release);
-                    return Err(CliError::TerminationUnconfirmed);
+                    return Err(CliError::TerminationUnconfirmed("attach cleanup"));
                 }
                 return Err(error);
             }
@@ -208,11 +208,11 @@ impl DockerCli {
             Ok(Err(error)) => {
                 if group.terminate().is_err() {
                     self.blocked.store(true, Ordering::Release);
-                    return Err(CliError::TerminationUnconfirmed);
+                    return Err(CliError::TerminationUnconfirmed("wait error terminate"));
                 }
                 if !matches!(timeout(REAP_TIMEOUT, child.wait()).await, Ok(Ok(_))) {
                     self.blocked.store(true, Ordering::Release);
-                    return Err(CliError::TerminationUnconfirmed);
+                    return Err(CliError::TerminationUnconfirmed("wait error reap"));
                 }
                 self.blocked.store(true, Ordering::Release);
                 return Err(CliError::OutcomeUnknown(error));
@@ -220,11 +220,11 @@ impl DockerCli {
             Err(_) => {
                 if group.terminate().is_err() {
                     self.blocked.store(true, Ordering::Release);
-                    return Err(CliError::TerminationUnconfirmed);
+                    return Err(CliError::TerminationUnconfirmed("timeout terminate"));
                 }
                 if !matches!(timeout(REAP_TIMEOUT, child.wait()).await, Ok(Ok(_))) {
                     self.blocked.store(true, Ordering::Release);
-                    return Err(CliError::TerminationUnconfirmed);
+                    return Err(CliError::TerminationUnconfirmed("timeout reap"));
                 }
                 (None, true)
             }
@@ -234,7 +234,7 @@ impl DockerCli {
             Ok((Ok(Ok(stdout)), Ok(Ok(stderr)))) => (stdout, stderr),
             _ => {
                 self.blocked.store(true, Ordering::Release);
-                return Err(CliError::TerminationUnconfirmed);
+                return Err(CliError::TerminationUnconfirmed("output drain"));
             }
         };
         if !matches!(
@@ -251,7 +251,7 @@ impl DockerCli {
             Ok(true)
         ) {
             self.blocked.store(true, Ordering::Release);
-            return Err(CliError::TerminationUnconfirmed);
+            return Err(CliError::TerminationUnconfirmed("process group"));
         }
         Ok(CliOutcome {
             pid,

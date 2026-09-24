@@ -28,7 +28,19 @@ case "$1 $2" in
   *) exit 1 ;;
 esac
 "#;
-    fs::write(&executable, script).expect("script");
+    let architecture = match std::env::consts::ARCH {
+        "x86_64" => "amd64",
+        "aarch64" => "arm64",
+        other => panic!("unsupported test architecture: {other}"),
+    };
+    fs::write(
+        &executable,
+        script.replace(
+            "\"Architecture\":\"arm64\"",
+            &format!("\"Architecture\":\"{architecture}\""),
+        ),
+    )
+    .expect("script");
     fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).expect("permissions");
     fs::write(root.path().join("engine-id"), "engine-a").expect("engine ID");
     let probe = DockerProbe {

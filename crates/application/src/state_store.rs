@@ -7,6 +7,21 @@ pub enum StorageMethod {
     Volume,
 }
 
+/// A local Docker Engine identity persisted independently of Engine availability.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeTarget {
+    /// Stable target identifier.
+    pub id: String,
+    /// Management scope that owns this target.
+    pub scope_id: String,
+    /// Explicit local Docker endpoint.
+    pub endpoint: String,
+    /// Docker Engine ID observed during registration.
+    pub engine_id: String,
+    /// Observed operating system and architecture.
+    pub platform: String,
+}
+
 /// One original document in a complete template package.
 #[derive(Debug, Clone)]
 pub struct TemplateFile {
@@ -143,6 +158,9 @@ pub trait StateStore {
         engine_id: &str,
         platform: &str,
     ) -> Result<(), StoreConflict>;
+
+    /// Reads a registered target without contacting Docker.
+    fn runtime_target(&self, scope_id: &str) -> Result<Option<RuntimeTarget>, StoreConflict>;
 
     /// Registers a complete package or leaves no new revision or files.
     fn register_template(&self, revision: &TemplateRevision) -> Result<(), StoreConflict>;

@@ -17,9 +17,10 @@ use super::CliError;
 
 pub(super) struct ProcessGroup(HANDLE);
 
-// A Job handle is only closed on drop; the worker that owns it cannot migrate
-// between OS threads in a way that changes the validity of the handle.
+// The handle remains open while any borrowed reference exists. Windows Job
+// handles can be queried and terminated from different threads.
 unsafe impl Send for ProcessGroup {}
+unsafe impl Sync for ProcessGroup {}
 
 impl ProcessGroup {
     pub(super) fn attach(pid: u32) -> Result<Self, CliError> {

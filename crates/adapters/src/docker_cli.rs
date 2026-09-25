@@ -20,6 +20,7 @@ use tokio::{
 };
 
 const OUTPUT_LIMIT: usize = 64 * 1024;
+const INSPECT_OUTPUT_LIMIT: usize = 4 * 1024 * 1024;
 const REAP_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A command category used for process tracking and diagnostics.
@@ -34,7 +35,7 @@ pub enum CommandKind {
 /// A bounded copy of one CLI output stream.
 #[derive(Debug)]
 pub struct CapturedOutput {
-    /// The first bytes read, limited to 64 KiB. These bytes may contain secrets.
+    /// The first bytes read, bounded by the command's output limit. These bytes may contain secrets.
     pub bytes: Vec<u8>,
     /// Whether bytes beyond the capture limit were discarded.
     pub truncated: bool,
@@ -149,7 +150,24 @@ impl DockerCli {
         args: &[OsString],
         deadline: Duration,
     ) -> Result<CliOutcome, CliError> {
-        self.run_supervised(kind, args, deadline, true).await
+        self.run_supervised(kind, args, deadline, true, OUTPUT_LIMIT)
+            .await
+    }
+
+    /// Reads a projected inspect response with a separate bounded stdout budget.
+    pub(crate) async fn inspect_projected(
+        &self,
+        args: &[OsString],
+        deadline: Duration,
+    ) -> Result<CliOutcome, CliError> {
+        self.run_supervised(
+            CommandKind::Read,
+            args,
+            deadline,
+            true,
+            INSPECT_OUTPUT_LIMIT,
+        )
+        .await
     }
 
     /// Reads current context metadata without forcing the adapter's Engine endpoint.
@@ -160,7 +178,7 @@ impl DockerCli {
             "--format".into(),
             "{{json .Endpoints.docker.Host}}".into(),
         ];
-        self.run_supervised(CommandKind::Read, &args, Duration::from_secs(10), false)
+        self.run_supervised(CommandKind::Read, &args, Duration::from_secs(10), false, OUTPUT_LIMIT)
             .await
     }
 
@@ -170,6 +188,7 @@ impl DockerCli {
         args: &[OsString],
         deadline: Duration,
         fixed_host: bool,
+        stdout_limit: usize,
     ) -> Result<CliOutcome, CliError> {
         if deadline.is_zero() {
             return Err(CliError::InvalidConfiguration("deadline must be positive"));
@@ -178,7 +197,11 @@ impl DockerCli {
         // Keep process supervision and the serialization gate alive if the caller is cancelled.
         let runner = self.clone();
         let args = args.to_vec();
-        tokio::spawn(async move { runner.run_inner(kind, &args, deadline, fixed_host).await })
+        tokio::spawn(async move {
+            runner
+                .run_inner(kind, &args, deadline, fixed_host, stdout_limit)
+                .await
+        })
             .await
             .map_err(|_| {
                 self.blocked.store(true, Ordering::Release);
@@ -192,6 +215,7 @@ impl DockerCli {
         args: &[OsString],
         deadline: Duration,
         fixed_host: bool,
+        stdout_limit: usize,
     ) -> Result<CliOutcome, CliError> {
         let _guard = self.gate.lock().await;
         if self.blocked.load(Ordering::Acquire) {
@@ -240,12 +264,14 @@ impl DockerCli {
                 .stdout
                 .take()
                 .ok_or(CliError::InvalidConfiguration("missing stdout"))?,
+            stdout_limit,
         ));
         let stderr = tokio::spawn(drain(
             child
                 .stderr
                 .take()
                 .ok_or(CliError::InvalidConfiguration("missing stderr"))?,
+            OUTPUT_LIMIT,
         ));
         let waited = timeout(deadline, child.wait()).await;
         let (status, outcome_unknown) = match waited {
@@ -350,7 +376,7 @@ pub(crate) fn is_local_endpoint(endpoint: &OsStr) -> bool {
         || (value.starts_with("npipe:////./pipe/") && value.len() > "npipe:////./pipe/".len())
 }
 
-async fn drain(mut stream: impl AsyncRead + Unpin) -> io::Result<CapturedOutput> {
+async fn drain(mut stream: impl AsyncRead + Unpin, limit: usize) -> io::Result<CapturedOutput> {
     let mut bytes = Vec::new();
     let mut truncated = false;
     let mut chunk = [0_u8; 8192];
@@ -359,7 +385,7 @@ async fn drain(mut stream: impl AsyncRead + Unpin) -> io::Result<CapturedOutput>
         if count == 0 {
             break;
         }
-        let retained = count.min(OUTPUT_LIMIT - bytes.len());
+        let retained = count.min(limit - bytes.len());
         bytes.extend_from_slice(&chunk[..retained]);
         truncated |= retained < count;
     }

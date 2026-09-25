@@ -241,13 +241,30 @@ pub enum TargetError {
 impl BoundDocker {
     /// Reads from the registered Engine after confirming its identity.
     pub(crate) async fn read(&self, args: &[OsString]) -> Result<CliOutcome, TargetError> {
+        self.read_checked(args, false).await
+    }
+
+    /// Reads a projected inspect response with a larger bounded stdout budget.
+    pub(crate) async fn read_inspection(&self, args: &[OsString]) -> Result<CliOutcome, TargetError> {
+        self.read_checked(args, true).await
+    }
+
+    async fn read_checked(
+        &self,
+        args: &[OsString],
+        projected_inspect: bool,
+    ) -> Result<CliOutcome, TargetError> {
         let info = engine_info(&self.cli)
             .await
             .ok_or(TargetError::Unavailable)?;
         if info.get("ID").and_then(Value::as_str) != Some(self.engine_id.as_str()) {
             return Err(TargetError::Changed);
         }
-        Ok(self.cli.run(CommandKind::Read, args, PROBE_TIMEOUT).await?)
+        if projected_inspect {
+            Ok(self.cli.inspect_projected(args, PROBE_TIMEOUT).await?)
+        } else {
+            Ok(self.cli.run(CommandKind::Read, args, PROBE_TIMEOUT).await?)
+        }
     }
 
     /// Verifies the Engine ID immediately before a potentially changing command.

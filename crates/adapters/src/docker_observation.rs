@@ -11,6 +11,11 @@ use serde_json::Value;
 
 use crate::docker_target::BoundDocker;
 
+// Docker formats each selected field as JSON; health logs and unrelated inspect data stay out.
+const INSPECT_FORMAT: &str = concat!(
+    r#"{"Id":{{json .Id}},"Image":{{json .Image}},"Config":{"Labels":{"com.docker.compose.project":{{json (index .Config.Labels "com.docker.compose.project")}},"com.docker.compose.service":{{json (index .Config.Labels "com.docker.compose.service")}},"io.composenest.scope":{{json (index .Config.Labels "io.composenest.scope")}},"io.composenest.instance":{{json (index .Config.Labels "io.composenest.instance")}},"io.composenest.spec-revision":{{json (index .Config.Labels "io.composenest.spec-revision")}}},"Cmd":{{json .Config.Cmd}},"Env":{{json .Config.Env}},"Healthcheck":{{json .Config.Healthcheck}}},"HostConfig":{"PortBindings":{{json .HostConfig.PortBindings}}},"Mounts":{{json .Mounts}},"NetworkSettings":{"Networks":{{json .NetworkSettings.Networks}}},"State":{"Status":{{json .State.Status}},"Health":{"Status":{{if .State.Health}}{{json .State.Health.Status}}{{else}}null{{end}}}}}"#
+);
+
 /// Expected Docker state built from the confirmed spec and recorded allocations.
 /// Environment and command values may contain secrets; keep this input private.
 pub struct ExpectedContainer {
@@ -156,10 +161,10 @@ impl BoundDocker {
             "container".into(),
             "inspect".into(),
             "--format".into(),
-            "{{json .}}".into(),
+            INSPECT_FORMAT.into(),
             OsString::from(&expected.container_id),
         ];
-        let outcome = self.read(&args).await.ok()?;
+        let outcome = self.read_inspection(&args).await.ok()?;
         if outcome.outcome_unknown || outcome.stdout.truncated || outcome.stderr.truncated {
             return None;
         }
@@ -242,7 +247,11 @@ fn configuration_matches(value: &Value, expected: &ExpectedContainer) -> bool {
                 .map(|item| {
                     Some(ExpectedMount {
                         kind: string(item, &["Type"])?.to_owned(),
-                        source: string(item, &["Source"])?.to_owned(),
+                        source: match string(item, &["Type"])? {
+                            "volume" => string(item, &["Name"])?.to_owned(),
+                            "bind" => string(item, &["Source"])?.to_owned(),
+                            _ => return None,
+                        },
                         destination: string(item, &["Destination"])?.to_owned(),
                         read_write: field(item, &["RW"])?.as_bool()?,
                     })
@@ -280,14 +289,15 @@ fn configuration_matches(value: &Value, expected: &ExpectedContainer) -> bool {
         .and_then(Value::as_object)
         .map(|map| map.keys().cloned().collect::<Vec<_>>());
     let strings = |path: &[&str]| {
-        field(value, path)
-            .and_then(Value::as_array)
-            .and_then(|items| {
-                items
-                    .iter()
-                    .map(|item| item.as_str().map(str::to_owned))
-                    .collect::<Option<Vec<_>>>()
-            })
+        let value = field(value, path)?;
+        if value.is_null() {
+            return Some(Vec::new());
+        }
+        value
+            .as_array()?
+            .iter()
+            .map(|item| item.as_str().map(str::to_owned))
+            .collect::<Option<Vec<_>>>()
     };
     let actual_health = field(value, &["Config", "Healthcheck"]);
     let health_matches = match (&expected.healthcheck, actual_health) {
@@ -391,7 +401,7 @@ mod tests {
                 "Cmd": ["run", "secret"], "Env": ["PATH=/usr/bin", "PASSWORD=secret"],
                 "Healthcheck": {"Test": ["CMD", "check"], "Interval": 30000000000_u64, "Timeout": 1000000000_u64, "Retries": 3, "StartPeriod": 0, "StartInterval": 5000000000_u64}},
             "HostConfig": {"PortBindings": {"8080/tcp": [{"HostIp": "127.0.0.1", "HostPort": "18080"}]}},
-            "Mounts": [{"Type": "volume", "Source": "owned", "Destination": "/data", "RW": true}],
+            "Mounts": [{"Type": "volume", "Name": "owned", "Source": "/var/lib/docker/volumes/owned/_data", "Destination": "/data", "RW": true}],
             "NetworkSettings": {"Networks": {"cn-project_default": {}}},
             "State": {"Status": "running", "Health": {"Status": "starting", "Log": [{"Output": "secret"}]}}
         })
@@ -419,6 +429,35 @@ mod tests {
             .remove("StartPeriod");
         actual["HostConfig"]["PortBindings"]["8080/tcp"][0]["HostIp"] = json!("");
         assert!(configuration_matches(&actual, &expected));
+    }
+
+    #[test]
+    fn compares_bind_source_but_named_volume_name() {
+        let mut expected = expected();
+        let mut actual = inspected(&expected);
+        assert!(configuration_matches(&actual, &expected));
+        actual["Mounts"][0]["Name"] = json!("other");
+        assert!(!configuration_matches(&actual, &expected));
+
+        expected.mounts[0].kind = "bind".into();
+        expected.mounts[0].source = "/private/data".into();
+        actual["Mounts"][0] = json!({"Type": "bind", "Source": "/private/data", "Destination": "/data", "RW": true});
+        assert!(configuration_matches(&actual, &expected));
+        actual["Mounts"][0]["Source"] = json!("/private/other");
+        assert!(!configuration_matches(&actual, &expected));
+    }
+
+    #[test]
+    fn treats_null_command_and_environment_as_empty_lists() {
+        let mut expected = expected();
+        expected.command.clear();
+        expected.environment.clear();
+        let mut actual = inspected(&expected);
+        actual["Config"]["Cmd"] = Value::Null;
+        actual["Config"]["Env"] = Value::Null;
+        assert!(configuration_matches(&actual, &expected));
+        actual["Config"].as_object_mut().unwrap().remove("Env");
+        assert!(!configuration_matches(&actual, &expected));
     }
 
     #[test]

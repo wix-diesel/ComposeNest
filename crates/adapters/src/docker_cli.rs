@@ -149,19 +149,7 @@ impl DockerCli {
         args: &[OsString],
         deadline: Duration,
     ) -> Result<CliOutcome, CliError> {
-        if deadline.is_zero() {
-            return Err(CliError::InvalidConfiguration("deadline must be positive"));
-        }
-        validate_arguments(args)?;
-        // Keep process supervision and the serialization gate alive if the caller is cancelled.
-        let runner = self.clone();
-        let args = args.to_vec();
-        tokio::spawn(async move { runner.run_inner(kind, &args, deadline, true).await })
-            .await
-            .map_err(|_| {
-                self.blocked.store(true, Ordering::Release);
-                CliError::TerminationUnconfirmed("supervisor task")
-            })?
+        self.run_supervised(kind, args, deadline, true).await
     }
 
     /// Reads current context metadata without forcing the adapter's Engine endpoint.
@@ -172,8 +160,30 @@ impl DockerCli {
             "--format".into(),
             "{{json .Endpoints.docker.Host}}".into(),
         ];
-        self.run_inner(CommandKind::Read, &args, Duration::from_secs(10), false)
+        self.run_supervised(CommandKind::Read, &args, Duration::from_secs(10), false)
             .await
+    }
+
+    async fn run_supervised(
+        &self,
+        kind: CommandKind,
+        args: &[OsString],
+        deadline: Duration,
+        fixed_host: bool,
+    ) -> Result<CliOutcome, CliError> {
+        if deadline.is_zero() {
+            return Err(CliError::InvalidConfiguration("deadline must be positive"));
+        }
+        validate_arguments(args)?;
+        // Keep process supervision and the serialization gate alive if the caller is cancelled.
+        let runner = self.clone();
+        let args = args.to_vec();
+        tokio::spawn(async move { runner.run_inner(kind, &args, deadline, fixed_host).await })
+            .await
+            .map_err(|_| {
+                self.blocked.store(true, Ordering::Release);
+                CliError::TerminationUnconfirmed("supervisor task")
+            })?
     }
 
     async fn run_inner(

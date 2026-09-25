@@ -1,14 +1,15 @@
 //! SQLite implementation of the confirmed state ledgers.
 
 use composenest_application::state_store::{
-    InstanceRecord, StateStore, StorageMethod, StoreConflict, TemplateCatalogItem, TemplateFile,
-    TemplateRevision,
+    InstanceRecord, RuntimeTarget, StateStore, StorageMethod, StoreConflict, TemplateCatalogItem,
+    TemplateFile, TemplateRevision,
 };
 use composenest_domain::identity::DisplayName;
 use rusqlite::{Connection, Error, ErrorCode, TransactionBehavior, params};
 use serde_json::Value as JsonValue;
 use sha2::{Digest, Sha256};
 
+use crate::docker_cli::is_local_endpoint;
 use crate::sqlite::{DatabaseError, DatabaseWorker};
 
 fn method_name(method: StorageMethod) -> &'static str {
@@ -222,6 +223,9 @@ impl StateStore for DatabaseWorker {
         engine_id: &str,
         platform: &str,
     ) -> Result<(), StoreConflict> {
+        if !is_local_endpoint(endpoint.as_ref()) || engine_id.is_empty() || platform.is_empty() {
+            return Err(StoreConflict::InvalidInput);
+        }
         let values = (
             id.to_owned(),
             scope_id.to_owned(),
@@ -230,6 +234,17 @@ impl StateStore for DatabaseWorker {
             platform.to_owned(),
         );
         self.write(move |db| {
+            let count: i64 = db.query_row(
+                "SELECT COUNT(*) FROM runtime_targets WHERE scope_id = ?1",
+                [&values.1],
+                |row| row.get(0),
+            )?;
+            if count != 0 {
+                return Err(DatabaseError::Sqlite(Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE),
+                    None,
+                )));
+            }
             db.execute(
                 "INSERT INTO runtime_targets VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![values.0, values.1, values.2, values.3, values.4],
@@ -237,6 +252,32 @@ impl StateStore for DatabaseWorker {
             Ok(())
         })
         .map_err(map_error)
+    }
+
+    fn runtime_target(&self, scope_id: &str) -> Result<Option<RuntimeTarget>, StoreConflict> {
+        let scope_id = scope_id.to_owned();
+        self.read(move |db| {
+            let mut statement = db.prepare(
+                "SELECT id, scope_id, endpoint, engine_id, platform FROM runtime_targets WHERE scope_id = ?1",
+            )?;
+            let mut rows = statement.query([scope_id])?;
+            let target = rows.next()?.map(|row| {
+                Ok::<RuntimeTarget, Error>(RuntimeTarget {
+                    id: row.get(0)?,
+                    scope_id: row.get(1)?,
+                    endpoint: row.get(2)?,
+                    engine_id: row.get(3)?,
+                    platform: row.get(4)?,
+                })
+            }).transpose()?;
+            if rows.next()?.is_some() {
+                return Err(DatabaseError::Sqlite(Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE),
+                    None,
+                )));
+            }
+            Ok(target)
+        }).map_err(map_error)
     }
 
     fn register_template(&self, revision: &TemplateRevision) -> Result<(), StoreConflict> {
@@ -425,9 +466,57 @@ mod tests {
         let worker = DatabaseWorker::start(root.path()).unwrap();
         worker.create_scope("scope", "owner", "root").unwrap();
         worker
-            .create_target("target", "scope", "local", "engine", "linux")
+            .create_target(
+                "target",
+                "scope",
+                "unix:///var/run/docker.sock",
+                "engine",
+                "linux",
+            )
             .unwrap();
         (root, worker)
+    }
+
+    #[test]
+    fn target_is_readable_offline_and_scope_accepts_only_one_local_engine() {
+        let (root, worker) = store();
+        let target = worker.runtime_target("scope").unwrap().unwrap();
+        assert_eq!(target.endpoint, "unix:///var/run/docker.sock");
+        assert_eq!(target.engine_id, "engine");
+        assert_eq!(worker.runtime_target("missing").unwrap(), None);
+        assert_eq!(
+            worker.create_target("remote", "scope", "ssh://host", "other", "linux/arm64"),
+            Err(StoreConflict::InvalidInput)
+        );
+        assert_eq!(
+            worker.create_target(
+                "second",
+                "scope",
+                "unix:///tmp/other.sock",
+                "other",
+                "linux/arm64"
+            ),
+            Err(StoreConflict::Duplicate)
+        );
+        drop(worker);
+        let reopened = DatabaseWorker::start(root.path()).unwrap();
+        assert_eq!(reopened.runtime_target("scope").unwrap(), Some(target));
+    }
+
+    #[test]
+    fn ambiguous_persisted_targets_are_rejected() {
+        let (_root, worker) = store();
+        worker.write(|db| {
+            db.execute(
+                "INSERT INTO runtime_targets (id, scope_id, endpoint, engine_id, platform) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params!["second", "scope", "unix:///tmp/other.sock", "other", "linux/amd64"],
+            )?;
+            Ok(())
+        }).unwrap();
+        assert_eq!(
+            worker.runtime_target("scope"),
+            Err(StoreConflict::Duplicate)
+        );
     }
 
     fn revision() -> TemplateRevision {

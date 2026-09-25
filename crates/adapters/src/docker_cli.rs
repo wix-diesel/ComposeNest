@@ -149,6 +149,28 @@ impl DockerCli {
         args: &[OsString],
         deadline: Duration,
     ) -> Result<CliOutcome, CliError> {
+        self.run_supervised(kind, args, deadline, true).await
+    }
+
+    /// Reads current context metadata without forcing the adapter's Engine endpoint.
+    pub async fn inspect_current_context(&self) -> Result<CliOutcome, CliError> {
+        let args = [
+            "context".into(),
+            "inspect".into(),
+            "--format".into(),
+            "{{json .Endpoints.docker.Host}}".into(),
+        ];
+        self.run_supervised(CommandKind::Read, &args, Duration::from_secs(10), false)
+            .await
+    }
+
+    async fn run_supervised(
+        &self,
+        kind: CommandKind,
+        args: &[OsString],
+        deadline: Duration,
+        fixed_host: bool,
+    ) -> Result<CliOutcome, CliError> {
         if deadline.is_zero() {
             return Err(CliError::InvalidConfiguration("deadline must be positive"));
         }
@@ -156,7 +178,7 @@ impl DockerCli {
         // Keep process supervision and the serialization gate alive if the caller is cancelled.
         let runner = self.clone();
         let args = args.to_vec();
-        tokio::spawn(async move { runner.run_inner(kind, &args, deadline).await })
+        tokio::spawn(async move { runner.run_inner(kind, &args, deadline, fixed_host).await })
             .await
             .map_err(|_| {
                 self.blocked.store(true, Ordering::Release);
@@ -169,15 +191,17 @@ impl DockerCli {
         kind: CommandKind,
         args: &[OsString],
         deadline: Duration,
+        fixed_host: bool,
     ) -> Result<CliOutcome, CliError> {
         let _guard = self.gate.lock().await;
         if self.blocked.load(Ordering::Acquire) {
             return Err(CliError::TerminationUnconfirmed("earlier attempt"));
         }
         let mut command = Command::new(&self.executable);
+        if fixed_host {
+            command.arg("--host").arg(&self.endpoint);
+        }
         command
-            .arg("--host")
-            .arg(&self.endpoint)
             .args(args)
             .current_dir(&self.directory)
             .env_clear()
@@ -320,9 +344,10 @@ fn validate_arguments(args: &[OsString]) -> Result<(), CliError> {
     Ok(())
 }
 
-fn is_local_endpoint(endpoint: &OsStr) -> bool {
+pub(crate) fn is_local_endpoint(endpoint: &OsStr) -> bool {
     let value = endpoint.to_string_lossy();
-    value.starts_with("unix:///") || value.starts_with("npipe:////./pipe/")
+    (value.starts_with("unix:///") && value.len() > "unix:///".len())
+        || (value.starts_with("npipe:////./pipe/") && value.len() > "npipe:////./pipe/".len())
 }
 
 async fn drain(mut stream: impl AsyncRead + Unpin) -> io::Result<CapturedOutput> {

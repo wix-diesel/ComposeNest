@@ -90,7 +90,9 @@ fi
 async fn projected_inspect_accepts_large_environment_without_health_logs() {
     let root = tempfile::tempdir().unwrap();
     let executable = root.path().join("docker");
-    fs::write(&executable, r#"#!/bin/sh
+    fs::write(
+        &executable,
+        r#"#!/bin/sh
 shift 2
 if [ "$1" = info ]; then
   printf '{"ID":"engine-a"}\n'
@@ -100,21 +102,46 @@ elif [ "$1" = container ] && [ "$2" = inspect ]; then
 else
   exit 1
 fi
-"#).unwrap();
+"#,
+    )
+    .unwrap();
     fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
-    let probe = DockerProbe { executable, directory: root.path().into(), config_directory: root.path().into() };
+    let probe = DockerProbe {
+        executable,
+        directory: root.path().into(),
+        config_directory: root.path().into(),
+    };
     let target = composenest_application::state_store::RuntimeTarget {
-        id: "target".into(), scope_id: "scope".into(), endpoint: "unix:///tmp/composenest-test.sock".into(), engine_id: "engine-a".into(), platform: "linux/amd64".into(),
+        id: "target".into(),
+        scope_id: "scope".into(),
+        endpoint: "unix:///tmp/composenest-test.sock".into(),
+        engine_id: "engine-a".into(),
+        platform: "linux/amd64".into(),
     };
     let expected = ExpectedContainer {
-        container_id: "a".repeat(64), project: "project".into(), scope: "scope".into(), instance: "instance".into(), image_id: "image".into(), mounts: vec![], ports: Default::default(), networks: vec![], command: vec![], environment: vec![format!("BIG={}", "X".repeat(96 * 1024))], healthcheck: None, spec_revision: 1,
+        container_id: "a".repeat(64),
+        project: "project".into(),
+        scope: "scope".into(),
+        instance: "instance".into(),
+        image_id: "image".into(),
+        mounts: vec![],
+        ports: Default::default(),
+        networks: vec![],
+        command: vec![],
+        environment: vec![format!("BIG={}", "X".repeat(96 * 1024))],
+        healthcheck: None,
+        spec_revision: 1,
     };
     let json = serde_json::json!({
         "Id": expected.container_id, "Image": "image",
         "Config": {"Labels": {"com.docker.compose.project":"project", "com.docker.compose.service":"main", "io.composenest.scope":"scope", "io.composenest.instance":"instance", "io.composenest.spec-revision":"1"}, "Cmd":null, "Env":expected.environment, "Healthcheck":null},
         "Mounts":[], "HostConfig":{"PortBindings":null}, "NetworkSettings":{"Networks":{}}, "State":{"Status":"running", "Health":{"Status":null}}
     });
-    fs::write(root.path().join("inspect.json"), serde_json::to_vec(&json).unwrap()).unwrap();
+    fs::write(
+        root.path().join("inspect.json"),
+        serde_json::to_vec(&json).unwrap(),
+    )
+    .unwrap();
     let observation = probe.bind(target).unwrap().observe(&expected).await;
     assert_eq!(observation.ownership, Ownership::Verified);
     assert_eq!(observation.configuration_matches, Some(true));

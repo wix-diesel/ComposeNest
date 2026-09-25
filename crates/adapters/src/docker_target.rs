@@ -245,7 +245,10 @@ impl BoundDocker {
     }
 
     /// Reads a projected inspect response with a larger bounded stdout budget.
-    pub(crate) async fn read_inspection(&self, args: &[OsString]) -> Result<CliOutcome, TargetError> {
+    pub(crate) async fn read_inspection(
+        &self,
+        args: &[OsString],
+    ) -> Result<CliOutcome, TargetError> {
         self.read_checked(args, true).await
     }
 

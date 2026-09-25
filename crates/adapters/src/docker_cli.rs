@@ -178,8 +178,14 @@ impl DockerCli {
             "--format".into(),
             "{{json .Endpoints.docker.Host}}".into(),
         ];
-        self.run_supervised(CommandKind::Read, &args, Duration::from_secs(10), false, OUTPUT_LIMIT)
-            .await
+        self.run_supervised(
+            CommandKind::Read,
+            &args,
+            Duration::from_secs(10),
+            false,
+            OUTPUT_LIMIT,
+        )
+        .await
     }
 
     async fn run_supervised(
@@ -202,11 +208,11 @@ impl DockerCli {
                 .run_inner(kind, &args, deadline, fixed_host, stdout_limit)
                 .await
         })
-            .await
-            .map_err(|_| {
-                self.blocked.store(true, Ordering::Release);
-                CliError::TerminationUnconfirmed("supervisor task")
-            })?
+        .await
+        .map_err(|_| {
+            self.blocked.store(true, Ordering::Release);
+            CliError::TerminationUnconfirmed("supervisor task")
+        })?
     }
 
     async fn run_inner(

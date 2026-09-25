@@ -12,9 +12,7 @@ use serde_json::Value;
 use crate::docker_target::BoundDocker;
 
 // Docker formats each selected field as JSON; health logs and unrelated inspect data stay out.
-const INSPECT_FORMAT: &str = concat!(
-    r#"{"Id":{{json .Id}},"Image":{{json .Image}},"Config":{"Labels":{"com.docker.compose.project":{{json (index .Config.Labels "com.docker.compose.project")}},"com.docker.compose.service":{{json (index .Config.Labels "com.docker.compose.service")}},"io.composenest.scope":{{json (index .Config.Labels "io.composenest.scope")}},"io.composenest.instance":{{json (index .Config.Labels "io.composenest.instance")}},"io.composenest.spec-revision":{{json (index .Config.Labels "io.composenest.spec-revision")}}},"Cmd":{{json .Config.Cmd}},"Env":{{json .Config.Env}},"Healthcheck":{{json .Config.Healthcheck}}},"HostConfig":{"PortBindings":{{json .HostConfig.PortBindings}}},"Mounts":{{json .Mounts}},"NetworkSettings":{"Networks":{{json .NetworkSettings.Networks}}},"State":{"Status":{{json .State.Status}},"Health":{"Status":{{if .State.Health}}{{json .State.Health.Status}}{{else}}null{{end}}}}}"#
-);
+const INSPECT_FORMAT: &str = r#"{"Id":{{json .Id}},"Image":{{json .Image}},"Config":{"Labels":{"com.docker.compose.project":{{json (index .Config.Labels "com.docker.compose.project")}},"com.docker.compose.service":{{json (index .Config.Labels "com.docker.compose.service")}},"io.composenest.scope":{{json (index .Config.Labels "io.composenest.scope")}},"io.composenest.instance":{{json (index .Config.Labels "io.composenest.instance")}},"io.composenest.spec-revision":{{json (index .Config.Labels "io.composenest.spec-revision")}}},"Cmd":{{json .Config.Cmd}},"Env":{{json .Config.Env}},"Healthcheck":{{json .Config.Healthcheck}}},"HostConfig":{"PortBindings":{{json .HostConfig.PortBindings}}},"Mounts":{{json .Mounts}},"NetworkSettings":{"Networks":{{json .NetworkSettings.Networks}}},"State":{"Status":{{json .State.Status}},"Health":{"Status":{{if .State.Health}}{{json .State.Health.Status}}{{else}}null{{end}}}}}"#;
 
 /// Expected Docker state built from the confirmed spec and recorded allocations.
 /// Environment and command values may contain secrets; keep this input private.
@@ -441,7 +439,8 @@ mod tests {
 
         expected.mounts[0].kind = "bind".into();
         expected.mounts[0].source = "/private/data".into();
-        actual["Mounts"][0] = json!({"Type": "bind", "Source": "/private/data", "Destination": "/data", "RW": true});
+        actual["Mounts"][0] =
+            json!({"Type": "bind", "Source": "/private/data", "Destination": "/data", "RW": true});
         assert!(configuration_matches(&actual, &expected));
         actual["Mounts"][0]["Source"] = json!("/private/other");
         assert!(!configuration_matches(&actual, &expected));
@@ -465,7 +464,7 @@ mod tests {
         let expected = expected();
         for (path, replacement) in [
             (vec!["Image"], json!("sha256:other")),
-            (vec!["Mounts", "0", "Source"], json!("foreign")),
+            (vec!["Mounts", "0", "Name"], json!("foreign")),
             (vec!["Config", "Cmd", "1"], json!("different")),
             (vec!["Config", "Env", "1"], json!("PASSWORD=different")),
             (vec!["Config", "Healthcheck", "Retries"], json!(5)),

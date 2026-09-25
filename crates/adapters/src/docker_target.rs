@@ -176,7 +176,7 @@ impl DockerProbe {
             .get("Architecture")
             .and_then(Value::as_str)
             .unwrap_or("");
-        report.observed_platform = Some(format!("{os}/{arch}"));
+        report.observed_platform = Some(format!("{os}/{}", canonical_architecture(arch)));
         report.linux_containers = if os == "linux" {
             Check::Ready
         } else {
@@ -312,6 +312,14 @@ async fn engine_info(cli: &DockerCli) -> Option<Value> {
         return None;
     }
     serde_json::from_slice(&outcome.stdout.bytes).ok()
+}
+
+fn canonical_architecture(architecture: &str) -> &str {
+    match architecture {
+        "x86_64" | "amd64" => "amd64",
+        "aarch64" | "arm64" => "arm64",
+        other => other,
+    }
 }
 
 fn supported_architecture(architecture: &str) -> bool {

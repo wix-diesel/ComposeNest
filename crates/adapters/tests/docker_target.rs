@@ -53,9 +53,9 @@ esac
 
 #[tokio::test]
 async fn engine_architecture_is_normalized_for_template_platforms() {
-    let (_root, probe) = fixture();
-    let script = fs::read_to_string(&probe.executable).unwrap();
     for (reported, expected) in [("x86_64", "linux/amd64"), ("aarch64", "linux/arm64")] {
+        let (_root, probe) = fixture();
+        let script = fs::read_to_string(&probe.executable).unwrap();
         fs::write(
             &probe.executable,
             script.replace(

@@ -270,6 +270,12 @@ impl StateStore for DatabaseWorker {
                     platform: row.get(4)?,
                 })
             }).transpose()?;
+            if rows.next()?.is_some() {
+                return Err(DatabaseError::Sqlite(Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE),
+                    None,
+                )));
+            }
             Ok(target)
         }).map_err(map_error)
     }
@@ -495,6 +501,19 @@ mod tests {
         drop(worker);
         let reopened = DatabaseWorker::start(root.path()).unwrap();
         assert_eq!(reopened.runtime_target("scope").unwrap(), Some(target));
+    }
+
+    #[test]
+    fn ambiguous_persisted_targets_are_rejected() {
+        let (_root, worker) = store();
+        worker.write(|db| {
+            db.execute(
+                "INSERT INTO runtime_targets (id, scope_id, endpoint, engine_id, platform) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params!["second", "scope", "unix:///tmp/other.sock", "other", "linux/amd64"],
+            )?;
+            Ok(())
+        }).unwrap();
+        assert_eq!(worker.runtime_target("scope"), Err(StoreConflict::Duplicate));
     }
 
     fn revision() -> TemplateRevision {

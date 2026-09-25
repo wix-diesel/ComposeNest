@@ -298,8 +298,7 @@ fn configuration_matches(value: &Value, expected: &ExpectedContainer) -> bool {
                 && zero_if_omitted(actual, "Timeout") == Some(expected.timeout)
                 && zero_if_omitted(actual, "Retries") == Some(expected.retries)
                 && zero_if_omitted(actual, "StartPeriod") == Some(expected.start_period)
-                && zero_if_omitted(actual, "StartInterval")
-                    == Some(expected.start_interval)
+                && zero_if_omitted(actual, "StartInterval") == Some(expected.start_interval)
         }
         _ => false,
     };

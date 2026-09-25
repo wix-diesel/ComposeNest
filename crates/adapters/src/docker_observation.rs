@@ -210,6 +210,13 @@ fn string<'a>(value: &'a Value, path: &[&str]) -> Option<&'a str> {
     field(value, path)?.as_str()
 }
 
+fn zero_if_omitted(value: &Value, key: &str) -> Option<u64> {
+    match value.get(key) {
+        None => Some(0),
+        Some(number) => number.as_u64(),
+    }
+}
+
 fn ownership(value: &Value, expected: &ExpectedContainer) -> Ownership {
     let label = |key| field(value, &["Config", "Labels", key]).and_then(Value::as_str);
     let evidence = [
@@ -257,7 +264,10 @@ fn configuration_matches(value: &Value, expected: &ExpectedContainer) -> bool {
                         .iter()
                         .map(|binding| {
                             Some(PortBinding {
-                                host_ip: string(binding, &["HostIp"])?.to_owned(),
+                                host_ip: match string(binding, &["HostIp"])? {
+                                    "" => "0.0.0.0".to_owned(),
+                                    address => address.to_owned(),
+                                },
                                 host_port: string(binding, &["HostPort"])?.to_owned(),
                             })
                         })
@@ -284,11 +294,11 @@ fn configuration_matches(value: &Value, expected: &ExpectedContainer) -> bool {
         (None, None | Some(Value::Null)) => true,
         (Some(expected), Some(actual)) => {
             strings(&["Config", "Healthcheck", "Test"]) == Some(expected.test.clone())
-                && actual.get("Interval").and_then(Value::as_u64) == Some(expected.interval)
-                && actual.get("Timeout").and_then(Value::as_u64) == Some(expected.timeout)
-                && actual.get("Retries").and_then(Value::as_u64) == Some(expected.retries)
-                && actual.get("StartPeriod").and_then(Value::as_u64) == Some(expected.start_period)
-                && actual.get("StartInterval").and_then(Value::as_u64)
+                && zero_if_omitted(actual, "Interval") == Some(expected.interval)
+                && zero_if_omitted(actual, "Timeout") == Some(expected.timeout)
+                && zero_if_omitted(actual, "Retries") == Some(expected.retries)
+                && zero_if_omitted(actual, "StartPeriod") == Some(expected.start_period)
+                && zero_if_omitted(actual, "StartInterval")
                     == Some(expected.start_interval)
         }
         _ => false,
@@ -397,6 +407,19 @@ mod tests {
         assert_eq!(runtime_status(&actual), RuntimeStatus::Preparing);
         actual["State"]["Health"]["Status"] = json!("healthy");
         assert_eq!(runtime_status(&actual), RuntimeStatus::Ready);
+    }
+
+    #[test]
+    fn normalizes_omitted_health_zeros_and_unspecified_host_address() {
+        let mut expected = expected();
+        expected.ports.get_mut("8080/tcp").unwrap()[0].host_ip = "0.0.0.0".into();
+        let mut actual = inspected(&expected);
+        actual["Config"]["Healthcheck"]
+            .as_object_mut()
+            .unwrap()
+            .remove("StartPeriod");
+        actual["HostConfig"]["PortBindings"]["8080/tcp"][0]["HostIp"] = json!("");
+        assert!(configuration_matches(&actual, &expected));
     }
 
     #[test]

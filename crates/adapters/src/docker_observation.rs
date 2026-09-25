@@ -1,6 +1,10 @@
 //! Bounded Docker inspection with ownership and configuration evidence.
 
-use std::{collections::BTreeMap, ffi::OsString, time::{SystemTime, UNIX_EPOCH}};
+use std::{
+    collections::BTreeMap,
+    ffi::OsString,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use composenest_domain::instance::{ObservationFailure, RuntimeStatus};
 use serde_json::Value;
@@ -104,7 +108,10 @@ impl ContainerObservation {
     pub fn can_change(&self, now_unix_seconds: u64, max_age_seconds: u64) -> bool {
         self.ownership == Ownership::Verified
             && self.configuration_matches == Some(true)
-            && !matches!(self.status, RuntimeStatus::Unknown(_) | RuntimeStatus::Absent)
+            && !matches!(
+                self.status,
+                RuntimeStatus::Unknown(_) | RuntimeStatus::Absent
+            )
             && now_unix_seconds.saturating_sub(self.observed_at_unix_seconds) <= max_age_seconds
             && now_unix_seconds >= self.observed_at_unix_seconds
     }
@@ -138,16 +145,43 @@ impl BoundDocker {
         }
     }
 
-    async fn inspect_container(&self, expected: &ExpectedContainer) -> Option<(RuntimeStatus, Ownership, Option<bool>)> {
-        if !valid_id(&expected.container_id) { return None; }
-        let args = ["container".into(), "inspect".into(), "--format".into(), "{{json .}}".into(), OsString::from(&expected.container_id)];
+    async fn inspect_container(
+        &self,
+        expected: &ExpectedContainer,
+    ) -> Option<(RuntimeStatus, Ownership, Option<bool>)> {
+        if !valid_id(&expected.container_id) {
+            return None;
+        }
+        let args = [
+            "container".into(),
+            "inspect".into(),
+            "--format".into(),
+            "{{json .}}".into(),
+            OsString::from(&expected.container_id),
+        ];
         let outcome = self.read(&args).await.ok()?;
-        if outcome.outcome_unknown || outcome.stdout.truncated || outcome.stderr.truncated { return None; }
+        if outcome.outcome_unknown || outcome.stdout.truncated || outcome.stderr.truncated {
+            return None;
+        }
         if !outcome.status?.success() {
             // A failed inspect alone cannot distinguish a missing container from a disconnected Engine.
-            let args = ["container".into(), "ls".into(), "--all".into(), "--no-trunc".into(), "--quiet".into(), "--filter".into(), OsString::from(format!("id={}", expected.container_id))];
+            let args = [
+                "container".into(),
+                "ls".into(),
+                "--all".into(),
+                "--no-trunc".into(),
+                "--quiet".into(),
+                "--filter".into(),
+                OsString::from(format!("id={}", expected.container_id)),
+            ];
             let listing = self.read(&args).await.ok()?;
-            if listing.outcome_unknown || listing.stdout.truncated || listing.stderr.truncated || !listing.status?.success() { return None; }
+            if listing.outcome_unknown
+                || listing.stdout.truncated
+                || listing.stderr.truncated
+                || !listing.status?.success()
+            {
+                return None;
+            }
             let listed = std::str::from_utf8(&listing.stdout.bytes).ok()?;
             if listed.trim().is_empty() {
                 return Some((RuntimeStatus::Absent, Ownership::Unknown, None));
@@ -156,7 +190,8 @@ impl BoundDocker {
         }
         let json: Value = serde_json::from_slice(&outcome.stdout.bytes).ok()?;
         let ownership = ownership(&json, expected);
-        let configuration_matches = (ownership == Ownership::Verified).then(|| configuration_matches(&json, expected));
+        let configuration_matches =
+            (ownership == Ownership::Verified).then(|| configuration_matches(&json, expected));
         let status = runtime_status(&json);
         Some((status, ownership, configuration_matches))
     }
@@ -167,7 +202,8 @@ fn valid_id(id: &str) -> bool {
 }
 
 fn field<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Value> {
-    path.iter().try_fold(value, |current, key| current.get(*key))
+    path.iter()
+        .try_fold(value, |current, key| current.get(*key))
 }
 
 fn string<'a>(value: &'a Value, path: &[&str]) -> Option<&'a str> {
@@ -183,29 +219,66 @@ fn ownership(value: &Value, expected: &ExpectedContainer) -> Ownership {
         label("io.composenest.scope") == Some(expected.scope.as_str()),
         label("io.composenest.instance") == Some(expected.instance.as_str()),
     ];
-    if evidence.iter().all(|matches| *matches) { Ownership::Verified } else { Ownership::Foreign }
+    if evidence.iter().all(|matches| *matches) {
+        Ownership::Verified
+    } else {
+        Ownership::Foreign
+    }
 }
 
 fn configuration_matches(value: &Value, expected: &ExpectedContainer) -> bool {
-    let mounts = field(value, &["Mounts"]).and_then(Value::as_array).and_then(|items| {
-        items.iter().map(|item| Some(ExpectedMount {
-            kind: string(item, &["Type"])?.to_owned(),
-            source: string(item, &["Source"])?.to_owned(),
-            destination: string(item, &["Destination"])?.to_owned(),
-            read_write: field(item, &["RW"])?.as_bool()?,
-        })).collect::<Option<Vec<_>>>()
-    });
+    let mounts = field(value, &["Mounts"])
+        .and_then(Value::as_array)
+        .and_then(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    Some(ExpectedMount {
+                        kind: string(item, &["Type"])?.to_owned(),
+                        source: string(item, &["Source"])?.to_owned(),
+                        destination: string(item, &["Destination"])?.to_owned(),
+                        read_write: field(item, &["RW"])?.as_bool()?,
+                    })
+                })
+                .collect::<Option<Vec<_>>>()
+        });
     let ports = field(value, &["HostConfig", "PortBindings"]).and_then(|value| {
-        if value.is_null() { return Some(BTreeMap::new()); }
+        if value.is_null() {
+            return Some(BTreeMap::new());
+        }
         let entries = value.as_object()?;
-        entries.iter().map(|(key, bindings)| Some((key.clone(), bindings.as_array()?.iter().map(|binding| Some(PortBinding {
-            host_ip: string(binding, &["HostIp"])?.to_owned(),
-            host_port: string(binding, &["HostPort"])?.to_owned(),
-        })).collect::<Option<Vec<_>>>()?))).collect::<Option<BTreeMap<_, _>>>()
+        entries
+            .iter()
+            .map(|(key, bindings)| {
+                Some((
+                    key.clone(),
+                    bindings
+                        .as_array()?
+                        .iter()
+                        .map(|binding| {
+                            Some(PortBinding {
+                                host_ip: string(binding, &["HostIp"])?.to_owned(),
+                                host_port: string(binding, &["HostPort"])?.to_owned(),
+                            })
+                        })
+                        .collect::<Option<Vec<_>>>()?,
+                ))
+            })
+            .collect::<Option<BTreeMap<_, _>>>()
     });
     let networks = field(value, &["NetworkSettings", "Networks"])
-        .and_then(Value::as_object).map(|map| map.keys().cloned().collect::<Vec<_>>());
-    let strings = |path: &[&str]| field(value, path).and_then(Value::as_array).and_then(|items| items.iter().map(|item| item.as_str().map(str::to_owned)).collect::<Option<Vec<_>>>());
+        .and_then(Value::as_object)
+        .map(|map| map.keys().cloned().collect::<Vec<_>>());
+    let strings = |path: &[&str]| {
+        field(value, path)
+            .and_then(Value::as_array)
+            .and_then(|items| {
+                items
+                    .iter()
+                    .map(|item| item.as_str().map(str::to_owned))
+                    .collect::<Option<Vec<_>>>()
+            })
+    };
     let actual_health = field(value, &["Config", "Healthcheck"]);
     let health_matches = match (&expected.healthcheck, actual_health) {
         (None, None | Some(Value::Null)) => true,
@@ -215,28 +288,38 @@ fn configuration_matches(value: &Value, expected: &ExpectedContainer) -> bool {
                 && actual.get("Timeout").and_then(Value::as_u64) == Some(expected.timeout)
                 && actual.get("Retries").and_then(Value::as_u64) == Some(expected.retries)
                 && actual.get("StartPeriod").and_then(Value::as_u64) == Some(expected.start_period)
-                && actual.get("StartInterval").and_then(Value::as_u64) == Some(expected.start_interval)
+                && actual.get("StartInterval").and_then(Value::as_u64)
+                    == Some(expected.start_interval)
         }
         _ => false,
     };
     let mut expected_mounts = expected.mounts.iter().collect::<Vec<_>>();
     expected_mounts.sort();
-    let mut actual_mounts = mounts.as_ref().map(|mounts| mounts.iter().collect::<Vec<_>>());
-    if let Some(mounts) = &mut actual_mounts { mounts.sort(); }
+    let mut actual_mounts = mounts
+        .as_ref()
+        .map(|mounts| mounts.iter().collect::<Vec<_>>());
+    if let Some(mounts) = &mut actual_mounts {
+        mounts.sort();
+    }
     let mut expected_networks = expected.networks.clone();
     expected_networks.sort();
     let mut expected_env = expected.environment.clone();
     expected_env.sort();
     let mut actual_env = strings(&["Config", "Env"]);
-    if let Some(env) = &mut actual_env { env.sort(); }
+    if let Some(env) = &mut actual_env {
+        env.sort();
+    }
     string(value, &["Image"]) == Some(expected.image_id.as_str())
-        && mounts.is_some() && actual_mounts == Some(expected_mounts)
-        && ports == Some(expected.ports.clone())
+        && mounts.is_some()
+        && actual_mounts == Some(expected_mounts)
+        && ports.as_ref() == Some(&expected.ports)
         && networks == Some(expected_networks)
         && strings(&["Config", "Cmd"]) == Some(expected.command.clone())
         && actual_env == Some(expected_env)
         && health_matches
-        && field(value, &["Config", "Labels", "io.composenest.spec-revision"]).and_then(Value::as_str) == Some(expected.spec_revision.to_string().as_str())
+        && field(value, &["Config", "Labels", "io.composenest.spec-revision"])
+            .and_then(Value::as_str)
+            == Some(expected.spec_revision.to_string().as_str())
 }
 
 fn runtime_status(value: &Value) -> RuntimeStatus {
@@ -259,13 +342,35 @@ mod tests {
 
     fn expected() -> ExpectedContainer {
         ExpectedContainer {
-            container_id: "a".repeat(64), project: "cn-project".into(), scope: "scope".into(),
-            instance: "instance".into(), image_id: "sha256:image".into(),
-            mounts: vec![ExpectedMount { kind: "volume".into(), source: "owned".into(), destination: "/data".into(), read_write: true }],
-            ports: BTreeMap::from([("8080/tcp".into(), vec![PortBinding { host_ip: "127.0.0.1".into(), host_port: "18080".into() }])]),
-            networks: vec!["cn-project_default".into()], command: vec!["run".into(), "secret".into()],
+            container_id: "a".repeat(64),
+            project: "cn-project".into(),
+            scope: "scope".into(),
+            instance: "instance".into(),
+            image_id: "sha256:image".into(),
+            mounts: vec![ExpectedMount {
+                kind: "volume".into(),
+                source: "owned".into(),
+                destination: "/data".into(),
+                read_write: true,
+            }],
+            ports: BTreeMap::from([(
+                "8080/tcp".into(),
+                vec![PortBinding {
+                    host_ip: "127.0.0.1".into(),
+                    host_port: "18080".into(),
+                }],
+            )]),
+            networks: vec!["cn-project_default".into()],
+            command: vec!["run".into(), "secret".into()],
             environment: vec!["PASSWORD=secret".into(), "PATH=/usr/bin".into()],
-            healthcheck: Some(ExpectedHealthcheck { test: vec!["CMD".into(), "check".into()], interval: 30000000000, timeout: 1000000000, retries: 3, start_period: 0, start_interval: 5000000000 }),
+            healthcheck: Some(ExpectedHealthcheck {
+                test: vec!["CMD".into(), "check".into()],
+                interval: 30000000000,
+                timeout: 1000000000,
+                retries: 3,
+                start_period: 0,
+                start_interval: 5000000000,
+            }),
             spec_revision: 1,
         }
     }
@@ -303,15 +408,25 @@ mod tests {
             (vec!["Config", "Cmd", "1"], json!("different")),
             (vec!["Config", "Env", "1"], json!("PASSWORD=different")),
             (vec!["Config", "Healthcheck", "Retries"], json!(5)),
-            (vec!["HostConfig", "PortBindings", "8080/tcp", "0", "HostPort"], json!(18081)),
-            (vec!["Config", "Labels", "io.composenest.spec-revision"], json!("2")),
+            (
+                vec!["HostConfig", "PortBindings", "8080/tcp", "0", "HostPort"],
+                json!(18081),
+            ),
+            (
+                vec!["Config", "Labels", "io.composenest.spec-revision"],
+                json!("2"),
+            ),
         ] {
             let mut actual = inspected(&expected);
             let mut current = &mut actual;
-            for key in &path[..path.len()-1] {
-                current = if let Ok(index) = key.parse::<usize>() { &mut current[index] } else { &mut current[*key] };
+            for key in &path[..path.len() - 1] {
+                current = if let Ok(index) = key.parse::<usize>() {
+                    &mut current[index]
+                } else {
+                    &mut current[*key]
+                };
             }
-            let last = path[path.len()-1];
+            let last = path[path.len() - 1];
             if let Ok(index) = last.parse::<usize>() {
                 current[index] = replacement;
             } else {
@@ -320,7 +435,9 @@ mod tests {
             assert!(!configuration_matches(&actual, &expected), "field {path:?}");
         }
         let mut actual = inspected(&expected);
-        actual["Mounts"].as_array_mut().unwrap().push(json!({"Type":"bind", "Source":"/tmp/unexpected", "Destination":"/extra", "RW":true}));
+        actual["Mounts"].as_array_mut().unwrap().push(
+            json!({"Type":"bind", "Source":"/tmp/unexpected", "Destination":"/extra", "RW":true}),
+        );
         assert!(!configuration_matches(&actual, &expected));
     }
 
@@ -330,11 +447,19 @@ mod tests {
         let mut actual = inspected(&expected);
         actual["Id"] = json!("b".repeat(64));
         assert_eq!(ownership(&actual, &expected), Ownership::Foreign);
-        let observation = ContainerObservation { observed_at_unix_seconds: 100, status: RuntimeStatus::Ready, ownership: Ownership::Unknown, configuration_matches: Some(true) };
+        let observation = ContainerObservation {
+            observed_at_unix_seconds: 100,
+            status: RuntimeStatus::Ready,
+            ownership: Ownership::Unknown,
+            configuration_matches: Some(true),
+        };
         assert!(!observation.can_change(101, 10));
         assert_eq!(observation.age_seconds(105), Some(5));
         assert_eq!(observation.age_seconds(99), None);
-        let observation = ContainerObservation { ownership: Ownership::Verified, ..observation };
+        let observation = ContainerObservation {
+            ownership: Ownership::Verified,
+            ..observation
+        };
         assert!(observation.can_change(105, 10));
         assert!(!observation.can_change(111, 10));
     }

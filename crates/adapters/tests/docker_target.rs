@@ -59,11 +59,14 @@ async fn engine_architecture_is_normalized_for_template_platforms() {
         fs::write(
             &probe.executable,
             script.replace(
-                &format!(r#""Architecture":"{}""#, match std::env::consts::ARCH {
-                    "x86_64" => "amd64",
-                    "aarch64" => "arm64",
-                    _ => unreachable!(),
-                }),
+                &format!(
+                    r#""Architecture":"{}""#,
+                    match std::env::consts::ARCH {
+                        "x86_64" => "amd64",
+                        "aarch64" => "arm64",
+                        _ => unreachable!(),
+                    }
+                ),
                 &format!(r#""Architecture":"{reported}""#),
             ),
         )
@@ -73,7 +76,10 @@ async fn engine_architecture_is_normalized_for_template_platforms() {
         if reported == std::env::consts::ARCH {
             assert_eq!(diagnosis.platform, Check::Ready);
             assert_eq!(
-                diagnosis.target("target".into(), "scope".into()).unwrap().platform,
+                diagnosis
+                    .target("target".into(), "scope".into())
+                    .unwrap()
+                    .platform,
                 expected
             );
         }

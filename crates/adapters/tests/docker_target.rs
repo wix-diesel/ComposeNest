@@ -22,7 +22,7 @@ case "$1 $2" in
     if [ "$host" != 'unix:///tmp/docker-local.sock' ]; then exit 1; fi
     if [ -f engine-down ]; then exit 1; fi
     id=$(/bin/cat engine-id)
-    printf '{"ID":"%s","OSType":"linux","Architecture":"arm64"}\n' "$id" ;;
+    printf '{"ID":"%s","OSType":"linux","Architecture":"arm64","ServerVersion":"29.8.1"}\n' "$id" ;;
   'compose up')
     printf '%s\n' "$host" > changed-host ;;
   *) exit 1 ;;
@@ -161,6 +161,28 @@ async fn old_cli_version_is_reported_as_unsupported() {
     assert_eq!(report.compose, Check::Ready);
     assert_eq!(report.engine, Check::Ready);
     assert!(!report.is_ready());
+}
+
+#[tokio::test]
+async fn engine_version_uses_minimum_without_rejecting_newer_versions() {
+    let (_root, probe) = fixture();
+    let original = fs::read_to_string(&probe.executable).unwrap();
+    fs::write(
+        &probe.executable,
+        original.replace(r#""ServerVersion":"29.8.1""#, r#""ServerVersion":"28.0.0""#),
+    )
+    .unwrap();
+    let old = probe.diagnose(None).await;
+    assert_eq!(old.engine, Check::Unsupported);
+    assert_eq!(old.platform, Check::Ready);
+    assert!(!old.is_ready());
+
+    fs::write(
+        &probe.executable,
+        original.replace(r#""ServerVersion":"29.8.1""#, r#""ServerVersion":"30.0.0""#),
+    )
+    .unwrap();
+    assert_eq!(probe.diagnose(None).await.engine, Check::Ready);
 }
 
 #[tokio::test]

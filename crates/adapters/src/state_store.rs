@@ -513,7 +513,10 @@ mod tests {
             )?;
             Ok(())
         }).unwrap();
-        assert_eq!(worker.runtime_target("scope"), Err(StoreConflict::Duplicate));
+        assert_eq!(
+            worker.runtime_target("scope"),
+            Err(StoreConflict::Duplicate)
+        );
     }
 
     fn revision() -> TemplateRevision {

@@ -239,6 +239,17 @@ pub enum TargetError {
 }
 
 impl BoundDocker {
+    /// Reads from the registered Engine after confirming its identity.
+    pub(crate) async fn read(&self, args: &[OsString]) -> Result<CliOutcome, TargetError> {
+        let info = engine_info(&self.cli)
+            .await
+            .ok_or(TargetError::Unavailable)?;
+        if info.get("ID").and_then(Value::as_str) != Some(self.engine_id.as_str()) {
+            return Err(TargetError::Changed);
+        }
+        Ok(self.cli.run(CommandKind::Read, args, PROBE_TIMEOUT).await?)
+    }
+
     /// Verifies the Engine ID immediately before a potentially changing command.
     pub async fn change(
         &self,

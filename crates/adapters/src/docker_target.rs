@@ -168,8 +168,15 @@ impl DockerProbe {
         report.engine_id = Some(id.to_owned());
         report.engine = if registered.is_some_and(|target| target.engine_id != id) {
             Check::Changed
-        } else {
+        } else if info
+            .get("ServerVersion")
+            .and_then(Value::as_str)
+            .and_then(|version| parse_version(version.as_bytes(), ""))
+            .is_some_and(|version| version >= [29, 8, 1])
+        {
             Check::Ready
+        } else {
+            Check::Unsupported
         };
         let os = info.get("OSType").and_then(Value::as_str).unwrap_or("");
         let arch = info

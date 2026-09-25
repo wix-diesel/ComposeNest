@@ -52,6 +52,35 @@ esac
 }
 
 #[tokio::test]
+async fn engine_architecture_is_normalized_for_template_platforms() {
+    let (_root, probe) = fixture();
+    let script = fs::read_to_string(&probe.executable).unwrap();
+    for (reported, expected) in [("x86_64", "linux/amd64"), ("aarch64", "linux/arm64")] {
+        fs::write(
+            &probe.executable,
+            script.replace(
+                &format!(r#""Architecture":"{}""#, match std::env::consts::ARCH {
+                    "x86_64" => "amd64",
+                    "aarch64" => "arm64",
+                    _ => unreachable!(),
+                }),
+                &format!(r#""Architecture":"{reported}""#),
+            ),
+        )
+        .unwrap();
+        let diagnosis = probe.diagnose(None).await;
+        assert_eq!(diagnosis.observed_platform.as_deref(), Some(expected));
+        if reported == std::env::consts::ARCH {
+            assert_eq!(diagnosis.platform, Check::Ready);
+            assert_eq!(
+                diagnosis.target("target".into(), "scope".into()).unwrap().platform,
+                expected
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn diagnosis_distinguishes_missing_stopped_and_changed_engine() {
     let (root, probe) = fixture();
     let diagnosis = probe.diagnose(None).await;

@@ -176,3 +176,48 @@ fn missing_published_artifact_is_not_silently_regenerated() {
         Err(ArtifactError::Unavailable)
     ));
 }
+
+#[test]
+fn resumes_complete_staging_after_interrupted_publish() {
+    let (root, database) = fixture();
+    let store = ArtifactStore::new(root.path(), &database);
+    let target = store.publish("operation", input()).unwrap();
+    let staging = root.path().join("staging/operation");
+    fs::rename(&target, &staging).unwrap();
+    database
+        .write(|db| {
+            db.execute(
+                "UPDATE artifacts SET placement = 'staged' WHERE id = 'artifact'",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(store.publish("operation", input()).unwrap(), target);
+    assert!(!staging.exists());
+}
+
+#[test]
+fn regenerates_partial_staging_for_the_same_operation() {
+    let (root, database) = fixture();
+    let store = ArtifactStore::new(root.path(), &database);
+    let target = root.path().join("instances/instance/artifacts/artifact");
+    fs::create_dir_all(&target).unwrap();
+    assert!(store.publish("operation", input()).is_err());
+    fs::remove_dir(&target).unwrap();
+    let staging = root.path().join("staging/operation");
+    fs::create_dir_all(&staging).unwrap();
+    fs::write(staging.join("compose.yaml"), b"partial").unwrap();
+    fs::write(staging.join("foreign"), b"keep").unwrap();
+    assert!(matches!(
+        store.publish("operation", input()),
+        Err(ArtifactError::Conflict)
+    ));
+    assert_eq!(fs::read(staging.join("foreign")).unwrap(), b"keep");
+    fs::remove_file(staging.join("foreign")).unwrap();
+    assert_eq!(store.publish("operation", input()).unwrap(), target);
+    assert_eq!(
+        fs::read(target.join("compose.yaml")).unwrap(),
+        b"services: {}\n"
+    );
+}

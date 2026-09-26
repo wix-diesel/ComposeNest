@@ -153,17 +153,22 @@ impl<'a> ArtifactStore<'a> {
         }
         let staging = self.staging_dir()?.join(operation_id);
         if exists(&staging)? {
-            return Err(ArtifactError::Conflict);
-        }
-        create_private_dir(&staging)?;
-        for (relative, bytes) in &files {
-            let path = staging.join(relative);
-            if let Some(parent) = path.parent() {
-                create_missing_dirs(&staging, parent)?;
+            check_dir(&staging)?;
+            let mut found = BTreeMap::new();
+            collect_files(&staging, &staging, &mut found)?;
+            if found.keys().any(|path| !expected.contains_key(path)) {
+                return Err(ArtifactError::Conflict);
             }
-            let mut file = private_file(&path)?;
-            file.write_all(bytes)?;
-            file.sync_all()?;
+            if found != expected {
+                fs::remove_dir_all(&staging)?;
+                create_private_dir(&staging)?;
+                write_stage(&staging, &files)?;
+            } else {
+                flush_stage_files(&staging, &expected)?;
+            }
+        } else {
+            create_private_dir(&staging)?;
+            write_stage(&staging, &files)?;
         }
         sync_tree_dirs(&staging)?;
         if exists(&target)? {
@@ -376,6 +381,33 @@ fn private_file(path: &Path) -> Result<File, ArtifactError> {
     Ok(options.open(path)?)
 }
 
+fn write_stage(staging: &Path, files: &BTreeMap<String, Vec<u8>>) -> Result<(), ArtifactError> {
+    for (relative, bytes) in files {
+        let path = staging.join(relative);
+        if let Some(parent) = path.parent() {
+            create_missing_dirs(staging, parent)?;
+        }
+        let mut file = private_file(&path)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+    }
+    Ok(())
+}
+
+fn flush_stage_files(
+    staging: &Path,
+    expected: &BTreeMap<String, String>,
+) -> Result<(), ArtifactError> {
+    for relative in expected.keys() {
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(staging.join(relative))?
+            .sync_all()?;
+    }
+    Ok(())
+}
+
 fn collect_files(
     root: &Path,
     dir: &Path,
@@ -448,11 +480,18 @@ fn publish_directory(staging: &Path, target: &Path) -> io::Result<()> {
 #[cfg(windows)]
 fn publish_directory(staging: &Path, target: &Path) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::MoveFileW;
+    use windows_sys::Win32::Storage::FileSystem::{MOVEFILE_WRITE_THROUGH, MoveFileExW};
     let source: Vec<u16> = staging.as_os_str().encode_wide().chain([0]).collect();
     let destination: Vec<u16> = target.as_os_str().encode_wide().chain([0]).collect();
     // SAFETY: both NUL-terminated paths remain valid for this call.
-    if unsafe { MoveFileW(source.as_ptr(), destination.as_ptr()) } != 0 {
+    if unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_WRITE_THROUGH,
+        )
+    } != 0
+    {
         Ok(())
     } else {
         Err(io::Error::last_os_error())

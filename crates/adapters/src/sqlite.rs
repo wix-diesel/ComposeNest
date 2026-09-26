@@ -14,6 +14,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../../migrations/0002_state_store.sql"),
     include_str!("../../../migrations/0003_operation_journal.sql"),
     include_str!("../../../migrations/0004_volume_steps.sql"),
+    include_str!("../../../migrations/0005_artifact_publication.sql"),
 ];
 const DATABASE_FILE: &str = "composenest.sqlite";
 
@@ -338,7 +339,7 @@ mod tests {
                 Ok((foreign_keys, journal_mode, synchronous, version))
             })
             .unwrap();
-        assert_eq!(settings, (1, "wal".into(), 2, 4));
+        assert_eq!(settings, (1, "wal".into(), 2, MIGRATIONS.len() as i64));
         assert!(matches!(
             DatabaseWorker::start(root.path()),
             Err(DatabaseError::AlreadyRunning)
@@ -353,7 +354,7 @@ mod tests {
                     )?)
                 })
                 .unwrap(),
-            4
+            MIGRATIONS.len() as i64
         );
     }
 

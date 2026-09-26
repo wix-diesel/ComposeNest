@@ -31,6 +31,7 @@ impl RandomSource for SystemRandom {
     }
 }
 
+pub mod artifact_store;
 pub mod docker_cli;
 pub mod docker_observation;
 pub mod docker_target;

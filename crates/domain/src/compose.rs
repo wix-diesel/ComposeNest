@@ -135,7 +135,10 @@ pub fn generate(source: &ConfirmedCompose<'_>) -> Result<ComposeModel, ComposeEr
             .execution_image
             .split_once("@sha256:")
             .is_some_and(|(name, digest)| {
-                name == repository
+                (name == repository
+                    || name == format!("docker.io/{repository}")
+                    || (!repository.contains('/')
+                        && name == format!("docker.io/library/{repository}")))
                     && digest.len() == 64
                     && digest.bytes().all(|b| b.is_ascii_hexdigit())
             });

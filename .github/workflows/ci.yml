@@ -58,6 +58,15 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
+  compose-contract:
+    name: Compose config and container contract
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - run: docker compose version
+      - run: cargo test -p composenest-domain --test compose docker_config_and_container_preserve_actual_values -- --ignored
+
   rust-test:
     name: Rust tests
     runs-on: ubuntu-24.04

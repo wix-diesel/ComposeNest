@@ -51,14 +51,22 @@ esac
     (root, probe)
 }
 
+fn replace_executable(probe: &DockerProbe, script: &str) {
+    // Publish a complete script atomically so a concurrent exec never sees a write-open file.
+    let staged = probe.directory.join("docker mock staged.sh");
+    fs::write(&staged, script).expect("staged script");
+    fs::set_permissions(&staged, fs::Permissions::from_mode(0o700)).expect("permissions");
+    fs::rename(staged, &probe.executable).expect("publish script");
+}
+
 #[tokio::test]
 async fn engine_architecture_is_normalized_for_template_platforms() {
     for (reported, expected) in [("x86_64", "linux/amd64"), ("aarch64", "linux/arm64")] {
         let (_root, probe) = fixture();
         let script = fs::read_to_string(&probe.executable).unwrap();
-        fs::write(
-            &probe.executable,
-            script.replace(
+        replace_executable(
+            &probe,
+            &script.replace(
                 &format!(
                     r#""Architecture":"{}""#,
                     match std::env::consts::ARCH {
@@ -69,8 +77,7 @@ async fn engine_architecture_is_normalized_for_template_platforms() {
                 ),
                 &format!(r#""Architecture":"{reported}""#),
             ),
-        )
-        .unwrap();
+        );
         let diagnosis = probe.diagnose(None).await;
         assert_eq!(diagnosis.observed_platform.as_deref(), Some(expected));
         if reported == std::env::consts::ARCH {
@@ -139,14 +146,13 @@ async fn fixed_target_rejects_change_after_engine_replacement() {
 #[tokio::test]
 async fn remote_context_is_rejected_before_engine_access() {
     let (root, probe) = fixture();
-    fs::write(
-        &probe.executable,
-        fs::read_to_string(&probe.executable).unwrap().replace(
+    replace_executable(
+        &probe,
+        &fs::read_to_string(&probe.executable).unwrap().replace(
             "unix:///tmp/docker-local.sock\"\\n'",
             "ssh://remote.example\"\\n'",
         ),
-    )
-    .expect("remote context");
+    );
     let result = probe.diagnose(None).await;
     assert_eq!(result.endpoint, Check::Unsupported);
     assert_eq!(result.engine, Check::Unavailable);
@@ -157,11 +163,10 @@ async fn remote_context_is_rejected_before_engine_access() {
 async fn old_cli_version_is_reported_as_unsupported() {
     let (_root, probe) = fixture();
     let script = fs::read_to_string(&probe.executable).unwrap();
-    fs::write(
-        &probe.executable,
-        script.replace("Docker version 29.8.1", "Docker version 28.0.0"),
-    )
-    .expect("old CLI");
+    replace_executable(
+        &probe,
+        &script.replace("Docker version 29.8.1", "Docker version 28.0.0"),
+    );
     let report = probe.diagnose(None).await;
     assert_eq!(report.cli, Check::Unsupported);
     assert_eq!(report.compose, Check::Ready);
@@ -173,21 +178,19 @@ async fn old_cli_version_is_reported_as_unsupported() {
 async fn engine_version_uses_minimum_without_rejecting_newer_versions() {
     let (_root, probe) = fixture();
     let original = fs::read_to_string(&probe.executable).unwrap();
-    fs::write(
-        &probe.executable,
-        original.replace(r#""ServerVersion":"29.8.1""#, r#""ServerVersion":"28.0.0""#),
-    )
-    .unwrap();
+    replace_executable(
+        &probe,
+        &original.replace(r#""ServerVersion":"29.8.1""#, r#""ServerVersion":"28.0.0""#),
+    );
     let old = probe.diagnose(None).await;
     assert_eq!(old.engine, Check::Unsupported);
     assert_eq!(old.platform, Check::Ready);
     assert!(!old.is_ready());
 
-    fs::write(
-        &probe.executable,
-        original.replace(r#""ServerVersion":"29.8.1""#, r#""ServerVersion":"30.0.0""#),
-    )
-    .unwrap();
+    replace_executable(
+        &probe,
+        &original.replace(r#""ServerVersion":"29.8.1""#, r#""ServerVersion":"30.0.0""#),
+    );
     assert_eq!(probe.diagnose(None).await.engine, Check::Ready);
 }
 
@@ -200,14 +203,13 @@ async fn registered_target_ignores_later_context_switch() {
         .target("target".into(), "scope".into())
         .unwrap();
     let script = fs::read_to_string(&probe.executable).unwrap();
-    fs::write(
-        &probe.executable,
-        script.replace(
+    replace_executable(
+        &probe,
+        &script.replace(
             "unix:///tmp/docker-local.sock\"\\n'",
             "ssh://remote.example\"\\n'",
         ),
-    )
-    .expect("switch context");
+    );
     let diagnosis = probe.diagnose(Some(&target)).await;
     assert!(diagnosis.is_ready());
     assert_eq!(

@@ -37,12 +37,21 @@ fn inputs() -> BTreeMap<String, InputValue> {
     ])
 }
 
+fn bind_storage(path: &str) -> Storage {
+    Storage::Bind(
+        std::env::temp_dir()
+            .join(path)
+            .to_string_lossy()
+            .into_owned(),
+    )
+}
+
 #[test]
 fn each_snapshot_version_uses_its_own_storage_target_and_preserves_values() {
     let snapshot = snapshot();
     let inputs = inputs();
     let ports = BTreeMap::from([("database".into(), 15432)]);
-    let storage = BTreeMap::from([("data".into(), Storage::Bind("/tmp/cn-data".into()))]);
+    let storage = BTreeMap::from([("data".into(), bind_storage("cn-data"))]);
     for (version, target) in [
         ("17", "/var/lib/postgresql/data"),
         ("18", "/var/lib/postgresql"),
@@ -159,7 +168,7 @@ fn rejects_stale_slots_inputs_and_unverified_image_or_storage() {
         Err(ComposeError::InvalidAllocation)
     );
     ports.remove("deleted-port");
-    storage.insert("deleted-slot".into(), Storage::Bind("/tmp/stale".into()));
+    storage.insert("deleted-slot".into(), bind_storage("stale"));
     assert_eq!(
         make(&inputs, &ports, &storage, &digest),
         Err(ComposeError::InvalidAllocation)
@@ -205,7 +214,7 @@ fn redis_secret_is_preserved_in_environment_and_exec_argv() {
     let secret = "$' \"日本語";
     let inputs = BTreeMap::from([("password".into(), InputValue::String(secret.into()))]);
     let ports = BTreeMap::from([("redis".into(), 16379)]);
-    let storage = BTreeMap::from([("data".into(), Storage::Bind("/tmp/redis-data".into()))]);
+    let storage = BTreeMap::from([("data".into(), bind_storage("redis-data"))]);
     let digest = format!("redis@sha256:{}", "a".repeat(64));
     let model = generate(&ConfirmedCompose {
         snapshot: &snapshot,
@@ -274,7 +283,7 @@ fn removed_version_fields_are_never_inherited() {
     let snapshot = resolve_template(manifest, &definitions).unwrap();
     let inputs = inputs();
     let ports = BTreeMap::from([("database".into(), 15432)]);
-    let storage = BTreeMap::from([("data".into(), Storage::Bind("/tmp/cn-data".into()))]);
+    let storage = BTreeMap::from([("data".into(), bind_storage("cn-data"))]);
     let digest = format!("postgres@sha256:{}", "a".repeat(64));
     let model = generate(&ConfirmedCompose {
         snapshot: &snapshot,
@@ -308,7 +317,7 @@ fn omitted_healthcheck_timing_uses_snapshot_rule() {
     let snapshot = resolve_template(manifest, &[("8.2".into(), version)]).unwrap();
     let inputs = BTreeMap::from([("password".into(), InputValue::String("secret".into()))]);
     let ports = BTreeMap::from([("redis".into(), 16379)]);
-    let storage = BTreeMap::from([("data".into(), Storage::Bind("/tmp/redis-data".into()))]);
+    let storage = BTreeMap::from([("data".into(), bind_storage("redis-data"))]);
     let digest = format!("redis@sha256:{}", "a".repeat(64));
     let model = generate(&ConfirmedCompose {
         snapshot: &snapshot,
@@ -367,13 +376,15 @@ fn docker_config_and_container_preserve_actual_values() {
     let secret = "$' \"日本語";
     let inputs = BTreeMap::from([("password".into(), InputValue::String(secret.into()))]);
     let ports = BTreeMap::from([("redis".into(), 16379)]);
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let instance_id = InstanceId::from_u128(nonce ^ ((std::process::id() as u128) << 96));
     let directory = std::env::temp_dir().join(format!(
         "cn-compose-{}-{}",
         std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        nonce
     ));
     fs::create_dir(&directory).unwrap();
     let data = directory.join("data");
@@ -382,7 +393,7 @@ fn docker_config_and_container_preserve_actual_values() {
     let model = generate(&ConfirmedCompose {
         snapshot: &snapshot,
         version: "8.2",
-        instance_id: InstanceId::from_u128(42),
+        instance_id,
         scope_id: "scope-a",
         spec_revision: 1,
         inputs: &inputs,

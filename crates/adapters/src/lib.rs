@@ -38,4 +38,5 @@ pub mod host_ports;
 pub mod operation_journal;
 pub mod sqlite;
 pub mod state_store;
+pub mod storage;
 pub mod template_package;

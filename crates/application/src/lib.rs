@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 pub mod host_ports;
 pub mod operation_journal;
 pub mod state_store;
+pub mod storage;
 pub mod template_catalog;
 
 /// The first version of the desktop IPC contract.

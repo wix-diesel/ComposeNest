@@ -72,13 +72,7 @@ pub async fn ensure_image<S: ImageResolutionStore>(
         .await?
         .ok_or(ImageError::Unresolved)?;
     validate_inspection(&inspected, platform, storage_destinations)?;
-    let repository = requested.split('@').next().unwrap_or(requested);
-    let repository = repository
-        .rsplit_once(':')
-        .filter(|(_, tag)| !tag.contains('/'))
-        .map_or(repository, |(name, _)| name);
-    let digest =
-        select_digest(repository, &inspected.repo_digests).ok_or(ImageError::Unresolved)?;
+    let digest = select_digest(requested, &inspected.repo_digests).ok_or(ImageError::Unresolved)?;
     // A concurrently moved tag cannot substitute a different image for the selected digest.
     let pinned = inspect(docker, &digest)
         .await?
@@ -117,12 +111,18 @@ fn validate_inspection(
     validate_image(&image.id, &image.platform, platform, &image.volumes, slots)
 }
 
-fn select_digest(repository: &str, digests: &[String]) -> Option<String> {
+fn select_digest(requested: &str, digests: &[String]) -> Option<String> {
+    let (repository, requested_hash) = requested.split_once('@').unwrap_or((requested, ""));
+    let repository = repository
+        .rsplit_once(':')
+        .filter(|(_, tag)| !tag.contains('/'))
+        .map_or(repository, |(name, _)| name);
     digests
         .iter()
         .find(|candidate| {
             candidate.rsplit_once('@').is_some_and(|(name, hash)| {
                 valid_hash(hash)
+                    && (requested_hash.is_empty() || hash == requested_hash)
                     && (name == repository
                         || name == format!("docker.io/{repository}")
                         || (repository.find('/').is_none()
@@ -211,11 +211,18 @@ mod tests {
     #[test]
     fn only_selects_digest_for_requested_repository() {
         let hash = format!("sha256:{}", "a".repeat(64));
+        let other_hash = format!("sha256:{}", "b".repeat(64));
         let values = vec![
-            format!("other@{hash}"),
             format!("docker.io/library/redis@{hash}"),
+            format!("other@{other_hash}"),
+            format!("docker.io/library/redis@{other_hash}"),
         ];
-        assert_eq!(select_digest("redis", &values), Some(values[1].clone()));
+        assert_eq!(select_digest("redis", &values), Some(values[0].clone()));
+        assert_eq!(
+            select_digest(&format!("redis@{other_hash}"), &values),
+            Some(values[2].clone())
+        );
+        assert_eq!(select_digest("redis@sha256:cccc", &values), None);
         assert_eq!(select_digest("postgres", &values), None);
     }
 }

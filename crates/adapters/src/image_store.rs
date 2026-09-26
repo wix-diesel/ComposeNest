@@ -49,10 +49,13 @@ impl ImageResolutionStore for DatabaseWorker {
                  JOIN template_snapshots s ON s.instance_id = i.id \
                  JOIN instance_specs spec ON spec.instance_id = i.id \
                  JOIN json_each(s.canonical_json, '$.versions') v \
-                 WHERE i.id = ?1 AND spec.revision = ?2 AND v.value ->> '$.key' = spec.selected_version \
-                 AND EXISTS (SELECT 1 FROM operations o JOIN operation_steps step ON step.operation_id = o.id \
-                     WHERE o.id = ?3 AND o.instance_id = i.id AND step.command_kind = 'resolve_image' \
-                     AND step.expected_result = 'image_resolved')",
+                 JOIN operations o ON o.id = ?3 AND o.instance_id = i.id \
+                     AND o.status IN ('Accepted', 'Executing') \
+                     AND COALESCE(o.new_spec_revision, o.old_spec_revision) = spec.revision \
+                 JOIN operation_steps step ON step.operation_id = o.id \
+                     AND step.attempt = o.attempt AND step.outcome IS NULL \
+                     AND step.command_kind = 'resolve_image' AND step.expected_result = 'image_resolved' \
+                 WHERE i.id = ?1 AND spec.revision = ?2 AND v.value ->> '$.key' = spec.selected_version",
                 params![resolution.instance_id, resolution.spec_revision as i64, resolution.operation_id],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             ).optional()?;

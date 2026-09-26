@@ -517,7 +517,7 @@ mod tests {
         source.template_revision_id = template.id.clone();
         worker.commit_instance(&source).unwrap();
         worker.write(|db| {
-            db.execute("INSERT INTO operations (id, instance_id, kind, phase, expected_instance_revision) VALUES ('op', 'source', 'create', 'resolve_image', 1)", [])?;
+            db.execute("INSERT INTO operations (id, instance_id, kind, status, phase, expected_instance_revision, new_spec_revision) VALUES ('op', 'source', 'create', 'Executing', 'resolve_image', 1, 1)", [])?;
             db.execute("INSERT INTO operation_steps (operation_id, sequence, attempt, command_kind, resource_id, expected_result) VALUES ('op', 1, 1, 'resolve_image', 'source', 'image_resolved')", [])?;
             Ok(())
         }).unwrap();
@@ -533,6 +533,19 @@ mod tests {
         };
         worker.record_image_resolution(&resolution).unwrap();
         worker.record_image_resolution(&resolution).unwrap();
+        worker
+            .write(|db| {
+                db.execute(
+                    "UPDATE operations SET status = 'Failed' WHERE id = 'op'",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            worker.record_image_resolution(&resolution),
+            Err(StoreConflict::InvalidInput)
+        );
         let mut changed = resolution.clone();
         changed.digest = format!("docker.io/library/redis@sha256:{}", "b".repeat(64));
         assert_eq!(

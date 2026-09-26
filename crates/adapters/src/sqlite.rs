@@ -13,6 +13,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../../migrations/0001_initial.sql"),
     include_str!("../../../migrations/0002_state_store.sql"),
     include_str!("../../../migrations/0003_operation_journal.sql"),
+    include_str!("../../../migrations/0004_volume_steps.sql"),
 ];
 const DATABASE_FILE: &str = "composenest.sqlite";
 
@@ -335,7 +336,7 @@ mod tests {
                 Ok((foreign_keys, journal_mode, synchronous, version))
             })
             .unwrap();
-        assert_eq!(settings, (1, "wal".into(), 2, 3));
+        assert_eq!(settings, (1, "wal".into(), 2, 4));
         assert!(matches!(
             DatabaseWorker::start(root.path()),
             Err(DatabaseError::AlreadyRunning)
@@ -350,8 +351,60 @@ mod tests {
                     )?)
                 })
                 .unwrap(),
-            3
+            4
         );
+    }
+
+    #[test]
+    fn volume_step_migration_preserves_existing_journal_rows() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        apply_migrations(&mut connection, 0, &MIGRATIONS[..3]).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO management_scopes (id, owner_id, root_identity)
+                 VALUES ('scope', 'owner', 'root');
+                 INSERT INTO runtime_targets (id, scope_id, endpoint, engine_id, platform)
+                 VALUES ('target', 'scope', 'unix:///tmp/docker.sock', 'engine', 'linux/amd64');
+                 INSERT INTO instances
+                 (id, scope_id, target_id, display_name, normalized_name, project_name)
+                 VALUES ('instance', 'scope', 'target', 'Instance', 'Instance', 'cn-instance');",
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO operations (id, instance_id, kind, phase, expected_instance_revision)
+                 VALUES ('op', 'instance', 'create', 'accepted', 1)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO operation_steps
+                 (operation_id, sequence, attempt, command_kind, resource_id, expected_result)
+                 VALUES ('op', 1, 1, 'compose_create', 'container-id', 'container_created')",
+                [],
+            )
+            .unwrap();
+
+        apply_migrations(&mut connection, 3, MIGRATIONS).unwrap();
+
+        let row: (String, String) = connection
+            .query_row(
+                "SELECT command_kind, expected_result FROM operation_steps
+                 WHERE operation_id = 'op' AND sequence = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(row, ("compose_create".into(), "container_created".into()));
+        connection
+            .execute(
+                "INSERT INTO operation_steps
+                 (operation_id, sequence, attempt, command_kind, resource_id, expected_result)
+                 VALUES ('op', 2, 1, 'create_volume', 'volume-name', 'volume_created')",
+                [],
+            )
+            .unwrap();
     }
 
     #[test]

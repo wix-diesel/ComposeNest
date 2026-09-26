@@ -385,6 +385,7 @@ name = "composenest-domain"
 version = "0.1.0"
 dependencies = [
  "regex",
+ "serde_json",
  "unicode-normalization",
  "yaml-rust2",
 ]

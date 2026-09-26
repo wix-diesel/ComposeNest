@@ -192,6 +192,23 @@ fn insert_instance(
                 allocation.resource_identity, allocation.ownership_evidence],
         )?;
     }
+    // A same-version clone inherits only evidence for the same requested image and Engine target.
+    if let Some(source) = &instance.clone_source_id {
+        transaction.execute(
+            "INSERT INTO image_resolutions \
+             SELECT ?1, 1, r.image_ref, r.digest, r.image_id, r.platform, r.first_operation_id \
+             FROM image_resolutions r JOIN instances parent ON parent.id = r.instance_id \
+             JOIN instance_specs original ON original.instance_id = parent.id AND original.revision = r.spec_revision \
+             JOIN template_snapshots copied ON copied.instance_id = ?1 \
+             JOIN json_each(copied.canonical_json, '$.versions') v \
+             WHERE parent.id = ?2 AND parent.target_id = ?3 \
+             AND original.revision = (SELECT MAX(revision) FROM instance_specs WHERE instance_id = parent.id) \
+             AND original.selected_version = ?4 AND v.value ->> '$.key' = ?4 \
+             AND v.value ->> '$.definition.image' = r.image_ref \
+             AND r.platform = (SELECT platform FROM runtime_targets WHERE id = ?3)",
+            params![instance.id, source, instance.target_id, instance.selected_version],
+        )?;
+    }
     transaction.commit()?;
     Ok(())
 }
@@ -475,6 +492,79 @@ mod tests {
             )
             .unwrap();
         (root, worker)
+    }
+
+    #[test]
+    fn image_resolution_is_immutable_and_same_version_clone_inherits_it() {
+        use composenest_application::image_resolution::{ImageResolution, ImageResolutionStore};
+        let (_root, worker) = store();
+        worker
+            .write(|db| {
+                db.execute(
+                    "UPDATE runtime_targets SET platform = 'linux/amd64' WHERE id = 'target'",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let mut template = revision();
+        template.canonical_json = r#"{"manifest":{"id":"redis","schemaVersion":1,"templateVersion":"1"},"normalization":"template-normalization-v1","versions":[{"key":"8","definition":{"image":"redis:8"}},{"key":"9","definition":{"image":"redis:9"}}]}"#.into();
+        template.semantic_hash =
+            format!("{:x}", Sha256::digest(template.canonical_json.as_bytes()));
+        template.id = format!("redis:1:{}", template.semantic_hash);
+        worker.register_template(&template).unwrap();
+        let mut source = instance("source", "Source", 13000);
+        source.template_revision_id = template.id.clone();
+        worker.commit_instance(&source).unwrap();
+        worker.write(|db| {
+            db.execute("INSERT INTO operations (id, instance_id, kind, status, phase, expected_instance_revision, new_spec_revision) VALUES ('op', 'source', 'create', 'Executing', 'resolve_image', 1, 1)", [])?;
+            db.execute("INSERT INTO operation_steps (operation_id, sequence, attempt, command_kind, resource_id, expected_result) VALUES ('op', 1, 1, 'resolve_image', 'source', 'image_resolved')", [])?;
+            Ok(())
+        }).unwrap();
+        let id = format!("sha256:{}", "a".repeat(64));
+        let resolution = ImageResolution {
+            instance_id: "source".into(),
+            spec_revision: 1,
+            requested: "redis:8".into(),
+            digest: format!("docker.io/library/redis@{id}"),
+            image_id: id,
+            platform: "linux/amd64".into(),
+            operation_id: "op".into(),
+        };
+        worker.record_image_resolution(&resolution).unwrap();
+        worker.record_image_resolution(&resolution).unwrap();
+        worker
+            .write(|db| {
+                db.execute(
+                    "UPDATE operations SET status = 'Failed' WHERE id = 'op'",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            worker.record_image_resolution(&resolution),
+            Err(StoreConflict::InvalidInput)
+        );
+        let mut changed = resolution.clone();
+        changed.digest = format!("docker.io/library/redis@sha256:{}", "b".repeat(64));
+        assert_eq!(
+            worker.record_image_resolution(&changed),
+            Err(StoreConflict::InvalidInput)
+        );
+        let mut same = instance("clone", "Clone", 13001);
+        same.clone_source_id = Some("source".into());
+        same.template_revision_id = template.id.clone();
+        worker.commit_instance(&same).unwrap();
+        let inherited = worker.image_resolution("clone", 1).unwrap().unwrap();
+        assert_eq!(inherited.digest, resolution.digest);
+        assert_eq!(inherited.requested, "redis:8");
+        let mut different = instance("next", "Next", 13002);
+        different.clone_source_id = Some("source".into());
+        different.selected_version = "9".into();
+        different.template_revision_id = template.id.clone();
+        worker.commit_instance(&different).unwrap();
+        assert_eq!(worker.image_resolution("next", 1).unwrap(), None);
     }
 
     #[test]

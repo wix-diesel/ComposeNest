@@ -193,7 +193,7 @@ pub fn generate(source: &ConfirmedCompose<'_>) -> Result<ComposeModel, ComposeEr
     let timing = [
         integer(optional(health, "intervalSeconds"), 5),
         integer(optional(health, "timeoutSeconds"), 3),
-        integer(optional(health, "startPeriodSeconds"), 0),
+        integer(optional(health, "startPeriodSeconds"), 10),
         integer(optional(health, "retries"), 12),
     ];
     let mut ports = Vec::new();

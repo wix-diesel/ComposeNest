@@ -381,11 +381,8 @@ fn docker_config_and_container_preserve_actual_values() {
         .unwrap()
         .as_nanos();
     let instance_id = InstanceId::from_u128(nonce ^ ((std::process::id() as u128) << 96));
-    let directory = std::env::temp_dir().join(format!(
-        "cn-compose-{}-{}",
-        std::process::id(),
-        nonce
-    ));
+    let directory =
+        std::env::temp_dir().join(format!("cn-compose-{}-{}", std::process::id(), nonce));
     fs::create_dir(&directory).unwrap();
     let data = directory.join("data");
     fs::create_dir(&data).unwrap();

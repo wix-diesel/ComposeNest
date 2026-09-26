@@ -58,12 +58,14 @@ impl DatabaseWorker {
         let thread = thread::Builder::new()
             .name("composenest-db".into())
             .spawn(move || match open_database(&root) {
-                Ok((path, mut connection, _lock)) => {
+                Ok((path, mut connection, lock)) => {
                     if ready_sender.send(Ok(path)).is_ok() {
                         for job in receiver {
                             job(&mut connection);
                         }
                     }
+                    // Release the advisory lock before the thread reports shutdown.
+                    let _ = lock.unlock();
                 }
                 Err(error) => {
                     let _ = ready_sender.send(Err(error));

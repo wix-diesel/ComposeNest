@@ -3,12 +3,12 @@
 use std::{
     collections::BTreeSet,
     ffi::OsString,
-    net::{Ipv4Addr, SocketAddrV4},
+    net::Ipv4Addr,
     time::{Duration, Instant, SystemTime},
 };
 
 #[cfg(not(windows))]
-use std::net::TcpListener;
+use std::net::{SocketAddrV4, TcpListener};
 
 use composenest_application::host_ports::{
     self, PortCheck, PortCursor, PortInspector, PortPlan, PortReason, PortSlot,

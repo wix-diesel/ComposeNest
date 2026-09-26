@@ -252,6 +252,7 @@ fn removed_version_fields_are_never_inherited() {
     )
     .unwrap();
     let older = include_str!("../../../docs/template-examples/postgresql/versions/17.yaml")
+        .replace("\r\n", "\n")
         .replace(
             "  username:\n",
             "  legacy:\n    label: Legacy\n    type: string\n  username:\n",

@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod host_ports;
 pub mod image_resolution;
+pub mod named_volumes;
 pub mod operation_journal;
 pub mod state_store;
 pub mod storage;

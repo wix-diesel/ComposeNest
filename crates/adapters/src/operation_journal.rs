@@ -1,13 +1,13 @@
 //! SQLite operation journal and durable request receipts.
 
 use composenest_application::operation_journal::{
-    OperationIntent, OperationJournal, OperationKind, OperationStatus, RequestReceipt, StepIntent,
-    StepOutcome,
+    ExpectedResult, OperationIntent, OperationJournal, OperationKind, OperationStatus,
+    RequestReceipt, StepCommand, StepIntent, StepOutcome, StepRecord,
 };
 use composenest_application::state_store::StoreConflict;
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, Error, OptionalExtension, TransactionBehavior, params};
 
-use crate::sqlite::DatabaseWorker;
+use crate::sqlite::{DatabaseError, DatabaseWorker};
 use crate::state_store::map_error;
 
 fn kind_name(kind: OperationKind) -> &'static str {
@@ -33,6 +33,44 @@ fn status_name(status: OperationStatus) -> &'static str {
         OperationStatus::OutcomeUnknown => "OutcomeUnknown",
         OperationStatus::Succeeded => "Succeeded",
         OperationStatus::Abandoned => "Abandoned",
+    }
+}
+
+fn step_command(value: &str) -> Option<StepCommand> {
+    Some(match value {
+        "generate_artifact" => StepCommand::GenerateArtifact,
+        "resolve_image" => StepCommand::ResolveImage,
+        "create_volume" => StepCommand::CreateVolume,
+        "compose_create" => StepCommand::ComposeCreate,
+        "compose_start" => StepCommand::ComposeStart,
+        "compose_stop" => StepCommand::ComposeStop,
+        "remove_container" => StepCommand::RemoveContainer,
+        "observe" => StepCommand::Observe,
+        _ => return None,
+    })
+}
+
+fn expected_result(value: &str) -> Option<ExpectedResult> {
+    Some(match value {
+        "artifact_ready" => ExpectedResult::ArtifactReady,
+        "image_resolved" => ExpectedResult::ImageResolved,
+        "volume_created" => ExpectedResult::VolumeCreated,
+        "container_created" => ExpectedResult::ContainerCreated,
+        "container_running" => ExpectedResult::ContainerRunning,
+        "container_stopped" => ExpectedResult::ContainerStopped,
+        "container_absent" => ExpectedResult::ContainerAbsent,
+        "state_observed" => ExpectedResult::StateObserved,
+        _ => return None,
+    })
+}
+
+fn step_outcome(value: Option<String>) -> Option<Option<StepOutcome>> {
+    match value.as_deref() {
+        None => Some(None),
+        Some("succeeded") => Some(Some(StepOutcome::Succeeded)),
+        Some("failed") => Some(Some(StepOutcome::Failed)),
+        Some("unknown") => Some(Some(StepOutcome::Unknown)),
+        _ => None,
     }
 }
 
@@ -193,6 +231,81 @@ impl OperationJournal for DatabaseWorker {
         })
         .map_err(map_error)
         .and_then(|count| if count == 1 { Ok(()) } else { Err(StoreConflict::Missing) })
+    }
+
+    fn steps_for_resource(
+        &self,
+        operation_id: &str,
+        resource_id: &str,
+    ) -> Result<Vec<StepRecord>, StoreConflict> {
+        let (operation_id, resource_id) = (operation_id.to_owned(), resource_id.to_owned());
+        self.read(move |db| {
+            let mut query = db.prepare(
+                "SELECT o.instance_id, r.scope_id, s.sequence, s.attempt, s.command_kind,
+                        s.resource_id, s.expected_result, s.outcome
+                 FROM operation_steps s
+                 JOIN operations o ON o.id = s.operation_id
+                 JOIN request_receipts r ON r.operation_id = o.id
+                 WHERE s.operation_id = ?1 AND s.resource_id = ?2
+                 ORDER BY s.sequence",
+            )?;
+            let rows = query.query_map(params![operation_id, resource_id], |row| {
+                let instance_id = row.get::<_, String>(0)?;
+                let scope_id = row.get::<_, String>(1)?;
+                let sequence = row.get::<_, i64>(2)?;
+                let attempt = row.get::<_, i64>(3)?;
+                let command = row.get::<_, String>(4)?;
+                let resource_id = row.get::<_, String>(5)?;
+                let expected = row.get::<_, String>(6)?;
+                let outcome = row.get::<_, Option<String>>(7)?;
+                Ok((
+                    instance_id,
+                    scope_id,
+                    sequence,
+                    attempt,
+                    command,
+                    resource_id,
+                    expected,
+                    outcome,
+                ))
+            })?;
+            let mut records = Vec::new();
+            for row in rows {
+                let (
+                    instance_id,
+                    scope_id,
+                    sequence,
+                    attempt,
+                    command,
+                    resource_id,
+                    expected,
+                    outcome,
+                ) = row?;
+                let Some(command_kind) = step_command(&command) else {
+                    return Err(DatabaseError::Sqlite(Error::InvalidQuery));
+                };
+                let Some(expected_result) = expected_result(&expected) else {
+                    return Err(DatabaseError::Sqlite(Error::InvalidQuery));
+                };
+                let Some(outcome) = step_outcome(outcome) else {
+                    return Err(DatabaseError::Sqlite(Error::InvalidQuery));
+                };
+                records.push(StepRecord {
+                    instance_id,
+                    scope_id,
+                    sequence: u64::try_from(sequence)
+                        .map_err(|_| DatabaseError::Sqlite(Error::InvalidQuery))?,
+                    attempt: u64::try_from(attempt)
+                        .map_err(|_| DatabaseError::Sqlite(Error::InvalidQuery))?,
+                    command_kind,
+                    resource_id,
+                    expected_result,
+                    outcome,
+                });
+            }
+            Ok(records)
+        })
+        .map_err(map_error)
     }
 
     fn finish_step(

@@ -63,6 +63,7 @@ pub struct StepIntent {
 pub enum StepCommand {
     GenerateArtifact,
     ResolveImage,
+    CreateVolume,
     ComposeCreate,
     ComposeStart,
     ComposeStop,
@@ -76,6 +77,7 @@ impl StepCommand {
         match self {
             Self::GenerateArtifact => "generate_artifact",
             Self::ResolveImage => "resolve_image",
+            Self::CreateVolume => "create_volume",
             Self::ComposeCreate => "compose_create",
             Self::ComposeStart => "compose_start",
             Self::ComposeStop => "compose_stop",
@@ -90,6 +92,7 @@ impl StepCommand {
 pub enum ExpectedResult {
     ArtifactReady,
     ImageResolved,
+    VolumeCreated,
     ContainerCreated,
     ContainerRunning,
     ContainerStopped,
@@ -103,6 +106,7 @@ impl ExpectedResult {
         match self {
             Self::ArtifactReady => "artifact_ready",
             Self::ImageResolved => "image_resolved",
+            Self::VolumeCreated => "volume_created",
             Self::ContainerCreated => "container_created",
             Self::ContainerRunning => "container_running",
             Self::ContainerStopped => "container_stopped",
@@ -131,8 +135,29 @@ impl StepOutcome {
     }
 }
 
+/// One persisted effect intent and its observed outcome.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StepRecord {
+    /// Instance whose operation owns this step.
+    pub instance_id: String,
+    /// Management scope recorded with the accepted request.
+    pub scope_id: String,
+    /// Monotonic step number within the operation.
+    pub sequence: u64,
+    /// Attempt number for this operation.
+    pub attempt: u64,
+    /// Fixed command category.
+    pub command_kind: StepCommand,
+    /// Stable resource identifier.
+    pub resource_id: String,
+    /// Expected observable outcome.
+    pub expected_result: ExpectedResult,
+    /// Observed outcome, or None if the process stopped before reconciliation.
+    pub outcome: Option<StepOutcome>,
+}
+
 /// Stores operation progress before and after external effects.
-pub trait OperationJournal {
+pub trait OperationJournal: Send + Sync {
     /// Atomically accepts an operation and its receipt, or returns the matching prior receipt.
     fn accept(
         &self,
@@ -156,6 +181,13 @@ pub trait OperationJournal {
 
     /// Records intent before the external action is sent.
     fn record_step(&self, step: &StepIntent) -> Result<(), StoreConflict>;
+
+    /// Lists recorded effects for one operation and resource in sequence order.
+    fn steps_for_resource(
+        &self,
+        operation_id: &str,
+        resource_id: &str,
+    ) -> Result<Vec<StepRecord>, StoreConflict>;
 
     /// Records the observed result of one step once.
     fn finish_step(

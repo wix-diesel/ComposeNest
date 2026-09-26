@@ -1,5 +1,7 @@
 //! Typed persistence boundary for confirmed state and resource ledgers.
 
+use composenest_domain::instance::{Initialization, StorageOwnership, StoragePresence};
+
 /// The persisted default for newly created instances.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StorageMethod {
@@ -112,14 +114,35 @@ pub struct PortAllocation {
 }
 
 /// One independently owned writable data resource.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StorageAllocation {
     /// Stable template slot.
     pub slot: String,
     /// Canonical path or Docker volume identity, validated by the caller.
     pub resource_identity: String,
-    /// Ownership proof outside the writable data resource.
+    /// Ownership proof outside writable data, such as a bind proof hash or volume operation ID.
     pub ownership_evidence: String,
+}
+
+/// One persisted storage allocation with its current observed state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StorageLedgerEntry {
+    /// Immutable instance ID.
+    pub instance_id: String,
+    /// Management scope that owns the instance.
+    pub scope_id: String,
+    /// Stable template slot.
+    pub slot: String,
+    /// Persisted storage method.
+    pub method: StorageMethod,
+    /// Immutable resource identity and ownership evidence.
+    pub allocation: StorageAllocation,
+    /// Whether the data must be retained after retirement.
+    pub ownership: StorageOwnership,
+    /// Last verified existence state.
+    pub presence: StoragePresence,
+    /// Highest initialization state observed so far.
+    pub initialization: Initialization,
 }
 
 /// Expected persistence conflicts and rejected input.
@@ -140,7 +163,7 @@ pub enum StoreConflict {
 }
 
 /// Atomic persistence operations needed by instance and template use cases.
-pub trait StateStore {
+pub trait StateStore: Send + Sync {
     /// Registers a management scope with bind storage as its initial default.
     fn create_scope(
         &self,
@@ -190,5 +213,28 @@ pub trait StateStore {
         &self,
         scope_id: &str,
         method: StorageMethod,
+    ) -> Result<(), StoreConflict>;
+
+    /// Reads one storage allocation and its current ledger state.
+    fn storage_allocation(
+        &self,
+        instance_id: &str,
+        slot: &str,
+    ) -> Result<Option<StorageLedgerEntry>, StoreConflict>;
+
+    /// Advances the observed presence without allowing a missing resource to be recreated.
+    fn set_storage_presence(
+        &self,
+        instance_id: &str,
+        slot: &str,
+        presence: StoragePresence,
+    ) -> Result<(), StoreConflict>;
+
+    /// Advances initialization state monotonically after runtime verification.
+    fn advance_storage_initialization(
+        &self,
+        instance_id: &str,
+        slot: &str,
+        initialization: Initialization,
     ) -> Result<(), StoreConflict>;
 }

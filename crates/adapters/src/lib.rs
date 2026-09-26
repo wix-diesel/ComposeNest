@@ -37,6 +37,7 @@ pub mod docker_target;
 pub mod host_ports;
 pub mod image_resolution;
 pub mod image_store;
+pub mod named_volumes;
 pub mod operation_journal;
 pub mod sqlite;
 pub mod state_store;

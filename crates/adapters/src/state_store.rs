@@ -1,11 +1,14 @@
 //! SQLite implementation of the confirmed state ledgers.
 
 use composenest_application::state_store::{
-    InstanceRecord, RuntimeTarget, StateStore, StorageMethod, StoreConflict, TemplateCatalogItem,
-    TemplateFile, TemplateRevision,
+    InstanceRecord, RuntimeTarget, StateStore, StorageAllocation, StorageLedgerEntry,
+    StorageMethod, StoreConflict, TemplateCatalogItem, TemplateFile, TemplateRevision,
 };
-use composenest_domain::identity::DisplayName;
-use rusqlite::{Connection, Error, ErrorCode, TransactionBehavior, params};
+use composenest_domain::{
+    identity::DisplayName,
+    instance::{Initialization, StorageOwnership, StoragePresence},
+};
+use rusqlite::{Connection, Error, ErrorCode, OptionalExtension, TransactionBehavior, params};
 use serde_json::Value as JsonValue;
 use sha2::{Digest, Sha256};
 
@@ -17,6 +20,80 @@ fn method_name(method: StorageMethod) -> &'static str {
         StorageMethod::Bind => "bind",
         StorageMethod::Volume => "volume",
     }
+}
+
+fn method_from_name(value: &str) -> Option<StorageMethod> {
+    match value {
+        "bind" => Some(StorageMethod::Bind),
+        "volume" => Some(StorageMethod::Volume),
+        _ => None,
+    }
+}
+
+fn presence_name(presence: StoragePresence) -> &'static str {
+    match presence {
+        StoragePresence::NotMaterialized => "not_materialized",
+        StoragePresence::Present => "present",
+        StoragePresence::Missing => "missing",
+        StoragePresence::Unverified => "unverified",
+    }
+}
+
+fn presence_from_name(value: &str) -> Option<StoragePresence> {
+    match value {
+        "not_materialized" => Some(StoragePresence::NotMaterialized),
+        "present" => Some(StoragePresence::Present),
+        "missing" => Some(StoragePresence::Missing),
+        "unverified" => Some(StoragePresence::Unverified),
+        _ => None,
+    }
+}
+
+fn ownership_from_name(value: &str) -> Option<StorageOwnership> {
+    match value {
+        "assigned" => Some(StorageOwnership::Assigned),
+        "retained" => Some(StorageOwnership::Retained),
+        _ => None,
+    }
+}
+
+fn initialization_name(initialization: Initialization) -> &'static str {
+    match initialization {
+        Initialization::NotAttempted => "not_attempted",
+        Initialization::MayHaveInitialized => "may_have_initialized",
+        Initialization::ReadyObserved => "ready_observed",
+    }
+}
+
+fn initialization_from_name(value: &str) -> Option<Initialization> {
+    match value {
+        "not_attempted" => Some(Initialization::NotAttempted),
+        "may_have_initialized" => Some(Initialization::MayHaveInitialized),
+        "ready_observed" => Some(Initialization::ReadyObserved),
+        _ => None,
+    }
+}
+
+fn storage_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<StorageLedgerEntry> {
+    let method = row.get::<_, String>(3)?;
+    let ownership = row.get::<_, String>(6)?;
+    let presence = row.get::<_, String>(7)?;
+    let initialization = row.get::<_, String>(8)?;
+    Ok(StorageLedgerEntry {
+        instance_id: row.get(0)?,
+        scope_id: row.get(1)?,
+        slot: row.get(2)?,
+        method: method_from_name(&method).ok_or(rusqlite::Error::InvalidQuery)?,
+        allocation: StorageAllocation {
+            slot: row.get(2)?,
+            resource_identity: row.get(4)?,
+            ownership_evidence: row.get(5)?,
+        },
+        ownership: ownership_from_name(&ownership).ok_or(rusqlite::Error::InvalidQuery)?,
+        presence: presence_from_name(&presence).ok_or(rusqlite::Error::InvalidQuery)?,
+        initialization: initialization_from_name(&initialization)
+            .ok_or(rusqlite::Error::InvalidQuery)?,
+    })
 }
 
 pub(crate) fn map_error(error: DatabaseError) -> StoreConflict {
@@ -422,6 +499,133 @@ impl StateStore for DatabaseWorker {
             other => map_error(other),
         })
     }
+
+    fn storage_allocation(
+        &self,
+        instance_id: &str,
+        slot: &str,
+    ) -> Result<Option<StorageLedgerEntry>, StoreConflict> {
+        let (instance_id, slot) = (instance_id.to_owned(), slot.to_owned());
+        self.read(move |db| {
+            db.query_row(
+                "SELECT a.instance_id, i.scope_id, a.slot, a.method, a.resource_identity,
+                        a.ownership_evidence, a.ownership, a.presence, a.initialization
+                 FROM storage_allocations a JOIN instances i ON i.id = a.instance_id
+                 WHERE a.instance_id = ?1 AND a.slot = ?2",
+                params![instance_id, slot],
+                storage_entry,
+            )
+            .optional()
+            .map_err(Into::into)
+        })
+        .map_err(map_error)
+    }
+
+    fn set_storage_presence(
+        &self,
+        instance_id: &str,
+        slot: &str,
+        presence: StoragePresence,
+    ) -> Result<(), StoreConflict> {
+        let (instance_id, slot) = (instance_id.to_owned(), slot.to_owned());
+        self.write(move |db| {
+            let transaction = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let current = transaction
+                .query_row(
+                    "SELECT presence FROM storage_allocations WHERE instance_id = ?1 AND slot = ?2",
+                    params![instance_id, slot],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            let Some(current) = current else {
+                return Err(DatabaseError::Sqlite(Error::QueryReturnedNoRows));
+            };
+            let Some(current) = presence_from_name(&current) else {
+                return Err(DatabaseError::Sqlite(Error::InvalidQuery));
+            };
+            // The named-volume adapter verifies a successful create step before recording this transition.
+            let allowed = match current {
+                StoragePresence::NotMaterialized => matches!(
+                    presence,
+                    StoragePresence::NotMaterialized
+                        | StoragePresence::Present
+                        | StoragePresence::Missing
+                        | StoragePresence::Unverified
+                ),
+                StoragePresence::Present => matches!(
+                    presence,
+                    StoragePresence::Present
+                        | StoragePresence::Missing
+                        | StoragePresence::Unverified
+                ),
+                StoragePresence::Missing => presence == StoragePresence::Missing,
+                StoragePresence::Unverified => matches!(
+                    presence,
+                    StoragePresence::Unverified
+                        | StoragePresence::Present
+                        | StoragePresence::Missing
+                ),
+            };
+            if !allowed {
+                return Err(DatabaseError::Sqlite(Error::InvalidQuery));
+            }
+            transaction.execute(
+                "UPDATE storage_allocations SET presence = ?3 WHERE instance_id = ?1 AND slot = ?2",
+                params![instance_id, slot, presence_name(presence)],
+            )?;
+            transaction.commit()?;
+            Ok(())
+        })
+        .map_err(|error| match error {
+            DatabaseError::Sqlite(Error::QueryReturnedNoRows) => StoreConflict::Missing,
+            DatabaseError::Sqlite(Error::InvalidQuery) => StoreConflict::InvalidInput,
+            other => map_error(other),
+        })
+    }
+
+    fn advance_storage_initialization(
+        &self,
+        instance_id: &str,
+        slot: &str,
+        initialization: Initialization,
+    ) -> Result<(), StoreConflict> {
+        let (instance_id, slot) = (instance_id.to_owned(), slot.to_owned());
+        self.write(move |db| {
+            let transaction = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let current = transaction
+                .query_row(
+                    "SELECT presence, initialization FROM storage_allocations
+                     WHERE instance_id = ?1 AND slot = ?2",
+                    params![instance_id, slot],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .optional()?;
+            let Some((presence, current)) = current else {
+                return Err(DatabaseError::Sqlite(Error::QueryReturnedNoRows));
+            };
+            if presence_from_name(&presence) != Some(StoragePresence::Present) {
+                return Err(DatabaseError::Sqlite(Error::InvalidQuery));
+            }
+            let Some(current) = initialization_from_name(&current) else {
+                return Err(DatabaseError::Sqlite(Error::InvalidQuery));
+            };
+            if initialization < current {
+                return Err(DatabaseError::Sqlite(Error::InvalidQuery));
+            }
+            transaction.execute(
+                "UPDATE storage_allocations SET initialization = ?3
+                 WHERE instance_id = ?1 AND slot = ?2",
+                params![instance_id, slot, initialization_name(initialization)],
+            )?;
+            transaction.commit()?;
+            Ok(())
+        })
+        .map_err(|error| match error {
+            DatabaseError::Sqlite(Error::QueryReturnedNoRows) => StoreConflict::Missing,
+            DatabaseError::Sqlite(Error::InvalidQuery) => StoreConflict::InvalidInput,
+            other => map_error(other),
+        })
+    }
 }
 
 fn update_instance(
@@ -463,6 +667,7 @@ mod tests {
     use composenest_application::template_catalog::{
         CatalogError, TemplateOrigin, TemplatePackage, register_packages,
     };
+    use composenest_domain::instance::{Initialization, StoragePresence};
     use std::fs;
     use tempfile::TempDir;
 
@@ -919,5 +1124,53 @@ mod tests {
             reopened.default_storage_method("scope"),
             Ok(StorageMethod::Volume)
         );
+    }
+
+    #[test]
+    fn storage_ledger_tracks_presence_and_monotonic_initialization() {
+        let (_root, worker) = store();
+        worker.register_template(&revision()).unwrap();
+        worker
+            .commit_instance(&instance("one", "One", 6379))
+            .unwrap();
+
+        let initial = worker.storage_allocation("one", "data").unwrap().unwrap();
+        assert_eq!(initial.presence, StoragePresence::NotMaterialized);
+        assert_eq!(initial.initialization, Initialization::NotAttempted);
+        assert_eq!(initial.allocation.resource_identity, "data/one");
+        assert_eq!(initial.scope_id, "scope");
+
+        assert_eq!(
+            worker.advance_storage_initialization(
+                "one",
+                "data",
+                Initialization::MayHaveInitialized
+            ),
+            Err(StoreConflict::InvalidInput)
+        );
+        worker
+            .set_storage_presence("one", "data", StoragePresence::Present)
+            .unwrap();
+        worker
+            .advance_storage_initialization("one", "data", Initialization::MayHaveInitialized)
+            .unwrap();
+        worker
+            .advance_storage_initialization("one", "data", Initialization::ReadyObserved)
+            .unwrap();
+        worker
+            .set_storage_presence("one", "data", StoragePresence::Missing)
+            .unwrap();
+
+        assert_eq!(
+            worker.set_storage_presence("one", "data", StoragePresence::Present),
+            Err(StoreConflict::InvalidInput)
+        );
+        assert_eq!(
+            worker.advance_storage_initialization("one", "data", Initialization::NotAttempted),
+            Err(StoreConflict::InvalidInput)
+        );
+        let missing = worker.storage_allocation("one", "data").unwrap().unwrap();
+        assert_eq!(missing.presence, StoragePresence::Missing);
+        assert_eq!(missing.initialization, Initialization::ReadyObserved);
     }
 }

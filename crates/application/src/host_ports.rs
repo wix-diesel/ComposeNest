@@ -63,6 +63,8 @@ pub struct PortCursor {
     pub next: BTreeMap<String, u32>,
     /// Earlier automatic selections; callers must revalidate on confirmation.
     pub selected: BTreeMap<String, u16>,
+    /// Explicit ports already checked in this preview; confirmation starts with a fresh cursor.
+    pub checked_explicit: BTreeMap<String, u16>,
 }
 
 /// Outcome of one planning request.
@@ -143,6 +145,11 @@ fn plan_with_budget(
         }
     }
     let explicit: BTreeSet<_> = explicit_ports.keys().copied().collect();
+    cursor.checked_explicit.retain(|key, port| {
+        ordered
+            .iter()
+            .any(|slot| slot.key == *key && planned[&slot.key] == Some(*port))
+    });
     // A resumed scan must not trust earlier selections if the plan has changed.
     cursor.selected.retain(|key, port| {
         ordered.iter().any(|slot| {
@@ -155,6 +162,9 @@ fn plan_with_budget(
     });
     for slot in &ordered {
         if let Some(port) = planned[&slot.key] {
+            if cursor.checked_explicit.get(&slot.key) == Some(&port) {
+                continue;
+            }
             if started.elapsed() >= deadline {
                 return PortPlan::Incomplete(cursor);
             }
@@ -162,6 +172,7 @@ fn plan_with_budget(
             if let Err(reason) = check.result {
                 return rejected(&slot.key, reason, Some(check));
             }
+            cursor.checked_explicit.insert(slot.key.clone(), port);
         }
     }
     let mut used = explicit;
@@ -433,6 +444,58 @@ mod tests {
             ))["db"],
             5435
         );
+    }
+
+    #[test]
+    fn slow_explicit_checks_resume_without_rechecking_completed_slots() {
+        use std::{cell::RefCell, thread};
+
+        struct Slow {
+            checked: RefCell<Vec<u16>>,
+        }
+        impl PortInspector for Slow {
+            fn inspect(&self, port: u16) -> PortCheck {
+                self.checked.borrow_mut().push(port);
+                if port == 5432 || port == 5433 {
+                    thread::sleep(Duration::from_millis(30));
+                }
+                PortCheck {
+                    result: Ok(()),
+                    observed_at: SystemTime::now(),
+                }
+            }
+        }
+        let inspector = Slow {
+            checked: RefCell::new(Vec::new()),
+        };
+        let slots = [
+            slot("a", None, Some("5432")),
+            slot("b", None, Some("5433")),
+            slot("c", None, None),
+        ];
+        let PortPlan::Incomplete(first) = plan_ports_bounded(
+            &slots,
+            &inspector,
+            PortCursor::default(),
+            Duration::from_millis(25),
+        ) else {
+            panic!("first explicit check must exhaust the deadline")
+        };
+        assert_eq!(first.checked_explicit["a"], 5432);
+        let PortPlan::Incomplete(second) =
+            plan_ports_bounded(&slots, &inspector, first, Duration::from_millis(25))
+        else {
+            panic!("second explicit check must exhaust the deadline")
+        };
+        assert_eq!(second.checked_explicit["b"], 5433);
+        let result = complete(plan_ports_bounded(
+            &slots,
+            &inspector,
+            second,
+            Duration::from_millis(25),
+        ));
+        assert_eq!(result["c"], 5434);
+        assert_eq!(*inspector.checked.borrow(), vec![5432, 5433, 5434]);
     }
 
     #[test]

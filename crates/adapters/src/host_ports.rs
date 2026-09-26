@@ -153,6 +153,9 @@ fn parse_published_ports(
     }
     for line in output.lines() {
         let bindings: Value = serde_json::from_str(line).map_err(|_| PortReason::Unavailable)?;
+        if bindings.is_null() {
+            continue;
+        }
         let object = bindings.as_object().ok_or(PortReason::Unavailable)?;
         for (container, hosts) in object {
             if !container.ends_with("/tcp") {
@@ -208,7 +211,8 @@ fn probe_loopback(port: u16) -> Result<(), PortReason> {
     use std::{mem::size_of, net::TcpListener};
     use windows_sys::Win32::Networking::WinSock::{
         AF_INET, INVALID_SOCKET, IPPROTO_TCP, SO_EXCLUSIVEADDRUSE, SOCK_STREAM, SOCKADDR,
-        SOCKADDR_IN, SOCKET_ERROR, SOL_SOCKET, bind, closesocket, setsockopt, socket,
+        SOCKADDR_IN, SOCKET_ERROR, SOL_SOCKET, WSAGetLastError, bind, closesocket, setsockopt,
+        socket,
     };
 
     // Ensure Winsock is initialized by the standard library before using its raw API.
@@ -243,7 +247,10 @@ fn probe_loopback(port: u16) -> Result<(), PortReason> {
             size_of::<SOCKADDR_IN>() as i32,
         );
         let result = if status == SOCKET_ERROR {
-            Err(classify_bind_error(std::io::Error::last_os_error()))
+            // Read the Winsock error before closesocket can overwrite it.
+            Err(classify_bind_error(std::io::Error::from_raw_os_error(
+                WSAGetLastError(),
+            )))
         } else {
             Ok(())
         };
@@ -253,6 +260,11 @@ fn probe_loopback(port: u16) -> Result<(), PortReason> {
 }
 
 fn classify_bind_error(error: std::io::Error) -> PortReason {
+    #[cfg(windows)]
+    if matches!(error.raw_os_error(), Some(10013 | 10048)) {
+        // WSAEACCES includes excluded port ranges; WSAEADDRINUSE means occupied.
+        return PortReason::Host;
+    }
     match error.kind() {
         std::io::ErrorKind::AddrInUse | std::io::ErrorKind::PermissionDenied => PortReason::Host,
         _ => PortReason::Unavailable,
@@ -302,5 +314,6 @@ mod tests {
             parse_published_ports("invalid", 1),
             Err(PortReason::Unavailable)
         );
+        assert_eq!(parse_published_ports("null\n{}", 2), Ok(BTreeSet::new()));
     }
 }

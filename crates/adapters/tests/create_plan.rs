@@ -13,7 +13,7 @@ use serde_json::json;
 
 const MANIFEST: &str = "schemaVersion: 1\nid: example.test\ntemplateVersion: \"1.0.0\"\nname: Test\ndescription: Test\ndefaultVersion: \"1\"\nversions:\n  \"1\": versions/1.yaml\n  \"2\": versions/2.yaml\n";
 const V1: &str = "image: example:1\nplatforms: [linux/amd64]\ninputs:\n  retained:\n    label: Retained\n    type: string\n    default: first\n  removed:\n    label: Removed\n    type: boolean\n    default: true\n  password:\n    label: Password\n    type: secret\nservice:\n  environment:\n    RETAINED: { input: retained }\n    PASSWORD: { input: password }\n  ports:\n    db:\n      label: DB\n      container: 5432\n      defaultHost: 5432\n  storage:\n    data:\n      label: Data\n      container: /data\n  healthcheck:\n    command: [check]\n";
-const V2: &str = "image: example:2\nplatforms: [linux/amd64]\ninputs:\n  retained:\n    label: Retained\n    type: string\n    default: second\n    validation: { minLength: 6 }\n  password:\n    label: Password\n    type: secret\n    initial: ask\n    clone: ask\n    validation: { minLength: 33 }\n  added:\n    label: Added\n    type: select\n    default: green\n    options:\n      - { value: green, label: Green }\n      - { value: blue, label: Blue }\nservice:\n  environment:\n    RETAINED: { input: retained }\n    PASSWORD: { input: password }\n    ADDED: { input: added }\n  ports:\n    api:\n      label: API\n      container: 9000\n      defaultHost: 9000\n  storage:\n    cache:\n      label: Cache\n      container: /cache\n  healthcheck:\n    command: [check]\n";
+const V2: &str = "image: example:2\nplatforms: [linux/amd64]\ninputs:\n  retained:\n    label: Retained\n    type: string\n    default: second\n    validation: { minLength: 6 }\n  fresh:\n    label: Fresh\n    type: secret\n  password:\n    label: Password\n    type: secret\n    initial: ask\n    clone: ask\n    validation: { minLength: 33 }\n  added:\n    label: Added\n    type: select\n    default: green\n    options:\n      - { value: green, label: Green }\n      - { value: blue, label: Blue }\nservice:\n  environment:\n    RETAINED: { input: retained }\n    FRESH: { input: fresh }\n    PASSWORD: { input: password }\n    ADDED: { input: added }\n  ports:\n    api:\n      label: API\n      container: 9000\n      defaultHost: 9000\n  storage:\n    cache:\n      label: Cache\n      container: /cache\n  healthcheck:\n    command: [check]\n";
 
 struct TestClock(Cell<u64>);
 impl Clock for TestClock {
@@ -85,6 +85,7 @@ fn store() -> (tempfile::TempDir, DatabaseWorker, String) {
 fn request(template: &str) -> PrepareCreate {
     PrepareCreate {
         scope_id: "scope".into(),
+        display_name: " Database ".into(),
         template_revision_id: template.into(),
         version: None,
     }
@@ -97,9 +98,11 @@ fn edit(
 ) -> PlanEdit {
     PlanEdit {
         expected_revision: revision,
+        display_name: None,
         version: version.map(str::to_owned),
         storage_method: None,
         inputs,
+        regenerate_secrets: Vec::new(),
         ports: BTreeMap::new(),
     }
 }
@@ -114,6 +117,7 @@ fn version_switch_preserves_candidates_and_revalidates_only_active_definition() 
         .prepare_create(&request(&template), &store, &clock, &mut random, &FreePorts)
         .unwrap();
     assert_eq!(first.version, "1");
+    assert_eq!(first.display_name, "Database");
     assert_eq!(first.storage_method, StorageMethod::Bind);
     assert_eq!(first.ports["db"], 5432);
     assert_eq!(first.storage_slots, ["data"]);
@@ -151,14 +155,14 @@ fn version_switch_preserves_candidates_and_revalidates_only_active_definition() 
             &FreePorts,
         )
         .unwrap();
-    assert_eq!(random.0, generated_count);
+    assert!(random.0 > generated_count);
     assert_eq!(next.plan_revision, 3);
     assert_eq!(
         next.inputs
             .iter()
             .map(|input| input.key.as_str())
             .collect::<Vec<_>>(),
-        ["retained", "password", "added"]
+        ["retained", "fresh", "password", "added"]
     );
     assert_eq!(
         next.inputs
@@ -236,6 +240,116 @@ fn version_switch_preserves_candidates_and_revalidates_only_active_definition() 
             .unwrap_err()
             .code,
         "UNKNOWN_INPUT"
+    );
+}
+
+#[test]
+fn display_name_and_secret_regeneration_are_explicit_plan_updates() {
+    let (_root, store, template) = store();
+    let clock = TestClock(Cell::new(0));
+    let mut random = TestRandom::default();
+    let mut plans = CreatePlans::default();
+    let first = plans
+        .prepare_create(&request(&template), &store, &clock, &mut random, &FreePorts)
+        .unwrap();
+    let generated_count = random.0;
+
+    let mut name_edit = edit(1, None, BTreeMap::new());
+    name_edit.display_name = Some(" \u{3000}".into());
+    let invalid = plans
+        .update_plan(
+            "scope",
+            &first.plan_id,
+            name_edit,
+            &clock,
+            &mut random,
+            &FreePorts,
+        )
+        .unwrap();
+    assert_eq!(invalid.concerns[0].field_path, "displayName");
+    assert_eq!(random.0, generated_count);
+
+    let mut regenerate = edit(2, None, BTreeMap::new());
+    regenerate.display_name = Some(" Second ".into());
+    regenerate.regenerate_secrets.push("password".into());
+    let next = plans
+        .update_plan(
+            "scope",
+            &first.plan_id,
+            regenerate,
+            &clock,
+            &mut random,
+            &FreePorts,
+        )
+        .unwrap();
+    assert_eq!(next.display_name, "Second");
+    assert!(next.concerns.is_empty());
+    assert_eq!(random.0, generated_count + 1);
+    assert_eq!(next.plan_revision, 3);
+    assert_eq!(
+        next.inputs
+            .iter()
+            .find(|input| input.key == "retained")
+            .unwrap()
+            .value,
+        Some(json!("first"))
+    );
+
+    let mut invalid_action = edit(3, None, BTreeMap::new());
+    invalid_action.regenerate_secrets.push("retained".into());
+    assert_eq!(
+        plans
+            .update_plan(
+                "scope",
+                &first.plan_id,
+                invalid_action,
+                &clock,
+                &mut random,
+                &FreePorts
+            )
+            .unwrap_err()
+            .code,
+        "INVALID_SECRET_ACTION"
+    );
+    assert_eq!(random.0, generated_count + 1);
+}
+
+#[test]
+fn new_secret_before_retained_secret_retries_a_duplicate_candidate() {
+    let (_root, store, template) = store();
+    let clock = TestClock(Cell::new(0));
+    let mut random = TestRandom::default();
+    let mut plans = CreatePlans::default();
+    let first = plans
+        .prepare_create(&request(&template), &store, &clock, &mut random, &FreePorts)
+        .unwrap();
+    random.0 = 0;
+    let switched = plans
+        .update_plan(
+            "scope",
+            &first.plan_id,
+            edit(1, Some("2"), BTreeMap::new()),
+            &clock,
+            &mut random,
+            &FreePorts,
+        )
+        .unwrap();
+    assert_eq!(
+        random.0, 2,
+        "the first generated candidate matches the retained secret"
+    );
+    assert!(
+        switched
+            .inputs
+            .iter()
+            .find(|input| input.key == "fresh")
+            .unwrap()
+            .has_secret
+    );
+    assert!(
+        !serde_json::to_string(&switched)
+            .unwrap()
+            .contains(&"C".repeat(32))
     );
 }
 

@@ -1,8 +1,9 @@
 //! In-memory preparation of new instances from immutable Template revisions.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use composenest_domain::clone_policy::{RandomSource, generate_secret};
+use composenest_domain::identity::DisplayName;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -64,6 +65,8 @@ pub struct CreatePlanView {
     pub plan_id: String,
     /// Version required by a later update or confirmation.
     pub plan_revision: u64,
+    /// Normalized display name, or the entered text awaiting correction.
+    pub display_name: String,
     /// Immutable Template revision used by this plan.
     pub template_revision_id: String,
     /// Selected service Version.
@@ -90,6 +93,8 @@ pub struct CreatePlanView {
 pub struct PlanEdit {
     /// Expected plan revision for optimistic concurrency.
     pub expected_revision: u64,
+    /// Optional replacement for the new instance display name.
+    pub display_name: Option<String>,
     /// Optional service Version selection.
     pub version: Option<String>,
     /// Optional method for all selected storage slots.
@@ -97,6 +102,9 @@ pub struct PlanEdit {
     /// Input answers. Null clears an optional input.
     #[serde(default)]
     pub inputs: BTreeMap<String, Value>,
+    /// Secret keys to regenerate explicitly using secret-v1.
+    #[serde(default)]
+    pub regenerate_secrets: Vec<String>,
     /// Explicit decimal host ports. Null returns a slot to automatic selection.
     #[serde(default)]
     pub ports: BTreeMap<String, Option<String>>,
@@ -108,6 +116,8 @@ pub struct PlanEdit {
 pub struct PrepareCreate {
     /// Management scope whose persisted default applies.
     pub scope_id: String,
+    /// User-entered purpose name for the new instance.
+    pub display_name: String,
     /// Immutable registered Template revision identifier.
     pub template_revision_id: String,
     /// Optional Version key; the Template default applies when omitted.
@@ -116,6 +126,7 @@ pub struct PrepareCreate {
 
 struct Plan {
     scope: String,
+    display_name: String,
     revision: u64,
     template_id: String,
     template: Value,
@@ -172,6 +183,7 @@ impl CreatePlans {
         let id = self.unique_id(random)?;
         let mut plan = Plan {
             scope: request.scope_id.clone(),
+            display_name: normalize_name(&request.display_name),
             revision: 1,
             template_id: revision.id,
             template,
@@ -216,6 +228,13 @@ impl CreatePlans {
         let definition = version_definition(&plan.template, selected)?;
         let active_inputs = entries(&definition["inputs"]);
         let active_ports = entries(&definition["service"]["ports"]);
+        let regenerate: BTreeSet<_> = edit.regenerate_secrets.iter().collect();
+        if regenerate.len() != edit.regenerate_secrets.len() {
+            return Err(error(
+                "DUPLICATE_SECRET_ACTION",
+                Some("regenerateSecrets".into()),
+            ));
+        }
         for key in edit.inputs.keys() {
             if !active_inputs.iter().any(|(name, _)| name == key) {
                 return Err(error("UNKNOWN_INPUT", Some(format!("inputs.{key}"))));
@@ -232,16 +251,51 @@ impl CreatePlans {
                 return Err(error("UNKNOWN_PORT", Some(format!("ports.{key}"))));
             }
         }
+        for key in &regenerate {
+            if edit.inputs.contains_key(*key)
+                || !active_inputs
+                    .iter()
+                    .any(|(name, input)| name == *key && input["type"] == "secret")
+            {
+                return Err(error(
+                    "INVALID_SECRET_ACTION",
+                    Some(format!("regenerateSecrets.{key}")),
+                ));
+            }
+        }
         let mut values = BTreeMap::new();
         let switching = selected != plan.version;
-        for (key, input) in active_inputs {
-            if let Some(value) = edit.inputs.get(&key) {
-                values.insert(key, value.clone());
-            } else if let Some(value) = plan.values.get(&key) {
-                values.insert(key, value.clone());
-            } else if switching && let Some(value) = initial_value(&input, random, &values)? {
-                values.insert(key, value);
+        let mut generate = Vec::new();
+        for (key, input) in &active_inputs {
+            if regenerate.contains(key) {
+                generate.push(key.clone());
+                continue;
             }
+            if let Some(value) = edit.inputs.get(key) {
+                values.insert(key.clone(), value.clone());
+            } else if let Some(value) = plan.values.get(key) {
+                values.insert(key.clone(), value.clone());
+            } else if switching {
+                if input["type"] == "secret" && input["initial"] != "ask" {
+                    generate.push(key.clone());
+                } else if let Some(value) = input.get("default") {
+                    values.insert(key.clone(), value.clone());
+                }
+            }
+        }
+        for key in generate {
+            let input = &active_inputs
+                .iter()
+                .find(|(name, _)| name == &key)
+                .expect("generation key belongs to the selected form")
+                .1;
+            let source = plan.values.get(&key).and_then(Value::as_str);
+            let candidate =
+                generate_input_secret(&key, input, &values, &active_inputs, source, random)?;
+            values.insert(key, Value::String(candidate));
+        }
+        if let Some(name) = edit.display_name {
+            plan.display_name = normalize_name(&name);
         }
         plan.values = values;
         plan.version = selected.into();
@@ -359,35 +413,59 @@ fn initialize_inputs(
     random: &mut impl RandomSource,
 ) -> Result<BTreeMap<String, Value>, PlanError> {
     let mut values = BTreeMap::new();
-    for (key, input) in entries(&definition["inputs"]) {
-        if let Some(value) = initial_value(&input, random, &values)? {
-            values.insert(key, value);
+    let inputs = entries(&definition["inputs"]);
+    for (key, input) in &inputs {
+        if let Some(value) = input.get("default") {
+            values.insert(key.clone(), value.clone());
+        }
+    }
+    for (key, input) in &inputs {
+        if input["type"] == "secret" && input["initial"] != "ask" {
+            let secret = generate_input_secret(key, input, &values, &inputs, None, random)?;
+            values.insert(key.clone(), Value::String(secret));
         }
     }
     Ok(values)
 }
 
-fn initial_value(
+fn generate_input_secret(
+    key: &str,
     input: &Value,
-    random: &mut impl RandomSource,
     values: &BTreeMap<String, Value>,
-) -> Result<Option<Value>, PlanError> {
-    if input["type"] != "secret" {
-        return Ok(input.get("default").cloned());
+    inputs: &[(String, Value)],
+    source: Option<&str>,
+    random: &mut impl RandomSource,
+) -> Result<String, PlanError> {
+    let others: Vec<_> = inputs
+        .iter()
+        .filter(|(name, definition)| name != key && definition["type"] == "secret")
+        .filter_map(|(name, _)| values.get(name).and_then(Value::as_str))
+        .collect();
+    let secret = generate_secret(random, source, &others)
+        .map_err(|_| error("RANDOM_UNAVAILABLE", Some(format!("inputs.{key}"))))?;
+    if !valid_input(input, Some(&Value::String(secret.clone()))) {
+        return Err(error(
+            "SECRET_GENERATOR_INCOMPATIBLE",
+            Some(format!("inputs.{key}")),
+        ));
     }
-    if input["initial"] == "ask" {
-        return Ok(None);
-    }
-    let previous: Vec<_> = values.values().filter_map(Value::as_str).collect();
-    let secret =
-        generate_secret(random, None, &previous).map_err(|_| error("RANDOM_UNAVAILABLE", None))?;
-    Ok(Some(Value::String(secret)))
+    Ok(secret)
+}
+
+fn normalize_name(input: &str) -> String {
+    DisplayName::parse(input).map_or_else(|_| input.to_owned(), |name| name.as_str().to_owned())
 }
 
 fn preview(id: &str, plan: &mut Plan, inspector: &impl PortInspector) -> CreatePlanView {
     let definition = version_definition(&plan.template, &plan.version)
         .expect("selected version remains in the fixed template");
     let mut concerns = Vec::new();
+    if DisplayName::parse(&plan.display_name).is_err() {
+        concerns.push(PlanConcern {
+            code: "DISPLAY_NAME_INVALID",
+            field_path: "displayName".into(),
+        });
+    }
     let inputs = entries(&definition["inputs"])
         .into_iter()
         .map(|(key, input)| {
@@ -456,6 +534,7 @@ fn preview(id: &str, plan: &mut Plan, inspector: &impl PortInspector) -> CreateP
     CreatePlanView {
         plan_id: id.into(),
         plan_revision: plan.revision,
+        display_name: plan.display_name.clone(),
         template_revision_id: plan.template_id.clone(),
         version: plan.version.clone(),
         versions: plan.template["manifest"]["versions"]

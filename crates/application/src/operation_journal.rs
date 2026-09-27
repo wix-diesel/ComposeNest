@@ -1,6 +1,6 @@
 //! Persistence boundary for operation intent, progress, and idempotent requests.
 
-use crate::state_store::StoreConflict;
+use crate::state_store::{InstanceRecord, RuntimeTarget, StateStore, StoreConflict};
 pub use composenest_domain::instance::{OperationKind, OperationStatus};
 
 /// An operation that has been durably accepted for an instance.
@@ -39,6 +39,28 @@ pub struct RequestReceipt {
     pub instance_id: String,
     /// Operation returned to repeated callers.
     pub operation_id: String,
+}
+
+/// Persists a new instance and its accepted operation as one durable decision.
+pub trait PlanCommitStore: OperationJournal + StateStore {
+    /// Returns the prior result for an identical plan and revision, or commits every record.
+    fn commit_plan(
+        &self,
+        instance: &InstanceRecord,
+        intent: &OperationIntent,
+        receipt: &RequestReceipt,
+        target_guard: &RuntimeTarget,
+        clone_guard: Option<&CloneSourceGuard>,
+    ) -> Result<RequestReceipt, StoreConflict>;
+}
+
+/// Source state observed before external clone checks and rechecked at confirmation.
+#[derive(Debug, Clone)]
+pub struct CloneSourceGuard {
+    /// Source instance ID, equal to the new instance's provenance ID.
+    pub instance_id: String,
+    /// Source revision observed before external checks.
+    pub revision: u64,
 }
 
 /// One durable external effect intent, without command arguments or inspect data.

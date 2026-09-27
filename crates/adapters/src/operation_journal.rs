@@ -1,14 +1,15 @@
 //! SQLite operation journal and durable request receipts.
 
 use composenest_application::operation_journal::{
-    ExpectedResult, OperationIntent, OperationJournal, OperationKind, OperationStatus,
-    RequestReceipt, StepCommand, StepIntent, StepOutcome, StepRecord,
+    CloneSourceGuard, ExpectedResult, OperationIntent, OperationJournal, OperationKind,
+    OperationStatus, PlanCommitStore, RequestReceipt, StepCommand, StepIntent, StepOutcome,
+    StepRecord,
 };
-use composenest_application::state_store::StoreConflict;
+use composenest_application::state_store::{InstanceRecord, RuntimeTarget, StoreConflict};
 use rusqlite::{Connection, Error, OptionalExtension, TransactionBehavior, params};
 
 use crate::sqlite::{DatabaseError, DatabaseWorker};
-use crate::state_store::map_error;
+use crate::state_store::{insert_instance, map_error};
 
 fn kind_name(kind: OperationKind) -> &'static str {
     match kind {
@@ -21,6 +22,113 @@ fn kind_name(kind: OperationKind) -> &'static str {
         OperationKind::EditPort => "edit_port",
         OperationKind::Delete => "delete",
         OperationKind::Recover => "recover",
+    }
+}
+
+impl PlanCommitStore for DatabaseWorker {
+    fn commit_plan(
+        &self,
+        instance: &InstanceRecord,
+        intent: &OperationIntent,
+        receipt: &RequestReceipt,
+        target_guard: &RuntimeTarget,
+        clone_guard: Option<&CloneSourceGuard>,
+    ) -> Result<RequestReceipt, StoreConflict> {
+        let valid = !instance.id.is_empty()
+            && !instance.scope_id.is_empty()
+            && !intent.id.is_empty()
+            && intent.instance_id == instance.id
+            && ((instance.clone_source_id.is_none() && intent.kind == OperationKind::Create)
+                || (instance.clone_source_id.is_some() && intent.kind == OperationKind::Clone))
+            && intent.expected_revision == 1
+            && intent.old_spec_revision.is_none()
+            && intent.new_spec_revision == Some(1)
+            && receipt.scope_id == instance.scope_id
+            && receipt.instance_id == instance.id
+            && receipt.operation_id == intent.id
+            && receipt.plan_id.as_deref().is_some_and(|id| !id.is_empty())
+            && !receipt.request_id.is_empty()
+            && receipt.request_hash.len() == 64
+            && receipt
+                .request_hash
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+            && target_guard.id == instance.target_id
+            && target_guard.scope_id == instance.scope_id
+            && clone_guard.map(|guard| guard.instance_id.as_str())
+                == instance.clone_source_id.as_deref();
+        if !valid {
+            return Err(StoreConflict::InvalidInput);
+        }
+        let confirmed = checked_revision(receipt.confirmed_revision)?;
+        let guard_revision = clone_guard
+            .map(|guard| checked_revision(guard.revision))
+            .transpose()?;
+        let (instance, intent, receipt, target_guard, guard) = (
+            instance.clone(),
+            intent.clone(),
+            receipt.clone(),
+            target_guard.clone(),
+            clone_guard.cloned(),
+        );
+        self.write(move |db| {
+            let transaction = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            if let Some(existing) = find_receipt(
+                &transaction,
+                &receipt.scope_id,
+                &receipt.request_id,
+                receipt.plan_id.as_deref(),
+            )? {
+                let same_plan = existing.plan_id == receipt.plan_id
+                    && existing.confirmed_revision == receipt.confirmed_revision
+                    && existing.request_hash == receipt.request_hash;
+                return Ok(if same_plan {
+                    Ok(existing)
+                } else {
+                    Err(StoreConflict::Duplicate)
+                });
+            }
+            let target_matches: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM runtime_targets WHERE id = ?1 AND scope_id = ?2 AND endpoint = ?3 AND engine_id = ?4 AND platform = ?5)",
+                params![target_guard.id, target_guard.scope_id, target_guard.endpoint,
+                    target_guard.engine_id, target_guard.platform], |row| row.get(0),
+            )?;
+            if !target_matches {
+                return Ok(Err(StoreConflict::StaleRevision));
+            }
+            if let (Some(guard), Some(revision)) = (&guard, guard_revision) {
+                let current = transaction.query_row(
+                    "SELECT revision FROM instances WHERE id = ?1 AND scope_id = ?2 AND target_id = ?3 AND lifecycle = 'managed'",
+                    params![guard.instance_id, instance.scope_id, instance.target_id],
+                    |row| row.get::<_, i64>(0),
+                ).optional()?;
+                if current != Some(revision) {
+                    return Ok(Err(StoreConflict::StaleRevision));
+                }
+                let unresolved: bool = transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM operations WHERE instance_id = ?1 AND status NOT IN ('Succeeded', 'Abandoned'))",
+                    [&guard.instance_id], |row| row.get(0),
+                )?;
+                if unresolved {
+                    return Ok(Err(StoreConflict::InvalidLifecycle));
+                }
+            }
+            insert_instance(&transaction, &instance)?;
+            transaction.execute(
+                "INSERT INTO operations (id, instance_id, kind, phase, expected_instance_revision, new_spec_revision) VALUES (?1, ?2, ?3, ?4, 1, 1)",
+                params![intent.id, intent.instance_id, kind_name(intent.kind), intent.phase],
+            )?;
+            transaction.execute(
+                "INSERT INTO request_receipts (scope_id, request_id, plan_id, confirmed_revision, request_hash, instance_id, operation_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![receipt.scope_id, receipt.request_id, receipt.plan_id, confirmed,
+                    receipt.request_hash, receipt.instance_id, receipt.operation_id],
+            )?;
+            transaction.commit()?;
+            Ok(Ok(receipt))
+        }).map_err(|error| match error {
+            DatabaseError::Sqlite(Error::QueryReturnedNoRows) => StoreConflict::Missing,
+            other => map_error(other),
+        })?
     }
 }
 

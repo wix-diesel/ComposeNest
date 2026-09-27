@@ -1,9 +1,11 @@
 //! Typed persistence boundary for confirmed state and resource ledgers.
 
 use composenest_domain::instance::{Initialization, StorageOwnership, StoragePresence};
+use serde::{Deserialize, Serialize};
 
 /// The persisted default for newly created instances.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum StorageMethod {
     Bind,
     Volume,

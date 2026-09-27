@@ -365,6 +365,7 @@ name = "composenest-application"
 version = "0.1.0"
 dependencies = [
  "composenest-domain",
+ "regex",
  "serde",
  "serde_json",
  "sha2",

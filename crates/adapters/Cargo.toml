@@ -10,9 +10,11 @@ composenest-application = { path = "../application" }
 composenest-domain = { path = "../domain" }
 getrandom = "0.3"
 rusqlite = { version = "0.40.2", features = ["backup", "bundled"] }
+sea-orm = { package = "sea-orm-sync", version = "2.0.4", default-features = false, features = ["sync", "macros", "rusqlite", "stream", "with-json", "sqlite-use-returning-for-3_35"] }
 serde_json = "1.0"
 sha2 = "0.10"
 thiserror = "2"
+url = "2.5"
 tokio = { version = "1.53.1", features = ["process", "io-util", "time", "sync", "rt", "macros"] }
 
 [dev-dependencies]

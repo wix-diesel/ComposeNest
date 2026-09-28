@@ -13,11 +13,12 @@ use std::net::{SocketAddrV4, TcpListener};
 use composenest_application::host_ports::{
     self, PortCheck, PortCursor, PortInspector, PortPlan, PortReason, PortSlot,
 };
-use rusqlite::params;
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::Value;
 
 use crate::{
     docker_cli::{CommandKind, DockerCli},
+    entities::{management_scope, port_reservation},
     sqlite::DatabaseWorker,
 };
 
@@ -66,19 +67,28 @@ impl PortSnapshot {
         docker: &DockerCli,
         scope: &str,
     ) -> Result<Self, PortReason> {
-        let reserved = db.read(|connection| {
-            let exists: bool = connection.query_row(
-                "SELECT EXISTS(SELECT 1 FROM management_scopes WHERE id = ?1)", params![scope],
-                |row| row.get(0),
-            )?;
-            if !exists { return Err(rusqlite::Error::QueryReturnedNoRows.into()); }
-            let mut query = connection.prepare(
-                "SELECT host_port FROM port_reservations WHERE scope_id = ?1 AND host_ip = '127.0.0.1' AND protocol = 'tcp' AND status IN ('held', 'committed')"
-            )?;
-            let ports = query.query_map(params![scope], |row| row.get::<_, u16>(0))?
-                .collect::<Result<BTreeSet<_>, _>>()?;
-            Ok(ports)
-        }).map_err(|_| PortReason::Unavailable)?;
+        let reserved = db
+            .orm_read(|connection| {
+                if management_scope::Entity::find_by_id(scope)
+                    .one(connection)?
+                    .is_none()
+                {
+                    return Err(crate::sqlite::DatabaseError::InvalidInput);
+                }
+                port_reservation::Entity::find()
+                    .filter(port_reservation::Column::ScopeId.eq(scope))
+                    .filter(port_reservation::Column::HostIp.eq("127.0.0.1"))
+                    .filter(port_reservation::Column::Protocol.eq("tcp"))
+                    .filter(port_reservation::Column::Status.is_in(["held", "committed"]))
+                    .all(connection)?
+                    .into_iter()
+                    .map(|reservation| {
+                        u16::try_from(reservation.host_port)
+                            .map_err(|_| crate::sqlite::DatabaseError::InvalidInput)
+                    })
+                    .collect::<Result<BTreeSet<_>, _>>()
+            })
+            .map_err(|_| PortReason::Unavailable)?;
         let published = tokio::time::timeout(Duration::from_secs(2), published_ports(docker))
             .await
             .map_err(|_| PortReason::Unavailable)??;

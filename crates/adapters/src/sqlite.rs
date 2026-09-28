@@ -8,6 +8,9 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use rusqlite::{Connection, OpenFlags, TransactionBehavior};
+use sea_orm::{
+    ConnectionTrait, Database, DatabaseConnection, DatabaseTransaction, TransactionTrait,
+};
 
 const MIGRATIONS: &[&str] = &[
     include_str!("../../../migrations/0001_initial.sql"),
@@ -18,7 +21,7 @@ const MIGRATIONS: &[&str] = &[
 ];
 const DATABASE_FILE: &str = "composenest.sqlite";
 
-type Job = Box<dyn FnOnce(&mut Connection) + Send>;
+type Job = Box<dyn FnOnce(&mut Connection, &DatabaseConnection) + Send>;
 
 /// An error that prevents safe database startup or use.
 #[derive(Debug, thiserror::Error)]
@@ -29,6 +32,18 @@ pub enum DatabaseError {
     /// SQLite rejected an operation.
     #[error("database operation failed: {0}")]
     Sqlite(#[from] rusqlite::Error),
+    /// SeaORM rejected a database operation.
+    #[error("database operation failed: {0}")]
+    Orm(#[from] sea_orm::DbErr),
+    /// The supplied values do not match the current persisted state.
+    #[error("invalid database input")]
+    InvalidInput,
+    /// A record with the same unique identity already exists.
+    #[error("duplicate database record")]
+    Duplicate,
+    /// A required database record does not exist.
+    #[error("database record not found")]
+    Missing,
     /// A database path is a link, has an unexpected type, or is insufficiently protected.
     #[error("unsafe database path: {0}")]
     UnsafePath(PathBuf),
@@ -60,9 +75,16 @@ impl DatabaseWorker {
             .name("composenest-db".into())
             .spawn(move || match open_database(&root) {
                 Ok((path, mut connection, lock)) => {
+                    let orm = match open_orm_database(&path, "rw") {
+                        Ok(orm) => orm,
+                        Err(error) => {
+                            let _ = ready_sender.send(Err(error));
+                            return;
+                        }
+                    };
                     if ready_sender.send(Ok(path)).is_ok() {
                         for job in receiver {
-                            job(&mut connection);
+                            job(&mut connection, &orm);
                         }
                     }
                     // Release the advisory lock before the thread reports shutdown.
@@ -93,11 +115,40 @@ impl DatabaseWorker {
         self.sender
             .as_ref()
             .ok_or(DatabaseError::WorkerStopped)?
-            .send(Box::new(move |connection| {
+            .send(Box::new(move |connection, _| {
                 let _ = sender.send(operation(connection));
             }))
             .map_err(|_| DatabaseError::WorkerStopped)?;
         receiver.recv().map_err(|_| DatabaseError::WorkerStopped)?
+    }
+
+    /// Runs an entity operation on the dedicated write thread.
+    pub fn orm_write<T, F>(&self, operation: F) -> Result<T, DatabaseError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&DatabaseConnection) -> Result<T, DatabaseError> + Send + 'static,
+    {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        self.sender
+            .as_ref()
+            .ok_or(DatabaseError::WorkerStopped)?
+            .send(Box::new(move |_, orm| {
+                let _ = sender.send(operation(orm));
+            }))
+            .map_err(|_| DatabaseError::WorkerStopped)?;
+        receiver.recv().map_err(|_| DatabaseError::WorkerStopped)?
+    }
+
+    /// Opens a separate read-only SeaORM connection for an entity query.
+    pub fn orm_read<T, F>(&self, operation: F) -> Result<T, DatabaseError>
+    where
+        F: FnOnce(&DatabaseTransaction) -> Result<T, DatabaseError>,
+    {
+        let connection = open_orm_database(&self.database_path, "ro")?;
+        let transaction = connection.begin()?;
+        let result = operation(&transaction)?;
+        transaction.commit()?;
+        Ok(result)
     }
 
     /// Opens a separate read-only connection for a short consistent read.
@@ -114,6 +165,19 @@ impl DatabaseWorker {
         transaction.commit()?;
         Ok(result)
     }
+}
+
+fn open_orm_database(path: &Path, mode: &str) -> Result<DatabaseConnection, DatabaseError> {
+    let mut uri = url::Url::from_file_path(path)
+        .map_err(|_| DatabaseError::UnsafePath(path.to_path_buf()))?;
+    uri.query_pairs_mut().append_pair("mode", mode);
+    let connection = Database::connect(format!("sqlite:{uri}"))?;
+    connection.execute_unprepared("PRAGMA foreign_keys = ON")?;
+    connection.execute_unprepared("PRAGMA busy_timeout = 5000")?;
+    if mode == "rw" {
+        connection.execute_unprepared("PRAGMA synchronous = FULL")?;
+    }
+    Ok(connection)
 }
 
 impl Drop for DatabaseWorker {
@@ -320,6 +384,69 @@ mod tests {
         create_private_directory(&root.path().join("state")).unwrap();
         create_private_directory(&root.path().join("locks")).unwrap();
         root
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn orm_uses_the_existing_database_when_path_contains_a_question_mark() {
+        let parent = management_root();
+        let root = parent.path().join("with?mark");
+        create_private_directory(&root).unwrap();
+        create_private_directory(&root.join("state")).unwrap();
+        create_private_directory(&root.join("locks")).unwrap();
+        let worker = DatabaseWorker::start(&root).unwrap();
+        worker
+            .orm_read(|db| {
+                let count = db
+                    .query_one_raw(sea_orm::Statement::from_string(
+                        sea_orm::DbBackend::Sqlite,
+                        "SELECT count(*) AS count FROM schema_migrations",
+                    ))?
+                    .ok_or(DatabaseError::Missing)?;
+                assert_eq!(count.try_get::<i64>("", "count")?, MIGRATIONS.len() as i64);
+                assert!(
+                    db.execute_unprepared("CREATE TABLE unexpected_write (id INTEGER)")
+                        .is_err()
+                );
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn orm_connections_enforce_foreign_keys() {
+        let root = management_root();
+        let worker = DatabaseWorker::start(root.path()).unwrap();
+        let write_settings = worker
+            .orm_write(|db| {
+                let foreign_keys = orm_foreign_keys(db)?;
+                let error = db
+                    .execute_unprepared(
+                        "INSERT INTO runtime_targets (id, scope_id, endpoint, engine_id, platform) \
+                     VALUES ('invalid', 'missing-scope', 'local', 'engine', 'linux')",
+                    )
+                    .unwrap_err();
+                let foreign_key_violation = matches!(
+                    error,
+                    sea_orm::DbErr::Exec(sea_orm::RuntimeErr::Rusqlite(ref source))
+                        if matches!(source.as_ref(), rusqlite::Error::SqliteFailure(code, _)
+                            if code.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_FOREIGNKEY)
+                );
+                Ok((foreign_keys, foreign_key_violation))
+            })
+            .unwrap();
+        assert_eq!(write_settings, (1, true));
+        assert_eq!(worker.orm_read(orm_foreign_keys).unwrap(), 1);
+    }
+
+    fn orm_foreign_keys(db: &impl ConnectionTrait) -> Result<i64, DatabaseError> {
+        let row = db
+            .query_one_raw(sea_orm::Statement::from_string(
+                sea_orm::DbBackend::Sqlite,
+                "PRAGMA foreign_keys",
+            ))?
+            .ok_or(DatabaseError::Missing)?;
+        Ok(row.try_get("", "foreign_keys")?)
     }
 
     #[test]

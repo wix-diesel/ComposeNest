@@ -57,6 +57,8 @@ Windowsで最終検証を実行し、次のコマンドが成功した。
 
 `rusqlite 0.40.2` の `bundled` 機能を使用し、同梱SQLiteは `libsqlite3-sys 0.38.2` の 3.53.2 である。設計書の3.53.4は未確定の候補版である。
 
+通常運用の CRUD は `sea-orm-sync 2.0.4` のエンティティ経由で実行する。起動時の migration、バックアップと PRAGMA 設定には引き続き `rusqlite` を使う。SeaORM の SQLite アダプターが指定する `rusqlite 0.38` と同梱 SQLite 版を揃えるため、`sea-query-rusqlite 0.8.0` に限定したローカルパッチで依存先を `rusqlite 0.40.2` に更新している。アップストリームが同版に対応した際はパッチを削除する。
+
 ### Windows 実機検証（2026-09-23）
 
 Windows 11 Home x64（build 26200）、非昇格の通常利用者、Rust 1.98.1 と Node.js 24.19.0 で PR #78 の head `2f4047d` を検証した。事前に `C:\ProgramData\ComposeNest` と `state`・`locks` を初期化済みで、所有者は通常利用者、継承を切った ACL はその利用者・SYSTEM・Administrators のみだった。

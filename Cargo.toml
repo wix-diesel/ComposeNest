@@ -7,6 +7,9 @@ members = [
 ]
 resolver = "3"
 
+[patch.crates-io]
+sea-query-rusqlite = { path = "vendor/sea-query-rusqlite" }
+
 [workspace.package]
 edition = "2024"
 license = "Apache-2.0"

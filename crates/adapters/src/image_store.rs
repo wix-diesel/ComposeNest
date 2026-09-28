@@ -1,12 +1,19 @@
-//! SQLite-backed image evidence, separate from the mutable request reference.
+//! Persisted image evidence, separate from the mutable request reference.
 
 use composenest_application::{
     image_resolution::{ImageResolution, ImageResolutionStore, valid_hash},
     state_store::StoreConflict,
 };
-use rusqlite::{OptionalExtension, params};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Set, TransactionTrait};
 
-use crate::{sqlite::DatabaseWorker, state_store::map_error};
+use crate::{
+    entities::{
+        image_resolution, instance, instance_spec, operation, operation_step, runtime_target,
+        template_snapshot,
+    },
+    sqlite::{DatabaseError, DatabaseWorker},
+    state_store::map_error,
+};
 
 impl ImageResolutionStore for DatabaseWorker {
     fn image_resolution(
@@ -15,17 +22,14 @@ impl ImageResolutionStore for DatabaseWorker {
         revision: u64,
     ) -> Result<Option<ImageResolution>, StoreConflict> {
         let revision = i64::try_from(revision).map_err(|_| StoreConflict::InvalidInput)?;
-        self.read(|db| {
-            db.query_row(
-                "SELECT instance_id, spec_revision, image_ref, digest, image_id, platform, first_operation_id \
-                 FROM image_resolutions WHERE instance_id = ?1 AND spec_revision = ?2",
-                params![id, revision],
-                |row| Ok(ImageResolution {
-                    instance_id: row.get(0)?, spec_revision: row.get::<_, i64>(1)? as u64, requested: row.get(2)?,
-                    digest: row.get(3)?, image_id: row.get(4)?, platform: row.get(5)?, operation_id: row.get(6)?,
-                }),
-            ).optional().map_err(Into::into)
-        }).map_err(map_error)
+        self.orm_read(|db| {
+            let stored = image_resolution::Entity::find()
+                .filter(image_resolution::Column::InstanceId.eq(id))
+                .filter(image_resolution::Column::SpecRevision.eq(revision))
+                .one(db)?;
+            stored.map(image_resolution_from_model).transpose()
+        })
+        .map_err(map_error)
     }
 
     fn record_image_resolution(&self, resolution: &ImageResolution) -> Result<(), StoreConflict> {
@@ -41,47 +45,106 @@ impl ImageResolutionStore for DatabaseWorker {
             return Err(StoreConflict::InvalidInput);
         }
         let resolution = resolution.clone();
-        self.write(move |db| {
-            let tx = db.transaction()?;
-            let expected: Option<(String, String)> = tx.query_row(
-                "SELECT json_extract(v.value, '$.definition.image'), t.platform \
-                 FROM instances i JOIN runtime_targets t ON t.id = i.target_id \
-                 JOIN template_snapshots s ON s.instance_id = i.id \
-                 JOIN instance_specs spec ON spec.instance_id = i.id \
-                 JOIN json_each(s.canonical_json, '$.versions') v \
-                 JOIN operations o ON o.id = ?3 AND o.instance_id = i.id \
-                     AND o.status IN ('Accepted', 'Executing') \
-                     AND COALESCE(o.new_spec_revision, o.old_spec_revision) = spec.revision \
-                 JOIN operation_steps step ON step.operation_id = o.id \
-                     AND step.attempt = o.attempt AND step.outcome IS NULL \
-                     AND step.command_kind = 'resolve_image' AND step.expected_result = 'image_resolved' \
-                 WHERE i.id = ?1 AND spec.revision = ?2 AND v.value ->> '$.key' = spec.selected_version",
-                params![resolution.instance_id, resolution.spec_revision as i64, resolution.operation_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            ).optional()?;
-            if expected.as_ref() != Some(&(resolution.requested.clone(), resolution.platform.clone())) {
-                return Err(rusqlite::Error::InvalidQuery.into());
+        self.orm_write(move |db| {
+            let tx = db.begin()?;
+            let revision = resolution.spec_revision as i64;
+            let owner = instance::Entity::find_by_id(&resolution.instance_id).one(&tx)?;
+            let Some(owner) = owner else {
+                return Err(DatabaseError::InvalidInput);
+            };
+            let target = runtime_target::Entity::find_by_id(&owner.target_id).one(&tx)?;
+            let snapshot = template_snapshot::Entity::find()
+                .filter(template_snapshot::Column::InstanceId.eq(&resolution.instance_id))
+                .one(&tx)?;
+            let spec =
+                instance_spec::Entity::find_by_id((resolution.instance_id.clone(), revision))
+                    .one(&tx)?;
+            let operation = operation::Entity::find_by_id(&resolution.operation_id).one(&tx)?;
+            let valid_operation = operation.as_ref().is_some_and(|operation| {
+                operation.instance_id == resolution.instance_id
+                    && matches!(operation.status.as_str(), "Accepted" | "Executing")
+                    && operation.new_spec_revision.or(operation.old_spec_revision) == Some(revision)
+            });
+            let valid_step = operation_step::Entity::find()
+                .filter(operation_step::Column::OperationId.eq(&resolution.operation_id))
+                .filter(
+                    operation_step::Column::Attempt
+                        .eq(operation.as_ref().map_or(0, |operation| operation.attempt)),
+                )
+                .filter(operation_step::Column::Outcome.is_null())
+                .filter(operation_step::Column::CommandKind.eq("resolve_image"))
+                .filter(operation_step::Column::ExpectedResult.eq("image_resolved"))
+                .one(&tx)?
+                .is_some();
+            let expected_image =
+                snapshot
+                    .as_ref()
+                    .zip(spec.as_ref())
+                    .and_then(|(snapshot, spec)| {
+                        let value: serde_json::Value =
+                            serde_json::from_str(&snapshot.canonical_json).ok()?;
+                        value
+                            .get("versions")?
+                            .as_array()?
+                            .iter()
+                            .find(|version| {
+                                version.get("key").and_then(serde_json::Value::as_str)
+                                    == Some(&spec.selected_version)
+                            })?
+                            .get("definition")?
+                            .get("image")?
+                            .as_str()
+                            .map(str::to_owned)
+                    });
+            if !valid_operation
+                || !valid_step
+                || expected_image.as_deref() != Some(&resolution.requested)
+                || target.as_ref().map(|target| target.platform.as_str())
+                    != Some(&resolution.platform)
+            {
+                return Err(DatabaseError::InvalidInput);
             }
-            let current: Option<(String, String, String, String, String)> = tx.query_row(
-                "SELECT image_ref, digest, image_id, platform, first_operation_id FROM image_resolutions \
-                 WHERE instance_id = ?1 AND spec_revision = ?2",
-                params![resolution.instance_id, resolution.spec_revision as i64],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
-            ).optional()?;
+            let current = image_resolution::Entity::find()
+                .filter(image_resolution::Column::InstanceId.eq(&resolution.instance_id))
+                .filter(image_resolution::Column::SpecRevision.eq(revision))
+                .one(&tx)?;
             if let Some(current) = current {
-                if current != (resolution.requested, resolution.digest, resolution.image_id, resolution.platform, resolution.operation_id) {
-                    return Err(rusqlite::Error::InvalidQuery.into());
+                if image_resolution_from_model(current)? != resolution {
+                    return Err(DatabaseError::InvalidInput);
                 }
                 return Ok(());
             }
-            tx.execute("INSERT INTO image_resolutions VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![resolution.instance_id, resolution.spec_revision as i64, resolution.requested,
-                    resolution.digest, resolution.image_id, resolution.platform, resolution.operation_id])?;
+            image_resolution::Entity::insert(image_resolution::ActiveModel {
+                instance_id: Set(resolution.instance_id),
+                spec_revision: Set(revision),
+                image_ref: Set(resolution.requested),
+                digest: Set(resolution.digest),
+                image_id: Set(resolution.image_id),
+                platform: Set(resolution.platform),
+                first_operation_id: Set(resolution.operation_id),
+            })
+            .exec(&tx)?;
             tx.commit()?;
             Ok(())
-        }).map_err(|error| match error {
-            crate::sqlite::DatabaseError::Sqlite(rusqlite::Error::InvalidQuery) => StoreConflict::InvalidInput,
+        })
+        .map_err(|error| match error {
+            DatabaseError::InvalidInput => StoreConflict::InvalidInput,
             other => map_error(other),
         })
     }
+}
+
+fn image_resolution_from_model(
+    model: image_resolution::Model,
+) -> Result<ImageResolution, DatabaseError> {
+    Ok(ImageResolution {
+        instance_id: model.instance_id,
+        spec_revision: u64::try_from(model.spec_revision)
+            .map_err(|_| DatabaseError::InvalidInput)?,
+        requested: model.image_ref,
+        digest: model.digest,
+        image_id: model.image_id,
+        platform: model.platform,
+        operation_id: model.first_operation_id,
+    })
 }

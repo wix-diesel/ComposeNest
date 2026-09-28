@@ -5,11 +5,14 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 
-use rusqlite::{OptionalExtension, TransactionBehavior, params};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set, TransactionTrait};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use crate::sqlite::{DatabaseError, DatabaseWorker};
+use crate::{
+    entities::{artifact, artifact_file, operation},
+    sqlite::{DatabaseError, DatabaseWorker},
+};
 
 /// A failure that leaves an artifact unavailable for execution.
 #[derive(Debug, thiserror::Error)]
@@ -111,30 +114,52 @@ impl<'a> ArtifactStore<'a> {
         let publication_operation = operation_id.to_owned();
         let db_expected = expected.clone();
         let db_hash = manifest_hash.clone();
-        let recorded = self.database.write(move |db| {
-            let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let operation_instance: Option<String> = tx.query_row(
-                "SELECT instance_id FROM operations WHERE id = ?1", [&publication_operation], |row| row.get(0),
-            ).optional()?;
-            if operation_instance.as_deref() != Some(instance.as_str()) { return Ok(None); }
-            let current: Option<(String, i64, String, String, String, String)> = tx.query_row(
-                "SELECT instance_id, spec_revision, generator_version, manifest_hash, publication_operation_id, placement FROM artifacts WHERE id = ?1",
-                [&db_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
-            ).optional()?;
+        let recorded = self.database.orm_write(move |db| {
+            let tx = db.begin()?;
+            let operation_instance =
+                operation::Entity::find_by_id(&publication_operation).one(&tx)?;
+            if operation_instance
+                .as_ref()
+                .map(|operation| operation.instance_id.as_str())
+                != Some(instance.as_str())
+            {
+                return Ok(None);
+            }
+            let current = artifact::Entity::find_by_id(&db_id).one(&tx)?;
             if let Some(current) = current {
-                if (current.0, current.1, current.2, current.3, current.4) != (instance, revision, generator, db_hash, publication_operation) {
+                if current.instance_id != instance
+                    || current.spec_revision != revision
+                    || current.generator_version != generator
+                    || current.manifest_hash != db_hash
+                    || current.publication_operation_id.as_deref() != Some(&publication_operation)
+                {
                     return Ok(None);
                 }
-                let mut statement = tx.prepare("SELECT relative_path, sha256 FROM artifact_files WHERE artifact_id = ?1")?;
-                let recorded: BTreeMap<String, String> = statement.query_map([&db_id], |row| Ok((row.get(0)?, row.get(1)?)))?
-                    .collect::<rusqlite::Result<_>>()?;
-                return Ok((recorded == db_expected).then_some(current.5 == "published"));
+                let recorded: BTreeMap<String, String> = artifact_file::Entity::find()
+                    .filter(artifact_file::Column::ArtifactId.eq(&db_id))
+                    .all(&tx)?
+                    .into_iter()
+                    .map(|file| (file.relative_path, file.sha256))
+                    .collect();
+                return Ok((recorded == db_expected).then_some(current.placement == "published"));
             }
-            tx.execute("INSERT INTO artifacts (id, instance_id, spec_revision, generator_version, manifest_hash, placement, publication_operation_id) VALUES (?1, ?2, ?3, ?4, ?5, 'staged', ?6)",
-                params![db_id, instance, revision, generator, db_hash, publication_operation])?;
+            artifact::Entity::insert(artifact::ActiveModel {
+                id: Set(db_id.clone()),
+                instance_id: Set(instance),
+                spec_revision: Set(revision),
+                generator_version: Set(generator),
+                manifest_hash: Set(db_hash),
+                placement: Set("staged".into()),
+                publication_operation_id: Set(Some(publication_operation)),
+            })
+            .exec(&tx)?;
             for (path, hash) in db_expected {
-                tx.execute("INSERT INTO artifact_files (artifact_id, relative_path, sha256) VALUES (?1, ?2, ?3)",
-                    params![db_id, path, hash])?;
+                artifact_file::Entity::insert(artifact_file::ActiveModel {
+                    artifact_id: Set(db_id.clone()),
+                    relative_path: Set(path),
+                    sha256: Set(hash),
+                })
+                .exec(&tx)?;
             }
             tx.commit()?;
             Ok(Some(false))
@@ -191,16 +216,14 @@ impl<'a> ArtifactStore<'a> {
     /// Returns a fixed Compose path only after a full check against SQLite hashes.
     pub fn verified_compose_path(&self, id: &str) -> Result<PathBuf, ArtifactError> {
         let path = self.verify(id)?;
-        let placement = self.database.read(|db| {
-            Ok(db
-                .query_row(
-                    "SELECT placement FROM artifacts WHERE id = ?1",
-                    [id],
-                    |row| row.get::<_, String>(0),
-                )
-                .optional()?)
-        })?;
-        if placement.as_deref() != Some("published") {
+        let artifact = self
+            .database
+            .orm_read(|db| Ok(artifact::Entity::find_by_id(id).one(db)?))?;
+        if artifact
+            .as_ref()
+            .map(|artifact| artifact.placement.as_str())
+            != Some("published")
+        {
             return Err(ArtifactError::Unavailable);
         }
         Ok(path.join("compose.yaml"))
@@ -208,20 +231,16 @@ impl<'a> ArtifactStore<'a> {
 
     fn verify(&self, id: &str) -> Result<PathBuf, ArtifactError> {
         validate_id(id)?;
-        let record = self.database.read(|db| {
-            let identity: Option<(String, String)> = db
-                .query_row(
-                    "SELECT instance_id, manifest_hash FROM artifacts WHERE id = ?1",
-                    [id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .optional()?;
-            let mut statement = db.prepare(
-                "SELECT relative_path, sha256 FROM artifact_files WHERE artifact_id = ?1",
-            )?;
-            let files = statement
-                .query_map([id], |row| Ok((row.get(0)?, row.get(1)?)))?
-                .collect::<rusqlite::Result<BTreeMap<String, String>>>()?;
+        let record = self.database.orm_read(|db| {
+            let identity = artifact::Entity::find_by_id(id)
+                .one(db)?
+                .map(|artifact| (artifact.instance_id, artifact.manifest_hash));
+            let files = artifact_file::Entity::find()
+                .filter(artifact_file::Column::ArtifactId.eq(id))
+                .all(db)?
+                .into_iter()
+                .map(|file| (file.relative_path, file.sha256))
+                .collect::<BTreeMap<_, _>>();
             Ok((identity, files))
         })?;
         let (instance, manifest_hash) = record.0.ok_or(ArtifactError::Unavailable)?;
@@ -261,10 +280,22 @@ impl<'a> ArtifactStore<'a> {
 
     fn mark_published(&self, id: &str) -> Result<(), ArtifactError> {
         let id = id.to_owned();
-        let changed = self.database.write(move |db| {
-            Ok(db.execute("UPDATE artifacts SET placement = 'published' WHERE id = ?1 AND placement IN ('staged', 'published')", [&id])?)
+        let changed = self.database.orm_write(move |db| {
+            let current = artifact::Entity::find_by_id(&id).one(db)?;
+            let Some(current) = current
+                .filter(|artifact| matches!(artifact.placement.as_str(), "staged" | "published"))
+            else {
+                return Ok(false);
+            };
+            artifact::ActiveModel {
+                id: Set(current.id),
+                placement: Set("published".into()),
+                ..Default::default()
+            }
+            .update(db)?;
+            Ok(true)
         })?;
-        if changed != 1 {
+        if !changed {
             return Err(ArtifactError::Unavailable);
         }
         Ok(())

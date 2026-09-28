@@ -6,8 +6,16 @@ use composenest_application::operation_journal::{
     StepRecord,
 };
 use composenest_application::state_store::{InstanceRecord, RuntimeTarget, StoreConflict};
-use rusqlite::{Connection, Error, OptionalExtension, TransactionBehavior, params};
+use rusqlite::Error;
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
+    sea_query::Expr,
+};
 
+use crate::entities::{
+    instance as instance_entity, instance_spec, operation as operation_entity, operation_step,
+    request_receipt, runtime_target,
+};
 use crate::sqlite::{DatabaseError, DatabaseWorker};
 use crate::state_store::{insert_instance, map_error};
 
@@ -74,9 +82,9 @@ impl PlanCommitStore for DatabaseWorker {
             target_guard.clone(),
             clone_guard.cloned(),
         );
-        self.write(move |db| {
-            let transaction = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            if let Some(existing) = find_receipt(
+        self.orm_write(move |db| {
+            let transaction = db.begin()?;
+            if let Some(existing) = find_receipt_orm(
                 &transaction,
                 &receipt.scope_id,
                 &receipt.request_id,
@@ -91,48 +99,79 @@ impl PlanCommitStore for DatabaseWorker {
                     Err(StoreConflict::Duplicate)
                 });
             }
-            let target_matches: bool = transaction.query_row(
-                "SELECT EXISTS(SELECT 1 FROM runtime_targets WHERE id = ?1 AND scope_id = ?2 AND endpoint = ?3 AND engine_id = ?4 AND platform = ?5)",
-                params![target_guard.id, target_guard.scope_id, target_guard.endpoint,
-                    target_guard.engine_id, target_guard.platform], |row| row.get(0),
-            )?;
+            let target = runtime_target::Entity::find_by_id(&target_guard.id).one(&transaction)?;
+            let target_matches = target.is_some_and(|target| {
+                target.scope_id == target_guard.scope_id
+                    && target.endpoint == target_guard.endpoint
+                    && target.engine_id == target_guard.engine_id
+                    && target.platform == target_guard.platform
+            });
             if !target_matches {
                 return Ok(Err(StoreConflict::StaleRevision));
             }
             if let (Some(guard), Some(revision), Some(spec_revision)) =
-                (&guard, guard_revision, guard_spec_revision) {
-                let current = transaction.query_row(
-                    "SELECT revision, COALESCE((SELECT MAX(o.new_spec_revision) FROM operations o \
-                        WHERE o.instance_id = instances.id AND o.status = 'Succeeded' \
-                        AND o.new_spec_revision IS NOT NULL), 1) \
-                     FROM instances WHERE id = ?1 AND scope_id = ?2 AND target_id = ?3 AND lifecycle = 'managed'",
-                    params![guard.instance_id, instance.scope_id, instance.target_id],
-                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
-                ).optional()?;
-                if current != Some((revision, spec_revision)) {
+                (&guard, guard_revision, guard_spec_revision)
+            {
+                let current =
+                    instance_entity::Entity::find_by_id(&guard.instance_id).one(&transaction)?;
+                let matches = current.is_some_and(|current| {
+                    current.scope_id == instance.scope_id
+                        && current.target_id == instance.target_id
+                        && current.lifecycle == "managed"
+                        && current.revision == revision
+                });
+                let latest = operation_entity::Entity::find()
+                    .filter(operation_entity::Column::InstanceId.eq(&guard.instance_id))
+                    .filter(operation_entity::Column::Status.eq("Succeeded"))
+                    .all(&transaction)?
+                    .into_iter()
+                    .filter_map(|operation| operation.new_spec_revision)
+                    .max()
+                    .unwrap_or(1);
+                if !matches
+                    || latest != spec_revision
+                    || instance_spec::Entity::find_by_id((guard.instance_id.clone(), latest))
+                        .one(&transaction)?
+                        .is_none()
+                {
                     return Ok(Err(StoreConflict::StaleRevision));
                 }
-                let unresolved: bool = transaction.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM operations WHERE instance_id = ?1 AND status NOT IN ('Succeeded', 'Abandoned'))",
-                    [&guard.instance_id], |row| row.get(0),
-                )?;
+                let unresolved = operation_entity::Entity::find()
+                    .filter(operation_entity::Column::InstanceId.eq(&guard.instance_id))
+                    .filter(operation_entity::Column::Status.is_not_in(["Succeeded", "Abandoned"]))
+                    .one(&transaction)?
+                    .is_some();
                 if unresolved {
                     return Ok(Err(StoreConflict::InvalidLifecycle));
                 }
             }
             insert_instance(&transaction, &instance)?;
-            transaction.execute(
-                "INSERT INTO operations (id, instance_id, kind, phase, expected_instance_revision, new_spec_revision) VALUES (?1, ?2, ?3, ?4, 1, 1)",
-                params![intent.id, intent.instance_id, kind_name(intent.kind), intent.phase],
-            )?;
-            transaction.execute(
-                "INSERT INTO request_receipts (scope_id, request_id, plan_id, confirmed_revision, request_hash, instance_id, operation_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![receipt.scope_id, receipt.request_id, receipt.plan_id, confirmed,
-                    receipt.request_hash, receipt.instance_id, receipt.operation_id],
-            )?;
+            operation_entity::Entity::insert(operation_entity::ActiveModel {
+                id: Set(intent.id),
+                instance_id: Set(intent.instance_id),
+                kind: Set(kind_name(intent.kind).into()),
+                phase: Set(intent.phase),
+                expected_instance_revision: Set(1),
+                new_spec_revision: Set(Some(1)),
+                ..Default::default()
+            })
+            .exec(&transaction)?;
+            let result = receipt.clone();
+            request_receipt::Entity::insert(request_receipt::ActiveModel {
+                scope_id: Set(receipt.scope_id),
+                request_id: Set(receipt.request_id),
+                plan_id: Set(receipt.plan_id),
+                confirmed_revision: Set(confirmed),
+                request_hash: Set(receipt.request_hash),
+                instance_id: Set(receipt.instance_id),
+                operation_id: Set(receipt.operation_id),
+                ..Default::default()
+            })
+            .exec(&transaction)?;
             transaction.commit()?;
-            Ok(Ok(receipt))
-        }).map_err(|error| match error {
+            Ok(Ok(result))
+        })
+        .map_err(|error| match error {
             DatabaseError::Sqlite(Error::QueryReturnedNoRows) => StoreConflict::Missing,
             other => map_error(other),
         })?
@@ -189,32 +228,36 @@ fn step_outcome(value: Option<String>) -> Option<Option<StepOutcome>> {
     }
 }
 
-fn receipt_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RequestReceipt> {
+fn receipt_from_model(model: request_receipt::Model) -> Result<RequestReceipt, DatabaseError> {
     Ok(RequestReceipt {
-        scope_id: row.get(0)?,
-        request_id: row.get(1)?,
-        plan_id: row.get(2)?,
-        confirmed_revision: row.get::<_, i64>(3)? as u64,
-        request_hash: row.get(4)?,
-        instance_id: row.get(5)?,
-        operation_id: row.get(6)?,
+        scope_id: model.scope_id,
+        request_id: model.request_id,
+        plan_id: model.plan_id,
+        confirmed_revision: u64::try_from(model.confirmed_revision)
+            .map_err(|_| DatabaseError::InvalidInput)?,
+        request_hash: model.request_hash,
+        instance_id: model.instance_id,
+        operation_id: model.operation_id,
     })
 }
 
-fn find_receipt(
-    db: &Connection,
+fn find_receipt_orm(
+    db: &sea_orm::DatabaseTransaction,
     scope_id: &str,
     request_id: &str,
     plan_id: Option<&str>,
-) -> rusqlite::Result<Option<RequestReceipt>> {
-    db.query_row(
-        "SELECT scope_id, request_id, plan_id, confirmed_revision, request_hash, instance_id, operation_id
-         FROM request_receipts WHERE scope_id = ?1 AND (request_id = ?2 OR (plan_id IS NOT NULL AND plan_id = ?3))
-         ORDER BY request_id = ?2 DESC LIMIT 1",
-        params![scope_id, request_id, plan_id],
-        receipt_row,
-    )
-    .optional()
+) -> Result<Option<RequestReceipt>, DatabaseError> {
+    let receipt = request_receipt::Entity::find_by_id((scope_id.to_owned(), request_id.to_owned()))
+        .one(db)?;
+    let receipt = if receipt.is_some() || plan_id.is_none() {
+        receipt
+    } else {
+        request_receipt::Entity::find()
+            .filter(request_receipt::Column::ScopeId.eq(scope_id))
+            .filter(request_receipt::Column::PlanId.eq(plan_id.unwrap_or_default()))
+            .one(db)?
+    };
+    receipt.map(receipt_from_model).transpose()
 }
 
 fn checked_revision(revision: u64) -> Result<i64, StoreConflict> {
@@ -251,9 +294,9 @@ impl OperationJournal for DatabaseWorker {
         let old = intent.old_spec_revision.map(checked_revision).transpose()?;
         let new = intent.new_spec_revision.map(checked_revision).transpose()?;
         let (intent, receipt) = (intent.clone(), receipt.clone());
-        self.write(move |db| {
-            let transaction = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            if let Some(existing) = find_receipt(
+        self.orm_write(move |db| {
+            let transaction = db.begin()?;
+            if let Some(existing) = find_receipt_orm(
                 &transaction,
                 &receipt.scope_id,
                 &receipt.request_id,
@@ -269,33 +312,41 @@ impl OperationJournal for DatabaseWorker {
                     Err(StoreConflict::Duplicate)
                 });
             }
-            let current = transaction
-                .query_row(
-                    "SELECT revision FROM instances WHERE id = ?1 AND scope_id = ?2 AND lifecycle = 'managed'",
-                    params![intent.instance_id, receipt.scope_id],
-                    |row| row.get::<_, i64>(0),
-                )
-                .optional()?;
-            match current {
-                None => return Ok(Err(StoreConflict::Missing)),
-                Some(revision) if revision != expected => {
-                    return Ok(Err(StoreConflict::StaleRevision));
-                }
-                _ => {}
+            let current =
+                instance_entity::Entity::find_by_id(&intent.instance_id).one(&transaction)?;
+            let Some(current) = current.filter(|instance| {
+                instance.scope_id == receipt.scope_id && instance.lifecycle == "managed"
+            }) else {
+                return Ok(Err(StoreConflict::Missing));
+            };
+            if current.revision != expected {
+                return Ok(Err(StoreConflict::StaleRevision));
             }
-            transaction.execute(
-                "INSERT INTO operations (id, instance_id, kind, phase, expected_instance_revision, old_spec_revision, new_spec_revision)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![intent.id, intent.instance_id, kind_name(intent.kind), intent.phase, expected, old, new],
-            )?;
-            transaction.execute(
-                "INSERT INTO request_receipts (scope_id, request_id, plan_id, confirmed_revision, request_hash, instance_id, operation_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![receipt.scope_id, receipt.request_id, receipt.plan_id, confirmed,
-                    receipt.request_hash, receipt.instance_id, receipt.operation_id],
-            )?;
+            operation_entity::Entity::insert(operation_entity::ActiveModel {
+                id: Set(intent.id),
+                instance_id: Set(intent.instance_id),
+                kind: Set(kind_name(intent.kind).into()),
+                phase: Set(intent.phase),
+                expected_instance_revision: Set(expected),
+                old_spec_revision: Set(old),
+                new_spec_revision: Set(new),
+                ..Default::default()
+            })
+            .exec(&transaction)?;
+            let result = receipt.clone();
+            request_receipt::Entity::insert(request_receipt::ActiveModel {
+                scope_id: Set(receipt.scope_id),
+                request_id: Set(receipt.request_id),
+                plan_id: Set(receipt.plan_id),
+                confirmed_revision: Set(confirmed),
+                request_hash: Set(receipt.request_hash),
+                instance_id: Set(receipt.instance_id),
+                operation_id: Set(receipt.operation_id),
+                ..Default::default()
+            })
+            .exec(&transaction)?;
             transaction.commit()?;
-            Ok(Ok(receipt))
+            Ok(Ok(result))
         })
         .map_err(map_error)?
     }
@@ -305,7 +356,7 @@ impl OperationJournal for DatabaseWorker {
         scope_id: &str,
         request_id: &str,
     ) -> Result<Option<RequestReceipt>, StoreConflict> {
-        self.read(|db| Ok(find_receipt(db, scope_id, request_id, None)?))
+        self.orm_read(|db| find_receipt_orm(db, scope_id, request_id, None))
             .map_err(map_error)
     }
 
@@ -314,15 +365,13 @@ impl OperationJournal for DatabaseWorker {
         scope_id: &str,
         plan_id: &str,
     ) -> Result<Option<RequestReceipt>, StoreConflict> {
-        self.read(|db| {
-            Ok(db
-                .query_row(
-                    "SELECT scope_id, request_id, plan_id, confirmed_revision, request_hash, instance_id, operation_id
-                     FROM request_receipts WHERE scope_id = ?1 AND plan_id = ?2",
-                    params![scope_id, plan_id],
-                    receipt_row,
-                )
-                .optional()?)
+        self.orm_read(|db| {
+            request_receipt::Entity::find()
+                .filter(request_receipt::Column::ScopeId.eq(scope_id))
+                .filter(request_receipt::Column::PlanId.eq(plan_id))
+                .one(db)?
+                .map(receipt_from_model)
+                .transpose()
         })
         .map_err(map_error)
     }
@@ -334,18 +383,30 @@ impl OperationJournal for DatabaseWorker {
         let sequence = checked_revision(step.sequence)?;
         let attempt = checked_revision(step.attempt)?;
         let step = step.clone();
-        self.write(move |db| {
-            let count = db.execute(
-                "INSERT INTO operation_steps (operation_id, sequence, attempt, command_kind, resource_id, expected_result)
-                 SELECT id, ?2, ?3, ?4, ?5, ?6 FROM operations
-                 WHERE id = ?1 AND attempt = ?3 AND status NOT IN ('Succeeded', 'Abandoned')",
-                params![step.operation_id, sequence, attempt, step.command_kind.as_str(),
-                    step.resource_id, step.expected_result.as_str()],
-            )?;
-            Ok(count)
+        self.orm_write(move |db| {
+            let transaction = db.begin()?;
+            let parent =
+                operation_entity::Entity::find_by_id(&step.operation_id).one(&transaction)?;
+            let Some(parent) = parent.filter(|parent| {
+                parent.attempt == attempt
+                    && !matches!(parent.status.as_str(), "Succeeded" | "Abandoned")
+            }) else {
+                return Err(DatabaseError::Missing);
+            };
+            operation_step::Entity::insert(operation_step::ActiveModel {
+                operation_id: Set(parent.id),
+                sequence: Set(sequence),
+                attempt: Set(attempt),
+                command_kind: Set(step.command_kind.as_str().into()),
+                resource_id: Set(step.resource_id),
+                expected_result: Set(step.expected_result.as_str().into()),
+                ..Default::default()
+            })
+            .exec(&transaction)?;
+            transaction.commit()?;
+            Ok(())
         })
         .map_err(map_error)
-        .and_then(|count| if count == 1 { Ok(()) } else { Err(StoreConflict::Missing) })
     }
 
     fn steps_for_resource(
@@ -353,72 +414,41 @@ impl OperationJournal for DatabaseWorker {
         operation_id: &str,
         resource_id: &str,
     ) -> Result<Vec<StepRecord>, StoreConflict> {
-        let (operation_id, resource_id) = (operation_id.to_owned(), resource_id.to_owned());
-        self.read(move |db| {
-            let mut query = db.prepare(
-                "SELECT o.instance_id, r.scope_id, s.sequence, s.attempt, s.command_kind,
-                        s.resource_id, s.expected_result, s.outcome
-                 FROM operation_steps s
-                 JOIN operations o ON o.id = s.operation_id
-                 JOIN request_receipts r ON r.operation_id = o.id
-                 WHERE s.operation_id = ?1 AND s.resource_id = ?2
-                 ORDER BY s.sequence",
-            )?;
-            let rows = query.query_map(params![operation_id, resource_id], |row| {
-                let instance_id = row.get::<_, String>(0)?;
-                let scope_id = row.get::<_, String>(1)?;
-                let sequence = row.get::<_, i64>(2)?;
-                let attempt = row.get::<_, i64>(3)?;
-                let command = row.get::<_, String>(4)?;
-                let resource_id = row.get::<_, String>(5)?;
-                let expected = row.get::<_, String>(6)?;
-                let outcome = row.get::<_, Option<String>>(7)?;
-                Ok((
-                    instance_id,
-                    scope_id,
-                    sequence,
-                    attempt,
-                    command,
-                    resource_id,
-                    expected,
-                    outcome,
-                ))
-            })?;
-            let mut records = Vec::new();
-            for row in rows {
-                let (
-                    instance_id,
-                    scope_id,
-                    sequence,
-                    attempt,
-                    command,
-                    resource_id,
-                    expected,
-                    outcome,
-                ) = row?;
-                let Some(command_kind) = step_command(&command) else {
-                    return Err(DatabaseError::Sqlite(Error::InvalidQuery));
-                };
-                let Some(expected_result) = expected_result(&expected) else {
-                    return Err(DatabaseError::Sqlite(Error::InvalidQuery));
-                };
-                let Some(outcome) = step_outcome(outcome) else {
-                    return Err(DatabaseError::Sqlite(Error::InvalidQuery));
-                };
-                records.push(StepRecord {
-                    instance_id,
-                    scope_id,
-                    sequence: u64::try_from(sequence)
-                        .map_err(|_| DatabaseError::Sqlite(Error::InvalidQuery))?,
-                    attempt: u64::try_from(attempt)
-                        .map_err(|_| DatabaseError::Sqlite(Error::InvalidQuery))?,
-                    command_kind,
-                    resource_id,
-                    expected_result,
-                    outcome,
-                });
+        self.orm_read(|db| {
+            let steps = operation_step::Entity::find()
+                .filter(operation_step::Column::OperationId.eq(operation_id))
+                .filter(operation_step::Column::ResourceId.eq(resource_id))
+                .order_by_asc(operation_step::Column::Sequence)
+                .all(db)?;
+            if steps.is_empty() {
+                return Ok(Vec::new());
             }
-            Ok(records)
+            let operation = operation_entity::Entity::find_by_id(operation_id).one(db)?;
+            let receipt = request_receipt::Entity::find()
+                .filter(request_receipt::Column::OperationId.eq(operation_id))
+                .one(db)?;
+            let (Some(operation), Some(receipt)) = (operation, receipt) else {
+                return Ok(Vec::new());
+            };
+            steps
+                .into_iter()
+                .map(|step| {
+                    Ok(StepRecord {
+                        instance_id: operation.instance_id.clone(),
+                        scope_id: receipt.scope_id.clone(),
+                        sequence: u64::try_from(step.sequence)
+                            .map_err(|_| DatabaseError::InvalidInput)?,
+                        attempt: u64::try_from(step.attempt)
+                            .map_err(|_| DatabaseError::InvalidInput)?,
+                        command_kind: step_command(&step.command_kind)
+                            .ok_or(DatabaseError::InvalidInput)?,
+                        resource_id: step.resource_id,
+                        expected_result: expected_result(&step.expected_result)
+                            .ok_or(DatabaseError::InvalidInput)?,
+                        outcome: step_outcome(step.outcome).ok_or(DatabaseError::InvalidInput)?,
+                    })
+                })
+                .collect()
         })
         .map_err(map_error)
     }
@@ -431,13 +461,21 @@ impl OperationJournal for DatabaseWorker {
     ) -> Result<(), StoreConflict> {
         let sequence = checked_revision(sequence)?;
         let operation_id = operation_id.to_owned();
-        self.write(move |db| {
-            let count = db.execute(
-                "UPDATE operation_steps SET outcome = ?3, observed_at = CURRENT_TIMESTAMP
-                 WHERE operation_id = ?1 AND sequence = ?2 AND outcome IS NULL",
-                params![operation_id, sequence, outcome.as_str()],
-            )?;
-            Ok(count)
+        self.orm_write(move |db| {
+            Ok(operation_step::Entity::update_many()
+                .col_expr(
+                    operation_step::Column::Outcome,
+                    Expr::value(outcome.as_str()),
+                )
+                .col_expr(
+                    operation_step::Column::ObservedAt,
+                    Expr::cust("CURRENT_TIMESTAMP"),
+                )
+                .filter(operation_step::Column::OperationId.eq(operation_id))
+                .filter(operation_step::Column::Sequence.eq(sequence))
+                .filter(operation_step::Column::Outcome.is_null())
+                .exec(db)?
+                .rows_affected)
         })
         .map_err(map_error)
         .and_then(|count| {
@@ -454,15 +492,32 @@ impl OperationJournal for DatabaseWorker {
             return Err(StoreConflict::InvalidInput);
         }
         let (operation_id, phase) = (operation_id.to_owned(), phase.to_owned());
-        self.write(move |db| {
-            let mut statement = db.prepare(
-                "UPDATE operations SET attempt = attempt + 1, status = 'Executing', phase = ?2
-                 WHERE id = ?1 AND status IN ('Failed', 'AwaitingDecision', 'OutcomeUnknown')
-                 RETURNING attempt",
-            )?;
-            Ok(statement
-                .query_row(params![operation_id, phase], |row| row.get::<_, i64>(0))
-                .optional()?)
+        self.orm_write(move |db| {
+            let transaction = db.begin()?;
+            let operation =
+                operation_entity::Entity::find_by_id(&operation_id).one(&transaction)?;
+            let Some(operation) = operation.filter(|operation| {
+                matches!(
+                    operation.status.as_str(),
+                    "Failed" | "AwaitingDecision" | "OutcomeUnknown"
+                )
+            }) else {
+                return Ok(None);
+            };
+            let attempt = operation
+                .attempt
+                .checked_add(1)
+                .ok_or(DatabaseError::InvalidInput)?;
+            operation_entity::ActiveModel {
+                id: Set(operation.id),
+                attempt: Set(attempt),
+                status: Set("Executing".into()),
+                phase: Set(phase),
+                ..Default::default()
+            }
+            .update(&transaction)?;
+            transaction.commit()?;
+            Ok(Some(attempt))
         })
         .map_err(map_error)?
         .map(|attempt| attempt as u64)
@@ -479,25 +534,43 @@ impl OperationJournal for DatabaseWorker {
             return Err(StoreConflict::InvalidInput);
         }
         let (operation_id, phase) = (operation_id.to_owned(), phase.to_owned());
-        self.write(move |db| {
-            let count = db.execute(
-                "UPDATE operations SET status = ?2, phase = ?3,
-                    completed_at = CASE WHEN ?4 THEN CURRENT_TIMESTAMP ELSE NULL END
-                 WHERE id = ?1 AND status NOT IN ('Succeeded', 'Abandoned')
-                   AND (?2 != 'Succeeded' OR NOT EXISTS (
-                       SELECT 1 FROM operation_steps WHERE operation_id = ?1 AND outcome IS NULL))",
-                params![
-                    operation_id,
-                    status_name(status),
-                    phase,
-                    !status.is_unresolved()
-                ],
-            )?;
-            Ok(count)
+        self.orm_write(move |db| {
+            let transaction = db.begin()?;
+            let current = operation_entity::Entity::find_by_id(&operation_id).one(&transaction)?;
+            let Some(current) = current
+                .filter(|current| !matches!(current.status.as_str(), "Succeeded" | "Abandoned"))
+            else {
+                return Ok(false);
+            };
+            if status == OperationStatus::Succeeded
+                && operation_step::Entity::find()
+                    .filter(operation_step::Column::OperationId.eq(&operation_id))
+                    .filter(operation_step::Column::Outcome.is_null())
+                    .one(&transaction)?
+                    .is_some()
+            {
+                return Ok(false);
+            }
+            let completed_at = if status.is_unresolved() {
+                Expr::value(Option::<String>::None)
+            } else {
+                Expr::cust("CURRENT_TIMESTAMP")
+            };
+            operation_entity::Entity::update_many()
+                .col_expr(
+                    operation_entity::Column::Status,
+                    Expr::value(status_name(status)),
+                )
+                .col_expr(operation_entity::Column::Phase, Expr::value(phase))
+                .col_expr(operation_entity::Column::CompletedAt, completed_at)
+                .filter(operation_entity::Column::Id.eq(current.id))
+                .exec(&transaction)?;
+            transaction.commit()?;
+            Ok(true)
         })
         .map_err(map_error)
-        .and_then(|count| {
-            if count == 1 {
+        .and_then(|changed| {
+            if changed {
                 Ok(())
             } else {
                 Err(StoreConflict::InvalidLifecycle)

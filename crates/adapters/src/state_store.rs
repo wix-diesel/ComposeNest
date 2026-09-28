@@ -1502,6 +1502,42 @@ mod tests {
     }
 
     #[test]
+    fn clone_commit_rejects_changed_committed_spec_without_instance_revision_change() {
+        let (_root, worker) = store();
+        worker.register_template(&revision()).unwrap();
+        worker
+            .commit_instance(&instance("one", "One", 13000))
+            .unwrap();
+        worker.write(|db| {
+            db.execute("INSERT INTO instance_specs VALUES ('one', 2, '8', 'bind', '{}')", [])?;
+            db.execute("INSERT INTO operations (id, instance_id, kind, status, phase, expected_instance_revision, old_spec_revision, new_spec_revision, completed_at) \
+                VALUES ('updated', 'one', 'edit_port', 'Succeeded', 'done', 1, 1, 2, CURRENT_TIMESTAMP)", [])?;
+            Ok(())
+        }).unwrap();
+        let mut clone = instance("clone", "Clone", 13001);
+        clone.clone_source_id = Some("one".into());
+        let mut intent = plan_intent("clone");
+        intent.kind = OperationKind::Clone;
+        assert_eq!(
+            worker.commit_plan(
+                &clone,
+                &intent,
+                &plan_receipt("clone", "clone", 1),
+                &plan_target(),
+                Some(
+                    &composenest_application::operation_journal::CloneSourceGuard {
+                        instance_id: "one".into(),
+                        revision: 1,
+                        spec_revision: 1,
+                    }
+                )
+            ),
+            Err(StoreConflict::StaleRevision)
+        );
+        assert_eq!(count(&worker, "instances"), 1);
+    }
+
+    #[test]
     fn uniqueness_revision_and_retirement_preserve_history() {
         let (_root, worker) = store();
         worker.register_template(&revision()).unwrap();

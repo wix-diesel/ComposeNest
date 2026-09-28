@@ -60,7 +60,8 @@ async fn large_output_is_drained_and_bounded() {
 
 #[tokio::test]
 async fn timeout_is_unknown_and_reaped_before_next_change() {
-    let (_root, cli) = fixture("if [ \"$1\" = slow ]; then /bin/sleep 2; else printf done; fi");
+    let (_root, cli) =
+        fixture("if [ \"$1\" = slow ]; then exec /bin/sleep 2; else printf done; fi");
     let result = cli
         .run(
             CommandKind::Change,

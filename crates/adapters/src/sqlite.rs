@@ -172,6 +172,7 @@ fn open_orm_database(path: &Path, mode: &str) -> Result<DatabaseConnection, Data
         .map_err(|_| DatabaseError::UnsafePath(path.to_path_buf()))?;
     uri.query_pairs_mut().append_pair("mode", mode);
     let connection = Database::connect(format!("sqlite:{uri}"))?;
+    connection.execute_unprepared("PRAGMA foreign_keys = ON")?;
     connection.execute_unprepared("PRAGMA busy_timeout = 5000")?;
     if mode == "rw" {
         connection.execute_unprepared("PRAGMA synchronous = FULL")?;
@@ -410,6 +411,42 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+    }
+
+    #[test]
+    fn orm_connections_enforce_foreign_keys() {
+        let root = management_root();
+        let worker = DatabaseWorker::start(root.path()).unwrap();
+        let write_settings = worker
+            .orm_write(|db| {
+                let foreign_keys = orm_foreign_keys(db)?;
+                let error = db
+                    .execute_unprepared(
+                        "INSERT INTO runtime_targets (id, scope_id, endpoint, engine_id, platform) \
+                     VALUES ('invalid', 'missing-scope', 'local', 'engine', 'linux')",
+                    )
+                    .unwrap_err();
+                let foreign_key_violation = matches!(
+                    error,
+                    sea_orm::DbErr::Exec(sea_orm::RuntimeErr::Rusqlite(ref source))
+                        if matches!(source.as_ref(), rusqlite::Error::SqliteFailure(code, _)
+                            if code.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_FOREIGNKEY)
+                );
+                Ok((foreign_keys, foreign_key_violation))
+            })
+            .unwrap();
+        assert_eq!(write_settings, (1, true));
+        assert_eq!(worker.orm_read(orm_foreign_keys).unwrap(), 1);
+    }
+
+    fn orm_foreign_keys(db: &impl ConnectionTrait) -> Result<i64, DatabaseError> {
+        let row = db
+            .query_one_raw(sea_orm::Statement::from_string(
+                sea_orm::DbBackend::Sqlite,
+                "PRAGMA foreign_keys",
+            ))?
+            .ok_or(DatabaseError::Missing)?;
+        Ok(row.try_get("", "foreign_keys")?)
     }
 
     #[test]

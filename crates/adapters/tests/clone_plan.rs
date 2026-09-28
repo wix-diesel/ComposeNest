@@ -257,6 +257,24 @@ fn clone_commit_is_idempotent_and_source_revision_is_guarded() {
             .code,
         "STORAGE_ALLOCATION_INVALID"
     );
+    let mut disguised = request.clone();
+    disguised.storage[0].resource_identity = "root/clone/../source/data".into();
+    assert_eq!(
+        plans
+            .commit_plan(disguised, &store, &clock, &FreePorts)
+            .unwrap_err()
+            .code,
+        "STORAGE_ALLOCATION_INVALID"
+    );
+    let mut reused_proof = request.clone();
+    reused_proof.storage[0].ownership_evidence = "source-proof".into();
+    assert_eq!(
+        plans
+            .commit_plan(reused_proof, &store, &clock, &FreePorts)
+            .unwrap_err()
+            .code,
+        "STORAGE_ALLOCATION_INVALID"
+    );
     let receipt = plans
         .commit_plan(request.clone(), &store, &clock, &FreePorts)
         .unwrap();
@@ -543,6 +561,66 @@ fn clone_port_reproposal_advances_revision_and_requires_review() {
 }
 
 #[test]
+fn clone_commit_requires_review_after_a_port_changes() {
+    let (_root, store, template) = store();
+    setup_source(&store, &template);
+    let clock = TestClock(Cell::new(0));
+    let mut random = TestRandom::default();
+    let mut plans = ClonePlans::default();
+    let ports = OccupiedPort(Cell::new(0));
+    let first = plans
+        .prepare_clone(
+            &PrepareClone {
+                scope_id: "scope".into(),
+                source_id: "source".into(),
+                display_name: "Copy".into(),
+            },
+            &store,
+            &clock,
+            &mut random,
+            &ports,
+        )
+        .unwrap();
+    let mut request = CommitCreate {
+        plan_id: first.plan_id.clone(),
+        revision: first.plan_revision,
+        scope_id: "scope".into(),
+        request_id: "port-review".into(),
+        target_id: "target".into(),
+        instance_id: first.instance_id,
+        operation_id: "port-review-op".into(),
+        confirmed_ports: first.ports,
+        storage: vec![StorageAllocation {
+            slot: "data".into(),
+            resource_identity: "root/clone/data".into(),
+            ownership_evidence: "proof".into(),
+        }],
+    };
+    ports.0.set(5433);
+    assert_eq!(
+        plans
+            .commit_plan(request.clone(), &store, &clock, &ports)
+            .unwrap_err()
+            .code,
+        "PLAN_RECONFIRM"
+    );
+    let changed = plans
+        .view_plan("scope", &first.plan_id, &store, &clock, &ports)
+        .unwrap();
+    assert_eq!(changed.plan_revision, 2);
+    assert_eq!(changed.ports["db"], 5434);
+    request.revision = changed.plan_revision;
+    request.confirmed_ports = changed.ports;
+    assert_eq!(
+        plans
+            .commit_plan(request, &store, &clock, &ports)
+            .unwrap()
+            .instance_id,
+        changed.instance_id
+    );
+}
+
+#[test]
 fn clone_ask_version_and_storage_need_explicit_answers() {
     let manifest = format!("{MANIFEST}versionClone: ask\nstorageClone: ask\n");
     let (_root, store, template) = store_with_manifest(&manifest);
@@ -646,6 +724,30 @@ fn clone_storage_switch_keeps_source_allocation_and_uses_new_method() {
         } else {
             format!("root/{}/data", ready.instance_id)
         };
+        if clone_method == StorageMethod::Volume {
+            let invalid = CommitCreate {
+                plan_id: first.plan_id.clone(),
+                revision: ready.plan_revision,
+                scope_id: "scope".into(),
+                request_id: "wrong-volume".into(),
+                target_id: "target".into(),
+                instance_id: ready.instance_id.clone(),
+                operation_id: "wrong-volume-op".into(),
+                confirmed_ports: ready.ports.clone(),
+                storage: vec![StorageAllocation {
+                    slot: "data".into(),
+                    resource_identity: "unrelated-volume".into(),
+                    ownership_evidence: "proof".into(),
+                }],
+            };
+            assert_eq!(
+                plans
+                    .commit_plan(invalid, &store, &clock, &FreePorts)
+                    .unwrap_err()
+                    .code,
+                "STORAGE_ALLOCATION_INVALID"
+            );
+        }
         let receipt = plans
             .commit_plan(
                 CommitCreate {

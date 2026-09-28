@@ -113,6 +113,8 @@ pub struct CloneSource {
     pub target_id: String,
     /// Current instance revision guarded again at commit.
     pub revision: u64,
+    /// Current committed spec revision, excluding abandoned pending changes.
+    pub spec_revision: u64,
     /// Source display name.
     pub name: String,
     /// Complete immutable package definition from the private Snapshot.

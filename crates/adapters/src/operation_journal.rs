@@ -64,6 +64,9 @@ impl PlanCommitStore for DatabaseWorker {
         let guard_revision = clone_guard
             .map(|guard| checked_revision(guard.revision))
             .transpose()?;
+        let guard_spec_revision = clone_guard
+            .map(|guard| checked_revision(guard.spec_revision))
+            .transpose()?;
         let (instance, intent, receipt, target_guard, guard) = (
             instance.clone(),
             intent.clone(),
@@ -96,13 +99,17 @@ impl PlanCommitStore for DatabaseWorker {
             if !target_matches {
                 return Ok(Err(StoreConflict::StaleRevision));
             }
-            if let (Some(guard), Some(revision)) = (&guard, guard_revision) {
+            if let (Some(guard), Some(revision), Some(spec_revision)) =
+                (&guard, guard_revision, guard_spec_revision) {
                 let current = transaction.query_row(
-                    "SELECT revision FROM instances WHERE id = ?1 AND scope_id = ?2 AND target_id = ?3 AND lifecycle = 'managed'",
+                    "SELECT revision, COALESCE((SELECT MAX(o.new_spec_revision) FROM operations o \
+                        WHERE o.instance_id = instances.id AND o.status = 'Succeeded' \
+                        AND o.new_spec_revision IS NOT NULL), 1) \
+                     FROM instances WHERE id = ?1 AND scope_id = ?2 AND target_id = ?3 AND lifecycle = 'managed'",
                     params![guard.instance_id, instance.scope_id, instance.target_id],
-                    |row| row.get::<_, i64>(0),
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
                 ).optional()?;
-                if current != Some(revision) {
+                if current != Some((revision, spec_revision)) {
                     return Ok(Err(StoreConflict::StaleRevision));
                 }
                 let unresolved: bool = transaction.query_row(

@@ -295,7 +295,9 @@ pub(crate) fn insert_instance(
              JOIN template_snapshots copied ON copied.instance_id = ?1 \
              JOIN json_each(copied.canonical_json, '$.versions') v \
              WHERE parent.id = ?2 AND parent.target_id = ?3 \
-             AND original.revision = (SELECT MAX(revision) FROM instance_specs WHERE instance_id = parent.id) \
+             AND original.revision = COALESCE((SELECT MAX(o.new_spec_revision) FROM operations o \
+                 WHERE o.instance_id = parent.id AND o.status = 'Succeeded' \
+                 AND o.new_spec_revision IS NOT NULL), 1) \
              AND original.selected_version = ?4 AND v.value ->> '$.key' = ?4 \
              AND v.value ->> '$.definition.image' = r.image_ref \
              AND r.platform = (SELECT platform FROM runtime_targets WHERE id = ?3)",
@@ -430,53 +432,78 @@ impl StateStore for DatabaseWorker {
 
     fn clone_source(&self, scope_id: &str, id: &str) -> Result<Option<CloneSource>, StoreConflict> {
         self.read(|db| {
-            let source = db.query_row(
-                "SELECT i.id, i.scope_id, i.target_id, i.revision, i.display_name, \
+            let source = db
+                .query_row(
+                    "SELECT i.id, i.scope_id, i.target_id, i.revision, i.display_name, \
                  t.canonical_json, s.selected_version, s.storage_method, s.inputs_json, s.revision \
                  FROM instances i JOIN template_snapshots t ON t.instance_id = i.id \
                  JOIN instance_specs s ON s.instance_id = i.id \
                  WHERE i.scope_id = ?1 AND i.id = ?2 AND i.lifecycle = 'managed' \
-                 AND s.revision = (SELECT MAX(revision) FROM instance_specs WHERE instance_id = i.id) \
+                 AND s.revision = COALESCE((SELECT MAX(o.new_spec_revision) FROM operations o \
+                     WHERE o.instance_id = i.id AND o.status = 'Succeeded' \
+                     AND o.new_spec_revision IS NOT NULL), 1) \
                  AND NOT EXISTS (SELECT 1 FROM operations o WHERE o.instance_id = i.id \
                  AND o.status NOT IN ('Succeeded', 'Abandoned'))",
-                params![scope_id, id],
-                |row| {
-                    let revision: i64 = row.get(3)?;
-                    let spec_revision: i64 = row.get(9)?;
-                    Ok((CloneSource {
-                        id: row.get(0)?, scope_id: row.get(1)?, target_id: row.get(2)?,
-                        revision: u64::try_from(revision).map_err(|_| Error::InvalidQuery)?,
-                        name: row.get(4)?, snapshot_json: row.get(5)?,
-                        selected_version: row.get(6)?,
-                        storage_method: method_from_name(&row.get::<_, String>(7)?)
-                            .ok_or(Error::InvalidQuery)?,
-                        inputs_json: row.get(8)?, ports: Vec::new(), storage: Vec::new(),
-                    }, spec_revision))
-                },
-            ).optional()?;
-            let Some((mut source, spec_revision)) = source else { return Ok(None) };
+                    params![scope_id, id],
+                    |row| {
+                        let revision: i64 = row.get(3)?;
+                        let spec_revision: i64 = row.get(9)?;
+                        Ok((
+                            CloneSource {
+                                id: row.get(0)?,
+                                scope_id: row.get(1)?,
+                                target_id: row.get(2)?,
+                                revision: u64::try_from(revision)
+                                    .map_err(|_| Error::InvalidQuery)?,
+                                spec_revision: u64::try_from(spec_revision)
+                                    .map_err(|_| Error::InvalidQuery)?,
+                                name: row.get(4)?,
+                                snapshot_json: row.get(5)?,
+                                selected_version: row.get(6)?,
+                                storage_method: method_from_name(&row.get::<_, String>(7)?)
+                                    .ok_or(Error::InvalidQuery)?,
+                                inputs_json: row.get(8)?,
+                                ports: Vec::new(),
+                                storage: Vec::new(),
+                            },
+                            spec_revision,
+                        ))
+                    },
+                )
+                .optional()?;
+            let Some((mut source, spec_revision)) = source else {
+                return Ok(None);
+            };
             let mut query = db.prepare(
                 "SELECT slot, host_ip, host_port, container_port FROM port_bindings \
                  WHERE instance_id = ?1 AND spec_revision = ?2 ORDER BY slot",
             )?;
-            source.ports = query.query_map(params![id, spec_revision], |row| {
-                Ok(PortAllocation {
-                    slot: row.get(0)?, host_ip: row.get(1)?,
-                    host_port: row.get(2)?, container_port: row.get(3)?,
-                })
-            })?.collect::<Result<Vec<_>, _>>()?;
+            source.ports = query
+                .query_map(params![id, spec_revision], |row| {
+                    Ok(PortAllocation {
+                        slot: row.get(0)?,
+                        host_ip: row.get(1)?,
+                        host_port: row.get(2)?,
+                        container_port: row.get(3)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
             let mut query = db.prepare(
                 "SELECT slot, resource_identity, ownership_evidence FROM storage_allocations \
                  WHERE instance_id = ?1 ORDER BY slot",
             )?;
-            source.storage = query.query_map([id], |row| {
-                Ok(StorageAllocation {
-                    slot: row.get(0)?, resource_identity: row.get(1)?,
-                    ownership_evidence: row.get(2)?,
-                })
-            })?.collect::<Result<Vec<_>, _>>()?;
+            source.storage = query
+                .query_map([id], |row| {
+                    Ok(StorageAllocation {
+                        slot: row.get(0)?,
+                        resource_identity: row.get(1)?,
+                        ownership_evidence: row.get(2)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
             Ok(Some(source))
-        }).map_err(map_error)
+        })
+        .map_err(map_error)
     }
 
     fn commit_instance(&self, instance: &InstanceRecord) -> Result<(), StoreConflict> {
@@ -1074,6 +1101,7 @@ mod tests {
                     &composenest_application::operation_journal::CloneSourceGuard {
                         instance_id: "one".into(),
                         revision: 1,
+                        spec_revision: 1,
                     }
                 )
             ),
@@ -1439,6 +1467,38 @@ mod tests {
         }).unwrap();
         assert!(worker.clone_source("scope", "one").unwrap().is_none());
         assert!(worker.clone_source("other", "one").unwrap().is_none());
+    }
+
+    #[test]
+    fn clone_source_ignores_abandoned_pending_spec() {
+        let (_root, worker) = store();
+        worker.register_template(&revision()).unwrap();
+        worker
+            .commit_instance(&instance("one", "One", 6379))
+            .unwrap();
+        worker.write(|db| {
+            db.execute("INSERT INTO instance_specs VALUES ('one', 2, '8', 'bind', '{\"discarded\":true}')", [])?;
+            db.execute("INSERT INTO port_bindings VALUES ('one', 2, 'main', '127.0.0.1', 6380, 6379)", [])?;
+            db.execute("INSERT INTO operations (id, instance_id, kind, status, phase, expected_instance_revision, old_spec_revision, new_spec_revision, completed_at) \
+                VALUES ('discarded', 'one', 'edit_port', 'Abandoned', 'done', 1, 1, 2, CURRENT_TIMESTAMP)", [])?;
+            db.execute("INSERT INTO pending_changes VALUES ('discarded', 'one', 1, 2, 'diff')", [])?;
+            Ok(())
+        }).unwrap();
+        let source = worker.clone_source("scope", "one").unwrap().unwrap();
+        assert_eq!(source.spec_revision, 1);
+        assert_eq!(source.inputs_json, "{}");
+        assert_eq!(source.ports[0].host_port, 6379);
+        worker.write(|db| {
+            db.execute("INSERT INTO instance_specs VALUES ('one', 3, '8', 'bind', '{\"adopted\":true}')", [])?;
+            db.execute("INSERT INTO port_bindings VALUES ('one', 3, 'main', '127.0.0.1', 6390, 6379)", [])?;
+            db.execute("INSERT INTO operations (id, instance_id, kind, status, phase, expected_instance_revision, old_spec_revision, new_spec_revision, completed_at) \
+                VALUES ('adopted', 'one', 'edit_port', 'Succeeded', 'done', 1, 1, 3, CURRENT_TIMESTAMP)", [])?;
+            Ok(())
+        }).unwrap();
+        let adopted = worker.clone_source("scope", "one").unwrap().unwrap();
+        assert_eq!(adopted.spec_revision, 3);
+        assert_eq!(adopted.inputs_json, "{\"adopted\":true}");
+        assert_eq!(adopted.ports[0].host_port, 6390);
     }
 
     #[test]

@@ -3,6 +3,7 @@
 use composenest_domain::application_title;
 use serde::{Deserialize, Serialize};
 
+pub mod clone_plan;
 pub mod create_plan;
 pub mod host_ports;
 pub mod image_resolution;

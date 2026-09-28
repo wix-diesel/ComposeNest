@@ -19,8 +19,8 @@ use crate::{
     },
 };
 
-const MAX_PLANS: usize = 16;
-const IDLE_SECONDS: u64 = 30 * 60;
+pub(crate) const MAX_PLANS: usize = 16;
+pub(crate) const IDLE_SECONDS: u64 = 30 * 60;
 
 /// An input or plan failure without sensitive candidate values.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,7 +31,7 @@ pub struct PlanError {
     pub field_path: Option<String>,
 }
 
-fn error(code: &'static str, path: impl Into<Option<String>>) -> PlanError {
+pub(crate) fn error(code: &'static str, path: impl Into<Option<String>>) -> PlanError {
     PlanError {
         code,
         field_path: path.into(),
@@ -130,6 +130,7 @@ pub struct PrepareCreate {
 }
 
 /// Prevalidated resource identities supplied before the short commit transaction.
+#[derive(Clone)]
 pub struct CommitCreate {
     /// Plan to confirm.
     pub plan_id: String,
@@ -538,7 +539,7 @@ fn commit_hash(plan_id: &str, revision: u64) -> String {
     )
 }
 
-fn commit_store_error(conflict: StoreConflict) -> PlanError {
+pub(crate) fn commit_store_error(conflict: StoreConflict) -> PlanError {
     error(
         match conflict {
             StoreConflict::Duplicate => "RESOURCE_CONFLICT",
@@ -582,7 +583,10 @@ fn store_error(conflict: StoreConflict) -> PlanError {
     )
 }
 
-fn version_definition<'a>(template: &'a Value, key: &str) -> Result<&'a Value, PlanError> {
+pub(crate) fn version_definition<'a>(
+    template: &'a Value,
+    key: &str,
+) -> Result<&'a Value, PlanError> {
     template["versions"]
         .as_array()
         .and_then(|versions| {
@@ -594,7 +598,7 @@ fn version_definition<'a>(template: &'a Value, key: &str) -> Result<&'a Value, P
         .ok_or_else(|| error("VERSION_NOT_FOUND", Some("version".into())))
 }
 
-fn entries(value: &Value) -> Vec<(String, Value)> {
+pub(crate) fn entries(value: &Value) -> Vec<(String, Value)> {
     value["order"].as_array().map_or_else(Vec::new, |order| {
         order
             .iter()
@@ -626,7 +630,7 @@ fn initialize_inputs(
     Ok(values)
 }
 
-fn generate_input_secret(
+pub(crate) fn generate_input_secret(
     key: &str,
     input: &Value,
     values: &BTreeMap<String, Value>,
@@ -650,7 +654,7 @@ fn generate_input_secret(
     Ok(secret)
 }
 
-fn normalize_name(input: &str) -> String {
+pub(crate) fn normalize_name(input: &str) -> String {
     DisplayName::parse(input).map_or_else(|_| input.to_owned(), |name| name.as_str().to_owned())
 }
 
@@ -756,7 +760,7 @@ fn preview(id: &str, plan: &mut Plan, inspector: &impl PortInspector) -> CreateP
     }
 }
 
-fn valid_input(input: &Value, value: Option<&Value>) -> bool {
+pub(crate) fn valid_input(input: &Value, value: Option<&Value>) -> bool {
     let Some(value) = value else {
         return input["required"] == false;
     };

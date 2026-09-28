@@ -88,7 +88,7 @@ pub struct InstanceRecord {
     pub project_name: String,
     /// Optional clone source retained for history.
     pub clone_source_id: Option<String>,
-    /// Template revision to copy into the instance snapshot.
+    /// Registered Template revision for creation; clones copy the source Snapshot instead.
     pub template_revision_id: String,
     /// Version selected from the copied package.
     pub selected_version: String,
@@ -225,6 +225,12 @@ pub trait StateStore: Send + Sync {
     /// Reads a managed source, its current spec and private Snapshot in one view.
     /// Returns no source while an operation that may change it is unresolved.
     fn clone_source(&self, scope_id: &str, id: &str) -> Result<Option<CloneSource>, StoreConflict>;
+
+    /// Reads the source revision even while an operation is unresolved or after retirement.
+    fn source_revision(&self, scope_id: &str, id: &str) -> Result<Option<u64>, StoreConflict>;
+
+    /// Checks whether an instance ID is already used, including retained history.
+    fn instance_id_exists(&self, id: &str) -> Result<bool, StoreConflict>;
 
     /// Commits an instance, private snapshot, spec, ports and storage atomically.
     fn commit_instance(&self, instance: &InstanceRecord) -> Result<(), StoreConflict>;

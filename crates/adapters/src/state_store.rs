@@ -619,6 +619,35 @@ impl StateStore for DatabaseWorker {
         .map_err(map_error)
     }
 
+    fn source_revision(&self, scope_id: &str, id: &str) -> Result<Option<u64>, StoreConflict> {
+        self.read(|db| {
+            let revision: Option<i64> = db
+                .query_row(
+                    "SELECT revision FROM instances WHERE scope_id = ?1 AND id = ?2",
+                    params![scope_id, id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            revision
+                .map(|value| {
+                    u64::try_from(value).map_err(|_| DatabaseError::Sqlite(Error::InvalidQuery))
+                })
+                .transpose()
+        })
+        .map_err(map_error)
+    }
+
+    fn instance_id_exists(&self, id: &str) -> Result<bool, StoreConflict> {
+        self.read(|db| {
+            Ok(db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM instances WHERE id = ?1)",
+                [id],
+                |row| row.get(0),
+            )?)
+        })
+        .map_err(map_error)
+    }
+
     fn set_storage_presence(
         &self,
         instance_id: &str,

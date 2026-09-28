@@ -9,11 +9,22 @@ use composenest_domain::{
     identity::DisplayName,
     instance::{Initialization, StorageOwnership, StoragePresence},
 };
-use rusqlite::{Connection, Error, ErrorCode, OptionalExtension, TransactionBehavior, params};
+#[cfg(test)]
+use rusqlite::params;
+use rusqlite::{Error, ErrorCode};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
+};
 use serde_json::Value as JsonValue;
 use sha2::{Digest, Sha256};
 
 use crate::docker_cli::is_local_endpoint;
+use crate::entities::{
+    image_resolution, instance as instance_entity, instance_spec, management_scope, operation,
+    port_binding, port_reservation, runtime_target as target_entity, storage_allocation,
+    template_revision as revision_entity, template_revision_file, template_snapshot,
+    template_snapshot_file,
+};
 use crate::sqlite::{DatabaseError, DatabaseWorker};
 
 fn method_name(method: StorageMethod) -> &'static str {
@@ -75,30 +86,44 @@ fn initialization_from_name(value: &str) -> Option<Initialization> {
     }
 }
 
-fn storage_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<StorageLedgerEntry> {
-    let method = row.get::<_, String>(3)?;
-    let ownership = row.get::<_, String>(6)?;
-    let presence = row.get::<_, String>(7)?;
-    let initialization = row.get::<_, String>(8)?;
+fn storage_entry(
+    row: storage_allocation::Model,
+    scope_id: String,
+) -> Result<StorageLedgerEntry, DatabaseError> {
     Ok(StorageLedgerEntry {
-        instance_id: row.get(0)?,
-        scope_id: row.get(1)?,
-        slot: row.get(2)?,
-        method: method_from_name(&method).ok_or(rusqlite::Error::InvalidQuery)?,
+        instance_id: row.instance_id,
+        scope_id,
+        slot: row.slot.clone(),
+        method: method_from_name(&row.method).ok_or(DatabaseError::InvalidInput)?,
         allocation: StorageAllocation {
-            slot: row.get(2)?,
-            resource_identity: row.get(4)?,
-            ownership_evidence: row.get(5)?,
+            slot: row.slot,
+            resource_identity: row.resource_identity,
+            ownership_evidence: row.ownership_evidence,
         },
-        ownership: ownership_from_name(&ownership).ok_or(rusqlite::Error::InvalidQuery)?,
-        presence: presence_from_name(&presence).ok_or(rusqlite::Error::InvalidQuery)?,
-        initialization: initialization_from_name(&initialization)
-            .ok_or(rusqlite::Error::InvalidQuery)?,
+        ownership: ownership_from_name(&row.ownership).ok_or(DatabaseError::InvalidInput)?,
+        presence: presence_from_name(&row.presence).ok_or(DatabaseError::InvalidInput)?,
+        initialization: initialization_from_name(&row.initialization)
+            .ok_or(DatabaseError::InvalidInput)?,
     })
 }
 
 pub(crate) fn map_error(error: DatabaseError) -> StoreConflict {
     match error {
+        DatabaseError::Orm(sea_orm::DbErr::Exec(sea_orm::RuntimeErr::Rusqlite(error)))
+        | DatabaseError::Orm(sea_orm::DbErr::Query(sea_orm::RuntimeErr::Rusqlite(error))) => {
+            if let Error::SqliteFailure(code, _) = error.as_ref() {
+                return match code.extended_code {
+                    rusqlite::ffi::SQLITE_CONSTRAINT_FOREIGNKEY => StoreConflict::Missing,
+                    rusqlite::ffi::SQLITE_CONSTRAINT_CHECK => StoreConflict::InvalidInput,
+                    _ if code.code == ErrorCode::ConstraintViolation => StoreConflict::Duplicate,
+                    _ => StoreConflict::Backend,
+                };
+            }
+            StoreConflict::Backend
+        }
+        DatabaseError::InvalidInput => StoreConflict::InvalidInput,
+        DatabaseError::Duplicate => StoreConflict::Duplicate,
+        DatabaseError::Missing => StoreConflict::Missing,
         DatabaseError::Sqlite(Error::SqliteFailure(code, _)) => match code.extended_code {
             rusqlite::ffi::SQLITE_CONSTRAINT_FOREIGNKEY => StoreConflict::Missing,
             rusqlite::ffi::SQLITE_CONSTRAINT_CHECK => StoreConflict::InvalidInput,
@@ -160,149 +185,267 @@ fn valid_canonical_revision(revision: &TemplateRevision) -> bool {
 }
 
 fn insert_template(
-    connection: &mut Connection,
+    connection: &sea_orm::DatabaseConnection,
     revision: &TemplateRevision,
 ) -> Result<(), DatabaseError> {
-    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let existing = transaction.query_row(
-        "SELECT semantic_hash FROM template_revisions WHERE template_id = ?1 AND template_version = ?2",
-        params![revision.template_id, revision.version],
-        |row| row.get::<_, String>(0),
-    );
-    match existing {
-        Ok(hash) if hash == revision.semantic_hash => return Ok(()),
-        Ok(_) => {
-            return Err(DatabaseError::Sqlite(Error::SqliteFailure(
-                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE),
-                None,
-            )));
-        }
-        Err(Error::QueryReturnedNoRows) => {}
-        Err(error) => return Err(DatabaseError::Sqlite(error)),
+    let transaction = connection.begin()?;
+    let existing = revision_entity::Entity::find()
+        .filter(revision_entity::Column::TemplateId.eq(&revision.template_id))
+        .filter(revision_entity::Column::TemplateVersion.eq(&revision.version))
+        .one(&transaction)?;
+    if let Some(existing) = existing {
+        return if existing.semantic_hash == revision.semantic_hash {
+            Ok(())
+        } else {
+            Err(DatabaseError::Duplicate)
+        };
     }
-    transaction.execute(
-        "INSERT INTO template_revisions VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6, ?7)",
-        params![
-            revision.id,
-            revision.template_id,
-            revision.version,
-            revision.normalization,
-            revision.semantic_hash,
-            revision.canonical_json,
-            revision.origin
-        ],
-    )?;
+    revision_entity::Entity::insert(revision_entity::ActiveModel {
+        id: Set(revision.id.clone()),
+        template_id: Set(revision.template_id.clone()),
+        template_version: Set(revision.version.clone()),
+        schema_version: Set(1),
+        normalization: Set(revision.normalization.clone()),
+        semantic_hash: Set(revision.semantic_hash.clone()),
+        canonical_json: Set(revision.canonical_json.clone()),
+        origin: Set(revision.origin.clone()),
+    })
+    .exec(&transaction)?;
     for file in &revision.files {
         let digest = format!("{:x}", Sha256::digest(&file.contents));
-        transaction.execute(
-            "INSERT INTO template_revision_files VALUES (?1, ?2, ?3, ?4)",
-            params![revision.id, file.relative_path, file.contents, digest],
-        )?;
+        template_revision_file::Entity::insert(template_revision_file::ActiveModel {
+            revision_id: Set(revision.id.clone()),
+            relative_path: Set(file.relative_path.clone()),
+            contents: Set(file.contents.clone()),
+            sha256: Set(digest),
+        })
+        .exec(&transaction)?;
     }
     transaction.commit()?;
     Ok(())
 }
 
 pub(crate) fn insert_instance(
-    transaction: &Connection,
+    transaction: &sea_orm::DatabaseTransaction,
     instance: &InstanceRecord,
 ) -> Result<(), DatabaseError> {
-    let exists: i64 = transaction.query_row(
-        "SELECT EXISTS(SELECT 1 FROM template_revisions r, json_each(r.canonical_json, '$.versions') v \
-         WHERE ?1 IS NULL AND r.id = ?2 AND json_extract(v.value, '$.key') = ?3 \
-         UNION ALL SELECT 1 FROM template_snapshots s, json_each(s.canonical_json, '$.versions') v \
-         WHERE s.instance_id = ?1 AND json_extract(v.value, '$.key') = ?3 LIMIT 1)",
-        params![instance.clone_source_id, instance.template_revision_id, instance.selected_version], |row| row.get(0),
-    )?;
-    if exists == 0 {
-        return Err(DatabaseError::Sqlite(Error::QueryReturnedNoRows));
-    }
-    transaction.execute(
-        "INSERT INTO instances (id, scope_id, target_id, display_name, normalized_name, project_name, clone_source_id) VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6)",
-        params![instance.id, instance.scope_id, instance.target_id, instance.name,
-            instance.project_name, instance.clone_source_id],
-    )?;
-    if let Some(source) = &instance.clone_source_id {
-        transaction.execute(
-            "INSERT INTO template_snapshots SELECT ?1, ?1, source_revision_id, template_id, template_version, ?2, schema_version, normalization, semantic_hash, canonical_json FROM template_snapshots WHERE instance_id = ?3",
-            params![instance.id, instance.selected_version, source],
-        )?;
+    let source = if let Some(source_id) = &instance.clone_source_id {
+        template_snapshot::Entity::find()
+            .filter(template_snapshot::Column::InstanceId.eq(source_id))
+            .one(transaction)?
     } else {
-        transaction.execute(
-            "INSERT INTO template_snapshots SELECT ?1, ?1, id, template_id, template_version, ?2, schema_version, normalization, semantic_hash, canonical_json FROM template_revisions WHERE id = ?3",
-            params![instance.id, instance.selected_version, instance.template_revision_id],
-        )?;
-    }
-    if transaction.changes() != 1 {
-        return Err(DatabaseError::Sqlite(Error::QueryReturnedNoRows));
-    }
-    if let Some(source) = &instance.clone_source_id {
-        transaction.execute(
-            "INSERT INTO template_snapshot_files SELECT ?1, relative_path, contents, sha256 FROM template_snapshot_files WHERE snapshot_id = ?2",
-            params![instance.id, source],
-        )?;
+        None
+    };
+    let revision = if source.is_none() && instance.clone_source_id.is_none() {
+        revision_entity::Entity::find_by_id(&instance.template_revision_id).one(transaction)?
     } else {
-        transaction.execute(
-            "INSERT INTO template_snapshot_files SELECT ?1, relative_path, contents, sha256 FROM template_revision_files WHERE revision_id = ?2",
-            params![instance.id, instance.template_revision_id],
-        )?;
+        None
+    };
+    let canonical_json = source
+        .as_ref()
+        .map(|item| &item.canonical_json)
+        .or_else(|| revision.as_ref().map(|item| &item.canonical_json))
+        .ok_or(DatabaseError::Missing)?;
+    if !has_version(canonical_json, &instance.selected_version) {
+        return Err(DatabaseError::Missing);
     }
-    transaction.execute(
-        "INSERT INTO instance_specs VALUES (?1, 1, ?2, ?3, ?4)",
-        params![
-            instance.id,
-            instance.selected_version,
-            method_name(instance.storage_method),
-            instance.inputs_json
-        ],
-    )?;
+    instance_entity::Entity::insert(instance_entity::ActiveModel {
+        id: Set(instance.id.clone()),
+        scope_id: Set(instance.scope_id.clone()),
+        target_id: Set(instance.target_id.clone()),
+        display_name: Set(instance.name.clone()),
+        normalized_name: Set(instance.name.clone()),
+        project_name: Set(instance.project_name.clone()),
+        clone_source_id: Set(instance.clone_source_id.clone()),
+        ..Default::default()
+    })
+    .exec(transaction)?;
+    let snapshot = if let Some(source) = source {
+        template_snapshot::ActiveModel {
+            id: Set(instance.id.clone()),
+            instance_id: Set(instance.id.clone()),
+            source_revision_id: Set(source.source_revision_id),
+            template_id: Set(source.template_id),
+            template_version: Set(source.template_version),
+            selected_version: Set(instance.selected_version.clone()),
+            schema_version: Set(source.schema_version),
+            normalization: Set(source.normalization),
+            semantic_hash: Set(source.semantic_hash),
+            canonical_json: Set(source.canonical_json),
+        }
+    } else if let Some(revision) = revision {
+        template_snapshot::ActiveModel {
+            id: Set(instance.id.clone()),
+            instance_id: Set(instance.id.clone()),
+            source_revision_id: Set(Some(revision.id)),
+            template_id: Set(revision.template_id),
+            template_version: Set(revision.template_version),
+            selected_version: Set(instance.selected_version.clone()),
+            schema_version: Set(revision.schema_version),
+            normalization: Set(revision.normalization),
+            semantic_hash: Set(revision.semantic_hash),
+            canonical_json: Set(revision.canonical_json),
+        }
+    } else {
+        return Err(DatabaseError::Missing);
+    };
+    template_snapshot::Entity::insert(snapshot).exec(transaction)?;
+    if let Some(source_id) = &instance.clone_source_id {
+        for file in template_snapshot_file::Entity::find()
+            .filter(template_snapshot_file::Column::SnapshotId.eq(source_id))
+            .all(transaction)?
+        {
+            template_snapshot_file::Entity::insert(template_snapshot_file::ActiveModel {
+                snapshot_id: Set(instance.id.clone()),
+                relative_path: Set(file.relative_path),
+                contents: Set(file.contents),
+                sha256: Set(file.sha256),
+            })
+            .exec(transaction)?;
+        }
+    } else {
+        for file in template_revision_file::Entity::find()
+            .filter(template_revision_file::Column::RevisionId.eq(&instance.template_revision_id))
+            .all(transaction)?
+        {
+            template_snapshot_file::Entity::insert(template_snapshot_file::ActiveModel {
+                snapshot_id: Set(instance.id.clone()),
+                relative_path: Set(file.relative_path),
+                contents: Set(file.contents),
+                sha256: Set(file.sha256),
+            })
+            .exec(transaction)?;
+        }
+    }
+    instance_spec::Entity::insert(instance_spec::ActiveModel {
+        instance_id: Set(instance.id.clone()),
+        revision: Set(1),
+        selected_version: Set(instance.selected_version.clone()),
+        storage_method: Set(method_name(instance.storage_method).into()),
+        inputs_json: Set(instance.inputs_json.clone()),
+    })
+    .exec(transaction)?;
     for port in &instance.ports {
-        transaction.execute(
-            "INSERT INTO port_bindings VALUES (?1, 1, ?2, ?3, ?4, ?5)",
-            params![
-                instance.id,
-                port.slot,
-                port.host_ip,
-                port.host_port,
-                port.container_port
-            ],
-        )?;
-        transaction.execute(
-            "INSERT INTO port_reservations VALUES (?1, ?2, ?3, ?4, 'tcp', ?5, 'committed')",
-            params![
-                format!("{}:{}", instance.id, port.slot),
-                instance.scope_id,
-                instance.id,
-                port.host_ip,
-                port.host_port
-            ],
-        )?;
+        port_binding::Entity::insert(port_binding::ActiveModel {
+            instance_id: Set(instance.id.clone()),
+            spec_revision: Set(1),
+            slot: Set(port.slot.clone()),
+            host_ip: Set(port.host_ip.clone()),
+            host_port: Set(i64::from(port.host_port)),
+            container_port: Set(i64::from(port.container_port)),
+        })
+        .exec(transaction)?;
+        port_reservation::Entity::insert(port_reservation::ActiveModel {
+            id: Set(format!("{}:{}", instance.id, port.slot)),
+            scope_id: Set(instance.scope_id.clone()),
+            instance_id: Set(instance.id.clone()),
+            host_ip: Set(port.host_ip.clone()),
+            protocol: Set("tcp".into()),
+            host_port: Set(i64::from(port.host_port)),
+            status: Set("committed".into()),
+        })
+        .exec(transaction)?;
     }
     for allocation in &instance.storage {
-        transaction.execute(
-            "INSERT INTO storage_allocations VALUES (?1, ?2, ?3, ?4, ?5, 'assigned', 'not_materialized', 'not_attempted')",
-            params![instance.id, allocation.slot, method_name(instance.storage_method),
-                allocation.resource_identity, allocation.ownership_evidence],
-        )?;
+        storage_allocation::Entity::insert(storage_allocation::ActiveModel {
+            instance_id: Set(instance.id.clone()),
+            slot: Set(allocation.slot.clone()),
+            method: Set(method_name(instance.storage_method).into()),
+            resource_identity: Set(allocation.resource_identity.clone()),
+            ownership_evidence: Set(allocation.ownership_evidence.clone()),
+            ownership: Set("assigned".into()),
+            presence: Set("not_materialized".into()),
+            initialization: Set("not_attempted".into()),
+        })
+        .exec(transaction)?;
     }
-    // A same-version clone inherits only evidence for the same requested image and Engine target.
-    if let Some(source) = &instance.clone_source_id {
-        transaction.execute(
-            "INSERT INTO image_resolutions \
-             SELECT ?1, 1, r.image_ref, r.digest, r.image_id, r.platform, r.first_operation_id \
-             FROM image_resolutions r JOIN instances parent ON parent.id = r.instance_id \
-             JOIN instance_specs original ON original.instance_id = parent.id AND original.revision = r.spec_revision \
-             JOIN template_snapshots copied ON copied.instance_id = ?1 \
-             JOIN json_each(copied.canonical_json, '$.versions') v \
-             WHERE parent.id = ?2 AND parent.target_id = ?3 \
-             AND original.revision = COALESCE((SELECT MAX(o.new_spec_revision) FROM operations o \
-                 WHERE o.instance_id = parent.id AND o.status = 'Succeeded' \
-                 AND o.new_spec_revision IS NOT NULL), 1) \
-             AND original.selected_version = ?4 AND v.value ->> '$.key' = ?4 \
-             AND v.value ->> '$.definition.image' = r.image_ref \
-             AND r.platform = (SELECT platform FROM runtime_targets WHERE id = ?3)",
-            params![instance.id, source, instance.target_id, instance.selected_version],
-        )?;
+    inherit_image_resolution(transaction, instance)?;
+    Ok(())
+}
+
+fn has_version(canonical_json: &str, selected_version: &str) -> bool {
+    serde_json::from_str::<JsonValue>(canonical_json)
+        .ok()
+        .and_then(|value| value.get("versions")?.as_array().cloned())
+        .is_some_and(|versions| {
+            versions.iter().any(|version| {
+                version.get("key").and_then(JsonValue::as_str) == Some(selected_version)
+            })
+        })
+}
+
+fn selected_image(canonical_json: &str, selected_version: &str) -> Option<String> {
+    let value: JsonValue = serde_json::from_str(canonical_json).ok()?;
+    value
+        .get("versions")?
+        .as_array()?
+        .iter()
+        .find(|version| version.get("key").and_then(JsonValue::as_str) == Some(selected_version))?
+        .get("definition")?
+        .get("image")?
+        .as_str()
+        .map(str::to_owned)
+}
+
+fn inherit_image_resolution(
+    transaction: &sea_orm::DatabaseTransaction,
+    instance: &InstanceRecord,
+) -> Result<(), DatabaseError> {
+    let Some(source_id) = &instance.clone_source_id else {
+        return Ok(());
+    };
+    let Some(source) = instance_entity::Entity::find_by_id(source_id).one(transaction)? else {
+        return Ok(());
+    };
+    if source.target_id != instance.target_id {
+        return Ok(());
+    }
+    let latest = operation::Entity::find()
+        .filter(operation::Column::InstanceId.eq(source_id))
+        .filter(operation::Column::Status.eq("Succeeded"))
+        .all(transaction)?
+        .into_iter()
+        .filter_map(|operation| operation.new_spec_revision)
+        .max()
+        .unwrap_or(1);
+    let Some(spec) =
+        instance_spec::Entity::find_by_id((source_id.clone(), latest)).one(transaction)?
+    else {
+        return Ok(());
+    };
+    if spec.selected_version != instance.selected_version {
+        return Ok(());
+    }
+    let Some(snapshot) = template_snapshot::Entity::find()
+        .filter(template_snapshot::Column::InstanceId.eq(&instance.id))
+        .one(transaction)?
+    else {
+        return Ok(());
+    };
+    let Some(image) = selected_image(&snapshot.canonical_json, &instance.selected_version) else {
+        return Ok(());
+    };
+    let Some(target) = target_entity::Entity::find_by_id(&instance.target_id).one(transaction)?
+    else {
+        return Ok(());
+    };
+    for resolution in image_resolution::Entity::find()
+        .filter(image_resolution::Column::InstanceId.eq(source_id))
+        .filter(image_resolution::Column::SpecRevision.eq(latest))
+        .filter(image_resolution::Column::ImageRef.eq(image))
+        .filter(image_resolution::Column::Platform.eq(&target.platform))
+        .all(transaction)?
+    {
+        image_resolution::Entity::insert(image_resolution::ActiveModel {
+            instance_id: Set(instance.id.clone()),
+            spec_revision: Set(1),
+            image_ref: Set(resolution.image_ref),
+            digest: Set(resolution.digest),
+            image_id: Set(resolution.image_id),
+            platform: Set(resolution.platform),
+            first_operation_id: Set(resolution.first_operation_id),
+        })
+        .exec(transaction)?;
     }
     Ok(())
 }
@@ -316,11 +459,14 @@ impl StateStore for DatabaseWorker {
     ) -> Result<(), StoreConflict> {
         let (id, owner_id, root_identity) =
             (id.to_owned(), owner_id.to_owned(), root_identity.to_owned());
-        self.write(move |db| {
-            db.execute(
-                "INSERT INTO management_scopes (id, owner_id, root_identity) VALUES (?1, ?2, ?3)",
-                params![id, owner_id, root_identity],
-            )?;
+        self.orm_write(move |db| {
+            management_scope::Entity::insert(management_scope::ActiveModel {
+                id: Set(id),
+                owner_id: Set(owner_id),
+                root_identity: Set(root_identity),
+                ..Default::default()
+            })
+            .exec(db)?;
             Ok(())
         })
         .map_err(map_error)
@@ -344,51 +490,46 @@ impl StateStore for DatabaseWorker {
             engine_id.to_owned(),
             platform.to_owned(),
         );
-        self.write(move |db| {
-            let count: i64 = db.query_row(
-                "SELECT COUNT(*) FROM runtime_targets WHERE scope_id = ?1",
-                [&values.1],
-                |row| row.get(0),
-            )?;
-            if count != 0 {
-                return Err(DatabaseError::Sqlite(Error::SqliteFailure(
-                    rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE),
-                    None,
-                )));
+        self.orm_write(move |db| {
+            if target_entity::Entity::find()
+                .filter(target_entity::Column::ScopeId.eq(&values.1))
+                .one(db)?
+                .is_some()
+            {
+                return Err(DatabaseError::Duplicate);
             }
-            db.execute(
-                "INSERT INTO runtime_targets VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![values.0, values.1, values.2, values.3, values.4],
-            )?;
+            target_entity::Entity::insert(target_entity::ActiveModel {
+                id: Set(values.0),
+                scope_id: Set(values.1),
+                endpoint: Set(values.2),
+                engine_id: Set(values.3),
+                platform: Set(values.4),
+            })
+            .exec(db)?;
             Ok(())
         })
         .map_err(map_error)
     }
 
     fn runtime_target(&self, scope_id: &str) -> Result<Option<RuntimeTarget>, StoreConflict> {
-        let scope_id = scope_id.to_owned();
-        self.read(move |db| {
-            let mut statement = db.prepare(
-                "SELECT id, scope_id, endpoint, engine_id, platform FROM runtime_targets WHERE scope_id = ?1",
-            )?;
-            let mut rows = statement.query([scope_id])?;
-            let target = rows.next()?.map(|row| {
-                Ok::<RuntimeTarget, Error>(RuntimeTarget {
-                    id: row.get(0)?,
-                    scope_id: row.get(1)?,
-                    endpoint: row.get(2)?,
-                    engine_id: row.get(3)?,
-                    platform: row.get(4)?,
-                })
-            }).transpose()?;
-            if rows.next()?.is_some() {
-                return Err(DatabaseError::Sqlite(Error::SqliteFailure(
-                    rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE),
-                    None,
-                )));
+        self.orm_read(|db| {
+            let mut rows = target_entity::Entity::find()
+                .filter(target_entity::Column::ScopeId.eq(scope_id))
+                .all(db)?
+                .into_iter();
+            let target = rows.next().map(|row| RuntimeTarget {
+                id: row.id,
+                scope_id: row.scope_id,
+                endpoint: row.endpoint,
+                engine_id: row.engine_id,
+                platform: row.platform,
+            });
+            if rows.next().is_some() {
+                return Err(DatabaseError::Duplicate);
             }
             Ok(target)
-        }).map_err(map_error)
+        })
+        .map_err(map_error)
     }
 
     fn register_template(&self, revision: &TemplateRevision) -> Result<(), StoreConflict> {
@@ -405,103 +546,108 @@ impl StateStore for DatabaseWorker {
             return Err(StoreConflict::InvalidInput);
         }
         let revision = revision.clone();
-        self.write(move |db| insert_template(db, &revision))
+        self.orm_write(move |db| insert_template(db, &revision))
             .map_err(map_error)
     }
 
     fn list_templates(&self) -> Result<Vec<TemplateCatalogItem>, StoreConflict> {
-        self.read(|db| {
-            let mut query = db.prepare(
-                "SELECT id, template_id, template_version, origin, semantic_hash, canonical_json \
-                 FROM template_revisions ORDER BY template_id, template_version",
-            )?;
-            let rows = query.query_map([], |row| {
-                Ok(TemplateCatalogItem {
-                    id: row.get(0)?,
-                    template_id: row.get(1)?,
-                    version: row.get(2)?,
-                    origin: row.get(3)?,
-                    semantic_hash: row.get(4)?,
-                    canonical_json: row.get(5)?,
+        self.orm_read(|db| {
+            Ok(revision_entity::Entity::find()
+                .order_by_asc(revision_entity::Column::TemplateId)
+                .order_by_asc(revision_entity::Column::TemplateVersion)
+                .all(db)?
+                .into_iter()
+                .map(|row| TemplateCatalogItem {
+                    id: row.id,
+                    template_id: row.template_id,
+                    version: row.template_version,
+                    origin: row.origin,
+                    semantic_hash: row.semantic_hash,
+                    canonical_json: row.canonical_json,
                 })
-            })?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+                .collect())
         })
         .map_err(map_error)
     }
 
     fn clone_source(&self, scope_id: &str, id: &str) -> Result<Option<CloneSource>, StoreConflict> {
-        self.read(|db| {
-            let source = db
-                .query_row(
-                    "SELECT i.id, i.scope_id, i.target_id, i.revision, i.display_name, \
-                 t.canonical_json, s.selected_version, s.storage_method, s.inputs_json, s.revision \
-                 FROM instances i JOIN template_snapshots t ON t.instance_id = i.id \
-                 JOIN instance_specs s ON s.instance_id = i.id \
-                 WHERE i.scope_id = ?1 AND i.id = ?2 AND i.lifecycle = 'managed' \
-                 AND s.revision = COALESCE((SELECT MAX(o.new_spec_revision) FROM operations o \
-                     WHERE o.instance_id = i.id AND o.status = 'Succeeded' \
-                     AND o.new_spec_revision IS NOT NULL), 1) \
-                 AND NOT EXISTS (SELECT 1 FROM operations o WHERE o.instance_id = i.id \
-                 AND o.status NOT IN ('Succeeded', 'Abandoned'))",
-                    params![scope_id, id],
-                    |row| {
-                        let revision: i64 = row.get(3)?;
-                        let spec_revision: i64 = row.get(9)?;
-                        Ok((
-                            CloneSource {
-                                id: row.get(0)?,
-                                scope_id: row.get(1)?,
-                                target_id: row.get(2)?,
-                                revision: u64::try_from(revision)
-                                    .map_err(|_| Error::InvalidQuery)?,
-                                spec_revision: u64::try_from(spec_revision)
-                                    .map_err(|_| Error::InvalidQuery)?,
-                                name: row.get(4)?,
-                                snapshot_json: row.get(5)?,
-                                selected_version: row.get(6)?,
-                                storage_method: method_from_name(&row.get::<_, String>(7)?)
-                                    .ok_or(Error::InvalidQuery)?,
-                                inputs_json: row.get(8)?,
-                                ports: Vec::new(),
-                                storage: Vec::new(),
-                            },
-                            spec_revision,
-                        ))
-                    },
-                )
-                .optional()?;
-            let Some((mut source, spec_revision)) = source else {
+        self.orm_read(|db| {
+            let owner = instance_entity::Entity::find_by_id(id).one(db)?;
+            let Some(owner) =
+                owner.filter(|owner| owner.scope_id == scope_id && owner.lifecycle == "managed")
+            else {
                 return Ok(None);
             };
-            let mut query = db.prepare(
-                "SELECT slot, host_ip, host_port, container_port FROM port_bindings \
-                 WHERE instance_id = ?1 AND spec_revision = ?2 ORDER BY slot",
-            )?;
-            source.ports = query
-                .query_map(params![id, spec_revision], |row| {
+            let operations = operation::Entity::find()
+                .filter(operation::Column::InstanceId.eq(id))
+                .all(db)?;
+            if operations
+                .iter()
+                .any(|operation| !matches!(operation.status.as_str(), "Succeeded" | "Abandoned"))
+            {
+                return Ok(None);
+            }
+            let spec_revision = operations
+                .iter()
+                .filter(|operation| operation.status == "Succeeded")
+                .filter_map(|operation| operation.new_spec_revision)
+                .max()
+                .unwrap_or(1);
+            let Some(snapshot) = template_snapshot::Entity::find()
+                .filter(template_snapshot::Column::InstanceId.eq(id))
+                .one(db)?
+            else {
+                return Ok(None);
+            };
+            let Some(spec) =
+                instance_spec::Entity::find_by_id((id.to_owned(), spec_revision)).one(db)?
+            else {
+                return Ok(None);
+            };
+            let ports = port_binding::Entity::find()
+                .filter(port_binding::Column::InstanceId.eq(id))
+                .filter(port_binding::Column::SpecRevision.eq(spec_revision))
+                .order_by_asc(port_binding::Column::Slot)
+                .all(db)?
+                .into_iter()
+                .map(|port| {
                     Ok(PortAllocation {
-                        slot: row.get(0)?,
-                        host_ip: row.get(1)?,
-                        host_port: row.get(2)?,
-                        container_port: row.get(3)?,
+                        slot: port.slot,
+                        host_ip: port.host_ip,
+                        host_port: u16::try_from(port.host_port)
+                            .map_err(|_| DatabaseError::InvalidInput)?,
+                        container_port: u16::try_from(port.container_port)
+                            .map_err(|_| DatabaseError::InvalidInput)?,
                     })
-                })?
-                .collect::<Result<Vec<_>, _>>()?;
-            let mut query = db.prepare(
-                "SELECT slot, resource_identity, ownership_evidence FROM storage_allocations \
-                 WHERE instance_id = ?1 ORDER BY slot",
-            )?;
-            source.storage = query
-                .query_map([id], |row| {
-                    Ok(StorageAllocation {
-                        slot: row.get(0)?,
-                        resource_identity: row.get(1)?,
-                        ownership_evidence: row.get(2)?,
-                    })
-                })?
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(Some(source))
+                })
+                .collect::<Result<Vec<_>, DatabaseError>>()?;
+            let storage = storage_allocation::Entity::find()
+                .filter(storage_allocation::Column::InstanceId.eq(id))
+                .order_by_asc(storage_allocation::Column::Slot)
+                .all(db)?
+                .into_iter()
+                .map(|allocation| StorageAllocation {
+                    slot: allocation.slot,
+                    resource_identity: allocation.resource_identity,
+                    ownership_evidence: allocation.ownership_evidence,
+                })
+                .collect();
+            Ok(Some(CloneSource {
+                id: owner.id,
+                scope_id: owner.scope_id,
+                target_id: owner.target_id,
+                revision: u64::try_from(owner.revision).map_err(|_| DatabaseError::InvalidInput)?,
+                spec_revision: u64::try_from(spec_revision)
+                    .map_err(|_| DatabaseError::InvalidInput)?,
+                name: owner.display_name,
+                snapshot_json: snapshot.canonical_json,
+                selected_version: spec.selected_version,
+                storage_method: method_from_name(&spec.storage_method)
+                    .ok_or(DatabaseError::InvalidInput)?,
+                inputs_json: spec.inputs_json,
+                ports,
+                storage,
+            }))
         })
         .map_err(map_error)
     }
@@ -516,8 +662,8 @@ impl StateStore for DatabaseWorker {
             return Err(StoreConflict::InvalidInput);
         }
         let instance = instance.clone();
-        self.write(move |db| {
-            let transaction = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        self.orm_write(move |db| {
+            let transaction = db.begin()?;
             insert_instance(&transaction, &instance)?;
             transaction.commit()?;
             Ok(())
@@ -536,7 +682,7 @@ impl StateStore for DatabaseWorker {
         {
             return Err(StoreConflict::InvalidInput);
         }
-        self.write(move |db| update_instance(db, &id, expected, Some(&name)))
+        self.orm_write(move |db| update_instance(db, &id, expected, Some(&name)))
             .map_err(map_error)?
     }
 
@@ -550,23 +696,18 @@ impl StateStore for DatabaseWorker {
             return Err(StoreConflict::InvalidInput);
         }
         let id = id.to_owned();
-        self.write(move |db| update_instance(db, &id, expected, None))
+        self.orm_write(move |db| update_instance(db, &id, expected, None))
             .map_err(map_error)?
     }
 
     fn default_storage_method(&self, scope_id: &str) -> Result<StorageMethod, StoreConflict> {
-        self.read(|db| {
-            let value: String = db.query_row(
-                "SELECT default_storage_method FROM management_scopes WHERE id = ?1",
-                [scope_id],
-                |row| row.get(0),
-            )?;
-            Ok(value)
+        self.orm_read(|db| {
+            management_scope::Entity::find_by_id(scope_id)
+                .one(db)?
+                .map(|scope| scope.default_storage_method)
+                .ok_or(DatabaseError::Missing)
         })
-        .map_err(|error| match error {
-            DatabaseError::Sqlite(Error::QueryReturnedNoRows) => StoreConflict::Missing,
-            other => map_error(other),
-        })
+        .map_err(map_error)
         .map(|value| {
             if value == "bind" {
                 StorageMethod::Bind
@@ -582,20 +723,19 @@ impl StateStore for DatabaseWorker {
         method: StorageMethod,
     ) -> Result<(), StoreConflict> {
         let scope_id = scope_id.to_owned();
-        self.write(move |db| {
-            let count = db.execute(
-                "UPDATE management_scopes SET default_storage_method = ?1 WHERE id = ?2",
-                params![method_name(method), scope_id],
-            )?;
-            if count == 0 {
-                return Err(DatabaseError::Sqlite(Error::QueryReturnedNoRows));
+        self.orm_write(move |db| {
+            let scope = management_scope::Entity::find_by_id(&scope_id)
+                .one(db)?
+                .ok_or(DatabaseError::Missing)?;
+            management_scope::ActiveModel {
+                id: Set(scope.id),
+                default_storage_method: Set(method_name(method).into()),
+                ..Default::default()
             }
+            .update(db)?;
             Ok(())
         })
-        .map_err(|error| match error {
-            DatabaseError::Sqlite(Error::QueryReturnedNoRows) => StoreConflict::Missing,
-            other => map_error(other),
-        })
+        .map_err(map_error)
     }
 
     fn storage_allocation(
@@ -603,34 +743,29 @@ impl StateStore for DatabaseWorker {
         instance_id: &str,
         slot: &str,
     ) -> Result<Option<StorageLedgerEntry>, StoreConflict> {
-        let (instance_id, slot) = (instance_id.to_owned(), slot.to_owned());
-        self.read(move |db| {
-            db.query_row(
-                "SELECT a.instance_id, i.scope_id, a.slot, a.method, a.resource_identity,
-                        a.ownership_evidence, a.ownership, a.presence, a.initialization
-                 FROM storage_allocations a JOIN instances i ON i.id = a.instance_id
-                 WHERE a.instance_id = ?1 AND a.slot = ?2",
-                params![instance_id, slot],
-                storage_entry,
-            )
-            .optional()
-            .map_err(Into::into)
+        self.orm_read(|db| {
+            let allocation =
+                storage_allocation::Entity::find_by_id((instance_id.to_owned(), slot.to_owned()))
+                    .one(db)?;
+            allocation
+                .map(|allocation| {
+                    let owner = instance_entity::Entity::find_by_id(&allocation.instance_id)
+                        .one(db)?
+                        .ok_or(DatabaseError::Missing)?;
+                    storage_entry(allocation, owner.scope_id)
+                })
+                .transpose()
         })
         .map_err(map_error)
     }
 
     fn source_revision(&self, scope_id: &str, id: &str) -> Result<Option<u64>, StoreConflict> {
-        self.read(|db| {
-            let revision: Option<i64> = db
-                .query_row(
-                    "SELECT revision FROM instances WHERE scope_id = ?1 AND id = ?2",
-                    params![scope_id, id],
-                    |row| row.get(0),
-                )
-                .optional()?;
-            revision
-                .map(|value| {
-                    u64::try_from(value).map_err(|_| DatabaseError::Sqlite(Error::InvalidQuery))
+        self.orm_read(|db| {
+            let instance = instance_entity::Entity::find_by_id(id).one(db)?;
+            instance
+                .filter(|instance| instance.scope_id == scope_id)
+                .map(|instance| {
+                    u64::try_from(instance.revision).map_err(|_| DatabaseError::InvalidInput)
                 })
                 .transpose()
         })
@@ -638,14 +773,8 @@ impl StateStore for DatabaseWorker {
     }
 
     fn instance_id_exists(&self, id: &str) -> Result<bool, StoreConflict> {
-        self.read(|db| {
-            Ok(db.query_row(
-                "SELECT EXISTS(SELECT 1 FROM instances WHERE id = ?1)",
-                [id],
-                |row| row.get(0),
-            )?)
-        })
-        .map_err(map_error)
+        self.orm_read(|db| Ok(instance_entity::Entity::find_by_id(id).one(db)?.is_some()))
+            .map_err(map_error)
     }
 
     fn set_storage_presence(
@@ -655,21 +784,14 @@ impl StateStore for DatabaseWorker {
         presence: StoragePresence,
     ) -> Result<(), StoreConflict> {
         let (instance_id, slot) = (instance_id.to_owned(), slot.to_owned());
-        self.write(move |db| {
-            let transaction = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let current = transaction
-                .query_row(
-                    "SELECT presence FROM storage_allocations WHERE instance_id = ?1 AND slot = ?2",
-                    params![instance_id, slot],
-                    |row| row.get::<_, String>(0),
-                )
-                .optional()?;
-            let Some(current) = current else {
-                return Err(DatabaseError::Sqlite(Error::QueryReturnedNoRows));
-            };
-            let Some(current) = presence_from_name(&current) else {
-                return Err(DatabaseError::Sqlite(Error::InvalidQuery));
-            };
+        self.orm_write(move |db| {
+            let transaction = db.begin()?;
+            let allocation =
+                storage_allocation::Entity::find_by_id((instance_id.clone(), slot.clone()))
+                    .one(&transaction)?
+                    .ok_or(DatabaseError::Missing)?;
+            let current =
+                presence_from_name(&allocation.presence).ok_or(DatabaseError::InvalidInput)?;
             // The named-volume adapter verifies a successful create step before recording this transition.
             let allowed = match current {
                 StoragePresence::NotMaterialized => matches!(
@@ -694,20 +816,19 @@ impl StateStore for DatabaseWorker {
                 ),
             };
             if !allowed {
-                return Err(DatabaseError::Sqlite(Error::InvalidQuery));
+                return Err(DatabaseError::InvalidInput);
             }
-            transaction.execute(
-                "UPDATE storage_allocations SET presence = ?3 WHERE instance_id = ?1 AND slot = ?2",
-                params![instance_id, slot, presence_name(presence)],
-            )?;
+            storage_allocation::ActiveModel {
+                instance_id: Set(instance_id),
+                slot: Set(slot),
+                presence: Set(presence_name(presence).into()),
+                ..Default::default()
+            }
+            .update(&transaction)?;
             transaction.commit()?;
             Ok(())
         })
-        .map_err(|error| match error {
-            DatabaseError::Sqlite(Error::QueryReturnedNoRows) => StoreConflict::Missing,
-            DatabaseError::Sqlite(Error::InvalidQuery) => StoreConflict::InvalidInput,
-            other => map_error(other),
-        })
+        .map_err(map_error)
     }
 
     fn advance_storage_initialization(
@@ -717,72 +838,68 @@ impl StateStore for DatabaseWorker {
         initialization: Initialization,
     ) -> Result<(), StoreConflict> {
         let (instance_id, slot) = (instance_id.to_owned(), slot.to_owned());
-        self.write(move |db| {
-            let transaction = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let current = transaction
-                .query_row(
-                    "SELECT presence, initialization FROM storage_allocations
-                     WHERE instance_id = ?1 AND slot = ?2",
-                    params![instance_id, slot],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-                )
-                .optional()?;
-            let Some((presence, current)) = current else {
-                return Err(DatabaseError::Sqlite(Error::QueryReturnedNoRows));
-            };
-            if presence_from_name(&presence) != Some(StoragePresence::Present) {
-                return Err(DatabaseError::Sqlite(Error::InvalidQuery));
+        self.orm_write(move |db| {
+            let transaction = db.begin()?;
+            let allocation =
+                storage_allocation::Entity::find_by_id((instance_id.clone(), slot.clone()))
+                    .one(&transaction)?
+                    .ok_or(DatabaseError::Missing)?;
+            if presence_from_name(&allocation.presence) != Some(StoragePresence::Present) {
+                return Err(DatabaseError::InvalidInput);
             }
-            let Some(current) = initialization_from_name(&current) else {
-                return Err(DatabaseError::Sqlite(Error::InvalidQuery));
-            };
+            let current = initialization_from_name(&allocation.initialization)
+                .ok_or(DatabaseError::InvalidInput)?;
             if initialization < current {
-                return Err(DatabaseError::Sqlite(Error::InvalidQuery));
+                return Err(DatabaseError::InvalidInput);
             }
-            transaction.execute(
-                "UPDATE storage_allocations SET initialization = ?3
-                 WHERE instance_id = ?1 AND slot = ?2",
-                params![instance_id, slot, initialization_name(initialization)],
-            )?;
+            storage_allocation::ActiveModel {
+                instance_id: Set(instance_id),
+                slot: Set(slot),
+                initialization: Set(initialization_name(initialization).into()),
+                ..Default::default()
+            }
+            .update(&transaction)?;
             transaction.commit()?;
             Ok(())
         })
-        .map_err(|error| match error {
-            DatabaseError::Sqlite(Error::QueryReturnedNoRows) => StoreConflict::Missing,
-            DatabaseError::Sqlite(Error::InvalidQuery) => StoreConflict::InvalidInput,
-            other => map_error(other),
-        })
+        .map_err(map_error)
     }
 }
 
 fn update_instance(
-    db: &mut Connection,
+    db: &sea_orm::DatabaseConnection,
     id: &str,
     expected: u64,
     name: Option<&str>,
 ) -> Result<Result<(), StoreConflict>, DatabaseError> {
-    let expected =
-        i64::try_from(expected).map_err(|_| DatabaseError::Sqlite(Error::InvalidQuery))?;
-    let transaction = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let count = if let Some(name) = name {
-        transaction.execute("UPDATE instances SET display_name = ?1, normalized_name = ?1, revision = revision + 1 WHERE id = ?2 AND revision = ?3 AND lifecycle = 'managed'",
-            params![name, id, expected])?
-    } else {
-        transaction.execute("UPDATE instances SET lifecycle = 'retired', revision = revision + 1 WHERE id = ?1 AND revision = ?2 AND lifecycle = 'managed'",
-            params![id, expected])?
+    let expected = i64::try_from(expected).map_err(|_| DatabaseError::InvalidInput)?;
+    let transaction = db.begin()?;
+    let current = instance_entity::Entity::find_by_id(id).one(&transaction)?;
+    let Some(current) = current else {
+        return Ok(Err(StoreConflict::Missing));
     };
-    if count == 0 {
-        let current = transaction.query_row(
-            "SELECT revision, lifecycle FROM instances WHERE id = ?1",
-            [id],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
-        );
-        return Ok(Err(match current {
-            Err(Error::QueryReturnedNoRows) => StoreConflict::Missing,
-            Ok((revision, _)) if revision != expected => StoreConflict::StaleRevision,
-            _ => StoreConflict::InvalidLifecycle,
-        }));
+    if current.revision != expected {
+        return Ok(Err(StoreConflict::StaleRevision));
     }
+    if current.lifecycle != "managed" {
+        return Ok(Err(StoreConflict::InvalidLifecycle));
+    }
+    let next_revision = current
+        .revision
+        .checked_add(1)
+        .ok_or(DatabaseError::InvalidInput)?;
+    let mut active = instance_entity::ActiveModel {
+        id: Set(current.id),
+        revision: Set(next_revision),
+        ..Default::default()
+    };
+    if let Some(name) = name {
+        active.display_name = Set(name.to_owned());
+        active.normalized_name = Set(name.to_owned());
+    } else {
+        active.lifecycle = Set("retired".into());
+    }
+    active.update(&transaction)?;
     transaction.commit()?;
     Ok(Ok(()))
 }

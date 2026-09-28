@@ -35,6 +35,7 @@ pub mod artifact_store;
 pub mod docker_cli;
 pub mod docker_observation;
 pub mod docker_target;
+mod entities;
 pub mod host_ports;
 pub mod image_resolution;
 pub mod image_store;

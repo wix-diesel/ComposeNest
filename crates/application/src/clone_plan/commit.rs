@@ -77,10 +77,15 @@ impl ClonePlans {
         if expected != actual
             || actual.len() != request.storage.len()
             || request.storage.iter().any(|item| {
-                item.resource_identity.is_empty()
-                    || item.ownership_evidence.is_empty()
+                !valid_storage_identity(
+                    &item.resource_identity,
+                    plan.storage_method,
+                    &plan.instance_id,
+                    &item.slot,
+                ) || item.ownership_evidence.is_empty()
                     || plan.source.storage.iter().any(|source| {
                         overlaps_resource(&source.resource_identity, &item.resource_identity)
+                            || source.ownership_evidence == item.ownership_evidence
                     })
             })
             || request.storage.iter().enumerate().any(|(index, item)| {
@@ -162,5 +167,25 @@ impl ClonePlans {
             .map_err(commit_store_error)?;
         self.plans.remove(&request.plan_id);
         Ok(result)
+    }
+}
+
+fn valid_storage_identity(
+    identity: &str,
+    method: StorageMethod,
+    instance_id: &str,
+    slot: &str,
+) -> bool {
+    match method {
+        StorageMethod::Volume => identity == format!("cn-{instance_id}-{slot}"),
+        StorageMethod::Bind => {
+            !identity.is_empty()
+                && !Path::new(identity).components().any(|component| {
+                    matches!(
+                        component,
+                        std::path::Component::ParentDir | std::path::Component::CurDir
+                    )
+                })
+        }
     }
 }

@@ -141,7 +141,8 @@ pub(super) fn answer_field(
             (Some(Value::String(secret)), ValueOrigin::Generated)
         }
         CloneAnswer::Input(value)
-            if value.as_str().is_none_or(|text| text.len() <= 16 * 1024)
+            if !value.is_null()
+                && value.as_str().is_none_or(|text| text.len() <= 16 * 1024)
                 && valid_input(input, Some(&value)) =>
         {
             (Some(value), ValueOrigin::UserInput)
@@ -174,7 +175,10 @@ pub(super) fn check_source(plan: &Plan, store: &impl StateStore) -> Result<(), P
             Err(error("PLAN_STALE", Some("sourceId".into())))
         };
     };
-    if source.revision != plan.source.revision || source.target_id != plan.source.target_id {
+    if source.revision != plan.source.revision
+        || source.spec_revision != plan.source.spec_revision
+        || source.target_id != plan.source.target_id
+    {
         return Err(error("PLAN_STALE", Some("sourceId".into())));
     }
     Ok(())
@@ -259,7 +263,7 @@ pub(super) fn preview(
             changed: state.value.as_ref() != source,
             added: source_input.is_none(),
             removed: false,
-            needs_answer: !state.answered,
+            needs_answer: invalid || !state.answered,
             needs_secret_confirmation: needs_confirmation,
             has_secret: secret && state.value.is_some(),
         });

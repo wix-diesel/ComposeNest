@@ -155,6 +155,7 @@ impl ClonePlans {
         let guard = CloneSourceGuard {
             instance_id: plan.source.id.clone(),
             revision: plan.source.revision,
+            spec_revision: plan.source.spec_revision,
         };
         let result = store
             .commit_plan(&instance, &intent, &receipt, &target, Some(&guard))

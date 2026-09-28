@@ -232,8 +232,9 @@ impl ClonePlans {
             .ok_or_else(|| error("SOURCE_UNAVAILABLE", None))?;
         let template: Value = serde_json::from_str(&source.snapshot_json)
             .map_err(|_| error("SNAPSHOT_INVALID", None))?;
-        let source_values: BTreeMap<String, Value> = serde_json::from_str(&source.inputs_json)
+        let mut source_values: BTreeMap<String, Value> = serde_json::from_str(&source.inputs_json)
             .map_err(|_| error("SOURCE_SPEC_INVALID", None))?;
+        source_values.retain(|_, value| !value.is_null());
         let source_definition = version_definition(&template, &source.selected_version)?.clone();
         let version = source.selected_version.clone();
         let fields = evaluate_fields(

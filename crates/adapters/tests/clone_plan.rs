@@ -102,6 +102,13 @@ fn clone_version_switch_uses_snapshot_and_shows_removed_fields_and_slots() {
             .any(|concern| concern.field_path == "inputs.retained")
     );
     assert!(
+        next.inputs
+            .iter()
+            .find(|input| input.key == "retained")
+            .unwrap()
+            .needs_answer
+    );
+    assert!(
         next.concerns
             .iter()
             .any(|concern| concern.field_path == "inputs.password")
@@ -674,4 +681,127 @@ fn clone_storage_switch_keeps_source_allocation_and_uses_new_method() {
             source.storage[0].resource_identity
         );
     }
+}
+
+#[test]
+fn null_input_is_rejected_and_clear_omits_optional_value() {
+    let (_root, store, template) = store();
+    setup_source(&store, &template);
+    let clock = TestClock(Cell::new(0));
+    let mut random = TestRandom::default();
+    let mut plans = ClonePlans::default();
+    let first = plans
+        .prepare_clone(
+            &PrepareClone {
+                scope_id: "scope".into(),
+                source_id: "source".into(),
+                display_name: "Copy".into(),
+            },
+            &store,
+            &clock,
+            &mut random,
+            &FreePorts,
+        )
+        .unwrap();
+    let mut invalid = clone_edit(1);
+    invalid
+        .inputs
+        .insert("removed".into(), CloneAnswer::Input(json!(null)));
+    assert_eq!(
+        plans
+            .update_plan(
+                UpdateClone {
+                    scope_id: "scope".into(),
+                    plan_id: first.plan_id.clone(),
+                    edit: invalid
+                },
+                &store,
+                &clock,
+                &mut random,
+                &FreePorts
+            )
+            .unwrap_err()
+            .code,
+        "INPUT_REQUIRED_OR_INVALID"
+    );
+    let mut clear = clone_edit(1);
+    clear.inputs.insert("removed".into(), CloneAnswer::Clear);
+    let ready = update_clone(
+        &mut plans,
+        &first.plan_id,
+        clear,
+        &store,
+        &clock,
+        &mut random,
+    );
+    assert!(ready.concerns.is_empty());
+    let receipt = plans
+        .commit_plan(
+            CommitCreate {
+                plan_id: first.plan_id,
+                revision: ready.plan_revision,
+                scope_id: "scope".into(),
+                request_id: "clear".into(),
+                target_id: "target".into(),
+                instance_id: ready.instance_id,
+                operation_id: "clear-op".into(),
+                confirmed_ports: ready.ports,
+                storage: vec![StorageAllocation {
+                    slot: "data".into(),
+                    resource_identity: "root/cleared/data".into(),
+                    ownership_evidence: "proof".into(),
+                }],
+            },
+            &store,
+            &clock,
+            &FreePorts,
+        )
+        .unwrap();
+    let inputs: String = store
+        .read(|db| {
+            Ok(db.query_row(
+                "SELECT inputs_json FROM instance_specs WHERE instance_id = ?1",
+                [&receipt.instance_id],
+                |row| row.get(0),
+            )?)
+        })
+        .unwrap();
+    let values: serde_json::Value = serde_json::from_str(&inputs).unwrap();
+    assert!(values.get("removed").is_none());
+}
+
+#[test]
+fn committed_spec_change_stales_plan_even_without_instance_revision_change() {
+    let (_root, store, template) = store();
+    setup_source(&store, &template);
+    let clock = TestClock(Cell::new(0));
+    let mut random = TestRandom::default();
+    let mut plans = ClonePlans::default();
+    let first = plans
+        .prepare_clone(
+            &PrepareClone {
+                scope_id: "scope".into(),
+                source_id: "source".into(),
+                display_name: "Copy".into(),
+            },
+            &store,
+            &clock,
+            &mut random,
+            &FreePorts,
+        )
+        .unwrap();
+    store.write(|db| {
+        db.execute("INSERT INTO instance_specs VALUES ('source', 2, '1', 'bind', '{}')", [])?;
+        db.execute("INSERT INTO operations (id, instance_id, kind, status, phase, expected_instance_revision, old_spec_revision, new_spec_revision, completed_at) \
+            VALUES ('updated', 'source', 'edit_port', 'Succeeded', 'done', 1, 1, 2, CURRENT_TIMESTAMP)", [])?;
+        Ok(())
+    }).unwrap();
+    assert_eq!(store.source_revision("scope", "source").unwrap(), Some(1));
+    assert_eq!(
+        plans
+            .view_plan("scope", &first.plan_id, &store, &clock, &FreePorts)
+            .unwrap_err()
+            .code,
+        "PLAN_STALE"
+    );
 }

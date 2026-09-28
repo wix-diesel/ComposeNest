@@ -202,11 +202,10 @@ fn insert_template(
     Ok(())
 }
 
-fn insert_instance(
-    connection: &mut Connection,
+pub(crate) fn insert_instance(
+    transaction: &Connection,
     instance: &InstanceRecord,
 ) -> Result<(), DatabaseError> {
-    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let exists: i64 = transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM template_revisions r, json_each(r.canonical_json, '$.versions') v \
          WHERE r.id = ?1 AND json_extract(v.value, '$.key') = ?2)",
@@ -286,7 +285,6 @@ fn insert_instance(
             params![instance.id, source, instance.target_id, instance.selected_version],
         )?;
     }
-    transaction.commit()?;
     Ok(())
 }
 
@@ -423,11 +421,16 @@ impl StateStore for DatabaseWorker {
             return Err(StoreConflict::InvalidInput);
         }
         let instance = instance.clone();
-        self.write(move |db| insert_instance(db, &instance))
-            .map_err(|error| match error {
-                DatabaseError::Sqlite(Error::QueryReturnedNoRows) => StoreConflict::Missing,
-                other => map_error(other),
-            })
+        self.write(move |db| {
+            let transaction = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            insert_instance(&transaction, &instance)?;
+            transaction.commit()?;
+            Ok(())
+        })
+        .map_err(|error| match error {
+            DatabaseError::Sqlite(Error::QueryReturnedNoRows) => StoreConflict::Missing,
+            other => map_error(other),
+        })
     }
 
     fn rename_instance(&self, id: &str, expected: u64, name: &str) -> Result<(), StoreConflict> {
@@ -663,6 +666,9 @@ fn update_instance(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use composenest_application::operation_journal::{
+        OperationIntent, OperationJournal, OperationKind, PlanCommitStore, RequestReceipt,
+    };
     use composenest_application::state_store::{PortAllocation, StorageAllocation};
     use composenest_application::template_catalog::{
         CatalogError, TemplateOrigin, TemplatePackage, register_packages,
@@ -869,6 +875,245 @@ mod tests {
         worker
             .read(|db| Ok(db.query_row(&sql, [], |row| row.get(0))?))
             .unwrap()
+    }
+
+    fn plan_intent(id: &str) -> OperationIntent {
+        OperationIntent {
+            id: format!("op-{id}"),
+            instance_id: id.into(),
+            kind: OperationKind::Create,
+            phase: "accepted".into(),
+            expected_revision: 1,
+            old_spec_revision: None,
+            new_spec_revision: Some(1),
+        }
+    }
+
+    fn plan_receipt(id: &str, plan: &str, revision: u64) -> RequestReceipt {
+        RequestReceipt {
+            scope_id: "scope".into(),
+            request_id: format!("request-{id}"),
+            plan_id: Some(plan.into()),
+            confirmed_revision: revision,
+            request_hash: "a".repeat(64),
+            instance_id: id.into(),
+            operation_id: format!("op-{id}"),
+        }
+    }
+
+    fn plan_target() -> RuntimeTarget {
+        RuntimeTarget {
+            id: "target".into(),
+            scope_id: "scope".into(),
+            endpoint: "unix:///var/run/docker.sock".into(),
+            engine_id: "engine".into(),
+            platform: "linux".into(),
+        }
+    }
+
+    #[test]
+    fn concurrent_plan_retries_return_one_durable_result() {
+        use std::sync::Arc;
+        let (root, worker) = store();
+        worker.register_template(&revision()).unwrap();
+        let worker = Arc::new(worker);
+        let threads: Vec<_> = (0..2)
+            .map(|_| {
+                let worker = Arc::clone(&worker);
+                std::thread::spawn(move || {
+                    worker.commit_plan(
+                        &instance("one", "One", 13000),
+                        &plan_intent("one"),
+                        &plan_receipt("one", "plan", 1),
+                        &plan_target(),
+                        None,
+                    )
+                })
+            })
+            .collect();
+        for thread in threads {
+            assert_eq!(thread.join().unwrap(), Ok(plan_receipt("one", "plan", 1)));
+        }
+        assert_eq!(count(&worker, "instances"), 1);
+        assert_eq!(count(&worker, "operations"), 1);
+        drop(worker);
+        let reopened = DatabaseWorker::start(root.path()).unwrap();
+        assert_eq!(
+            reopened.plan_receipt("scope", "plan"),
+            Ok(Some(plan_receipt("one", "plan", 1)))
+        );
+        assert_eq!(
+            reopened.commit_plan(
+                &instance("later", "Later", 13001),
+                &plan_intent("later"),
+                &plan_receipt("later", "plan", 2),
+                &plan_target(),
+                None
+            ),
+            Err(StoreConflict::Duplicate)
+        );
+    }
+
+    #[test]
+    fn plan_conflicts_rollback_every_record() {
+        let (_root, worker) = store();
+        worker.register_template(&revision()).unwrap();
+        worker
+            .commit_plan(
+                &instance("one", "One", 13000),
+                &plan_intent("one"),
+                &plan_receipt("one", "first", 1),
+                &plan_target(),
+                None,
+            )
+            .unwrap();
+        for (id, name, port) in [("name", "One", 13001), ("port", "Other", 13000)] {
+            assert_eq!(
+                worker.commit_plan(
+                    &instance(id, name, port),
+                    &plan_intent(id),
+                    &plan_receipt(id, id, 1),
+                    &plan_target(),
+                    None
+                ),
+                Err(StoreConflict::Duplicate)
+            );
+            assert_eq!(worker.plan_receipt("scope", id), Ok(None));
+        }
+        let mut changed_target = plan_target();
+        changed_target.engine_id = "another-engine".into();
+        assert_eq!(
+            worker.commit_plan(
+                &instance("target", "Target", 13001),
+                &plan_intent("target"),
+                &plan_receipt("target", "target", 1),
+                &changed_target,
+                None
+            ),
+            Err(StoreConflict::StaleRevision)
+        );
+        let mut clone = instance("clone", "Clone", 13001);
+        clone.clone_source_id = Some("one".into());
+        let mut clone_intent = plan_intent("clone");
+        clone_intent.kind = OperationKind::Clone;
+        assert_eq!(
+            worker.commit_plan(
+                &clone,
+                &clone_intent,
+                &plan_receipt("clone", "clone", 1),
+                &plan_target(),
+                Some(
+                    &composenest_application::operation_journal::CloneSourceGuard {
+                        instance_id: "one".into(),
+                        revision: 1,
+                    }
+                )
+            ),
+            Err(StoreConflict::InvalidLifecycle)
+        );
+        for table in [
+            "instances",
+            "template_snapshots",
+            "instance_specs",
+            "port_bindings",
+            "port_reservations",
+            "storage_allocations",
+            "operations",
+            "request_receipts",
+        ] {
+            assert_eq!(count(&worker, table), 1, "{table}");
+        }
+    }
+
+    #[test]
+    fn create_plan_confirms_only_current_ready_revision() {
+        use composenest_application::create_plan::{
+            CommitCreate, CreatePlans, PrepareCreate, get_plan_commit,
+        };
+        use composenest_application::host_ports::{PortCheck, PortInspector};
+        use std::time::SystemTime;
+
+        struct Available;
+        impl PortInspector for Available {
+            fn inspect(&self, _port: u16) -> PortCheck {
+                PortCheck {
+                    result: Ok(()),
+                    observed_at: SystemTime::now(),
+                }
+            }
+        }
+        let (_root, worker) = store();
+        let mut template = revision();
+        template.canonical_json = r#"{"manifest":{"id":"redis","schemaVersion":1,"templateVersion":"1","defaultVersion":"8","versions":["8"]},"normalization":"template-normalization-v1","versions":[{"key":"8","definition":{"inputs":{"order":[],"values":{}},"service":{"ports":{"order":["main"],"values":{"main":{"container":6379,"defaultHost":13000}}},"storage":{"order":["data"],"values":{"data":{"container":"/data"}}}}}}]}"#.into();
+        template.semantic_hash =
+            format!("{:x}", Sha256::digest(template.canonical_json.as_bytes()));
+        template.id = format!("redis:1:{}", template.semantic_hash);
+        worker.register_template(&template).unwrap();
+        let mut plans = CreatePlans::default();
+        let view = plans
+            .prepare_create(
+                &PrepareCreate {
+                    scope_id: "scope".into(),
+                    display_name: "New".into(),
+                    template_revision_id: template.id,
+                    version: None,
+                },
+                &worker,
+                &crate::SystemClock,
+                &mut crate::SystemRandom,
+                &Available,
+            )
+            .unwrap();
+        assert!(view.concerns.is_empty());
+        let request = |revision| CommitCreate {
+            plan_id: view.plan_id.clone(),
+            revision,
+            scope_id: "scope".into(),
+            request_id: "request-new".into(),
+            target_id: "target".into(),
+            instance_id: "123456789012345678901234567890ab".into(),
+            operation_id: "op-new".into(),
+            confirmed_ports: view.ports.clone(),
+            storage: vec![StorageAllocation {
+                slot: "data".into(),
+                resource_identity: "data/new".into(),
+                ownership_evidence: "proof".into(),
+            }],
+        };
+        assert_eq!(
+            plans
+                .commit_plan(request(2), &worker, &crate::SystemClock, &Available)
+                .unwrap_err()
+                .code,
+            "PLAN_STALE"
+        );
+        let mut unconfirmed = request(1);
+        unconfirmed.confirmed_ports.clear();
+        assert_eq!(
+            plans
+                .commit_plan(unconfirmed, &worker, &crate::SystemClock, &Available)
+                .unwrap_err()
+                .code,
+            "PLAN_RECONFIRM"
+        );
+        let committed = plans
+            .commit_plan(request(1), &worker, &crate::SystemClock, &Available)
+            .unwrap();
+        assert_eq!(
+            get_plan_commit(&worker, "scope", &view.plan_id).unwrap(),
+            Some(committed.clone())
+        );
+        assert_eq!(
+            plans.commit_plan(request(1), &worker, &crate::SystemClock, &Available),
+            Ok(committed)
+        );
+        assert_eq!(
+            plans
+                .commit_plan(request(2), &worker, &crate::SystemClock, &Available)
+                .unwrap_err()
+                .code,
+            "REQUEST_ALREADY_USED"
+        );
     }
 
     #[test]

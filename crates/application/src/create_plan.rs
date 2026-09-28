@@ -4,14 +4,19 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use composenest_domain::clone_policy::{RandomSource, generate_secret};
 use composenest_domain::identity::DisplayName;
+use composenest_domain::instance::OperationKind;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::{
     Clock,
     host_ports::{PortCursor, PortInspector, PortPlan, PortSlot, plan_ports},
-    state_store::{StateStore, StorageMethod, StoreConflict},
+    operation_journal::{OperationIntent, PlanCommitStore, RequestReceipt},
+    state_store::{
+        InstanceRecord, PortAllocation, StateStore, StorageAllocation, StorageMethod, StoreConflict,
+    },
 };
 
 const MAX_PLANS: usize = 16;
@@ -124,6 +129,28 @@ pub struct PrepareCreate {
     pub version: Option<String>,
 }
 
+/// Prevalidated resource identities supplied before the short commit transaction.
+pub struct CommitCreate {
+    /// Plan to confirm.
+    pub plan_id: String,
+    /// Plan revision shown to the caller.
+    pub revision: u64,
+    /// Scope containing the plan and request.
+    pub scope_id: String,
+    /// Caller-generated idempotency key.
+    pub request_id: String,
+    /// Registered runtime target selected before confirmation.
+    pub target_id: String,
+    /// Fresh 32-digit hexadecimal instance identifier.
+    pub instance_id: String,
+    /// Fresh operation identifier.
+    pub operation_id: String,
+    /// Host ports explicitly confirmed from the displayed plan revision.
+    pub confirmed_ports: BTreeMap<String, u16>,
+    /// Allocations checked or prepared outside the database transaction.
+    pub storage: Vec<StorageAllocation>,
+}
+
 struct Plan {
     scope: String,
     display_name: String,
@@ -145,6 +172,145 @@ pub struct CreatePlans {
 }
 
 impl CreatePlans {
+    /// Confirms a ready plan and returns its durable result, including after plan expiration.
+    pub fn commit_plan(
+        &mut self,
+        request: CommitCreate,
+        store: &impl PlanCommitStore,
+        clock: &impl Clock,
+        inspector: &impl PortInspector,
+    ) -> Result<RequestReceipt, PlanError> {
+        self.expire(clock.unix_seconds());
+        let hash = commit_hash(&request.plan_id, request.revision);
+        if let Some(previous) = store
+            .receipt(&request.scope_id, &request.request_id)
+            .map_err(commit_store_error)?
+        {
+            return if previous.plan_id.as_deref() == Some(request.plan_id.as_str())
+                && previous.confirmed_revision == request.revision
+                && previous.request_hash == hash
+            {
+                Ok(previous)
+            } else {
+                Err(error("REQUEST_ALREADY_USED", None))
+            };
+        }
+        if let Some(previous) = store
+            .plan_receipt(&request.scope_id, &request.plan_id)
+            .map_err(commit_store_error)?
+        {
+            return if previous.confirmed_revision == request.revision
+                && previous.request_hash == hash
+            {
+                Ok(previous)
+            } else {
+                Err(error("PLAN_ALREADY_COMMITTED", None))
+            };
+        }
+        let plan = self
+            .plans
+            .get_mut(&request.plan_id)
+            .filter(|plan| plan.scope == request.scope_id)
+            .ok_or_else(|| error("PLAN_NOT_FOUND", None))?;
+        if plan.revision != request.revision {
+            return Err(error("PLAN_STALE", Some("revision".into())));
+        }
+        let view = preview(&request.plan_id, plan, inspector);
+        if let Some(concern) = view.concerns.first() {
+            return Err(error(concern.code, Some(concern.field_path.clone())));
+        }
+        if request.confirmed_ports != view.ports {
+            return Err(error("PLAN_RECONFIRM", Some("ports".into())));
+        }
+        if request.target_id.is_empty()
+            || request.request_id.is_empty()
+            || request.operation_id.is_empty()
+            || request.instance_id.len() != 32
+            || !request
+                .instance_id
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(error("COMMIT_INVALID", None));
+        }
+        let expected_slots: BTreeSet<_> = view.storage_slots.iter().map(String::as_str).collect();
+        let actual_slots: BTreeSet<_> = request
+            .storage
+            .iter()
+            .map(|item| item.slot.as_str())
+            .collect();
+        if expected_slots != actual_slots
+            || actual_slots.len() != request.storage.len()
+            || request
+                .storage
+                .iter()
+                .any(|item| item.resource_identity.is_empty() || item.ownership_evidence.is_empty())
+        {
+            return Err(error("STORAGE_ALLOCATION_INVALID", None));
+        }
+        let definition = version_definition(&plan.template, &plan.version)?;
+        let ports = entries(&definition["service"]["ports"])
+            .into_iter()
+            .map(|(slot, port)| {
+                Ok(PortAllocation {
+                    host_port: *view
+                        .ports
+                        .get(&slot)
+                        .ok_or_else(|| error("PORT_CHECK_UNAVAILABLE", None))?,
+                    container_port: port["container"]
+                        .as_u64()
+                        .and_then(|value| u16::try_from(value).ok())
+                        .ok_or_else(|| error("TEMPLATE_INVALID", None))?,
+                    host_ip: "127.0.0.1".into(),
+                    slot,
+                })
+            })
+            .collect::<Result<Vec<_>, PlanError>>()?;
+        let instance = InstanceRecord {
+            id: request.instance_id.clone(),
+            scope_id: request.scope_id.clone(),
+            target_id: request.target_id,
+            name: plan.display_name.clone(),
+            project_name: format!("cn-{}", request.instance_id),
+            clone_source_id: None,
+            template_revision_id: plan.template_id.clone(),
+            selected_version: plan.version.clone(),
+            storage_method: plan.storage_method,
+            inputs_json: serde_json::to_string(&plan.values)
+                .map_err(|_| error("COMMIT_INVALID", None))?,
+            ports,
+            storage: request.storage,
+        };
+        let intent = OperationIntent {
+            id: request.operation_id.clone(),
+            instance_id: instance.id.clone(),
+            kind: OperationKind::Create,
+            phase: "accepted".into(),
+            expected_revision: 1,
+            old_spec_revision: None,
+            new_spec_revision: Some(1),
+        };
+        let receipt = RequestReceipt {
+            scope_id: instance.scope_id.clone(),
+            request_id: request.request_id,
+            plan_id: Some(request.plan_id.clone()),
+            confirmed_revision: request.revision,
+            request_hash: hash,
+            instance_id: instance.id.clone(),
+            operation_id: intent.id.clone(),
+        };
+        let target = store
+            .runtime_target(&instance.scope_id)
+            .map_err(commit_store_error)?
+            .filter(|target| target.id == instance.target_id)
+            .ok_or_else(|| error("RUNTIME_TARGET_MISMATCH", None))?;
+        let result = store
+            .commit_plan(&instance, &intent, &receipt, &target, None)
+            .map_err(commit_store_error)?;
+        self.plans.remove(&request.plan_id);
+        Ok(result)
+    }
+
     /// Builds a plan from a registered, complete Template revision without reserving resources.
     pub fn prepare_create(
         &mut self,
@@ -352,6 +518,38 @@ impl CreatePlans {
         }
         Err(error("RANDOM_UNAVAILABLE", None))
     }
+}
+
+/// Finds a committed plan even when its in-memory candidate has disappeared.
+pub fn get_plan_commit(
+    store: &impl PlanCommitStore,
+    scope: &str,
+    plan_id: &str,
+) -> Result<Option<RequestReceipt>, PlanError> {
+    store
+        .plan_receipt(scope, plan_id)
+        .map_err(commit_store_error)
+}
+
+fn commit_hash(plan_id: &str, revision: u64) -> String {
+    format!(
+        "{:x}",
+        Sha256::digest(format!("create:{plan_id}:{revision}").as_bytes())
+    )
+}
+
+fn commit_store_error(conflict: StoreConflict) -> PlanError {
+    error(
+        match conflict {
+            StoreConflict::Duplicate => "RESOURCE_CONFLICT",
+            StoreConflict::StaleRevision => "PLAN_STALE",
+            StoreConflict::Missing => "RESOURCE_MISSING",
+            StoreConflict::InvalidLifecycle => "SOURCE_UNAVAILABLE",
+            StoreConflict::InvalidInput => "COMMIT_INVALID",
+            StoreConflict::Backend => "STORE_UNAVAILABLE",
+        },
+        None,
+    )
 }
 
 /// Reads the persisted default used only for future new-instance forms.

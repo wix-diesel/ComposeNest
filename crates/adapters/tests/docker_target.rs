@@ -5,6 +5,9 @@ use std::{ffi::OsString, fs, os::unix::fs::PermissionsExt, time::Duration};
 use composenest_adapters::docker_target::{Check, DockerProbe, TargetError};
 use tempfile::TempDir;
 
+// Concurrent execution of newly written mock scripts can fail with ETXTBSY on CI hosts.
+static MOCK_EXECUTION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 fn fixture() -> (TempDir, DockerProbe) {
     let root = tempfile::tempdir().expect("temporary directory");
     let executable = root.path().join("docker mock.sh");
@@ -61,6 +64,7 @@ fn replace_executable(probe: &DockerProbe, script: &str) {
 
 #[tokio::test]
 async fn engine_architecture_is_normalized_for_template_platforms() {
+    let _guard = MOCK_EXECUTION.lock().await;
     for (reported, expected) in [("x86_64", "linux/amd64"), ("aarch64", "linux/arm64")] {
         let (_root, probe) = fixture();
         let script = fs::read_to_string(&probe.executable).unwrap();
@@ -95,6 +99,7 @@ async fn engine_architecture_is_normalized_for_template_platforms() {
 
 #[tokio::test]
 async fn diagnosis_distinguishes_missing_stopped_and_changed_engine() {
+    let _guard = MOCK_EXECUTION.lock().await;
     let (root, probe) = fixture();
     let diagnosis = probe.diagnose(None).await;
     assert!(diagnosis.is_ready());
@@ -125,6 +130,7 @@ async fn diagnosis_distinguishes_missing_stopped_and_changed_engine() {
 
 #[tokio::test]
 async fn fixed_target_rejects_change_after_engine_replacement() {
+    let _guard = MOCK_EXECUTION.lock().await;
     let (root, probe) = fixture();
     let target = probe
         .diagnose(None)
@@ -145,6 +151,7 @@ async fn fixed_target_rejects_change_after_engine_replacement() {
 
 #[tokio::test]
 async fn remote_context_is_rejected_before_engine_access() {
+    let _guard = MOCK_EXECUTION.lock().await;
     let (root, probe) = fixture();
     replace_executable(
         &probe,
@@ -161,6 +168,7 @@ async fn remote_context_is_rejected_before_engine_access() {
 
 #[tokio::test]
 async fn old_cli_version_is_reported_as_unsupported() {
+    let _guard = MOCK_EXECUTION.lock().await;
     let (_root, probe) = fixture();
     let script = fs::read_to_string(&probe.executable).unwrap();
     replace_executable(
@@ -176,6 +184,7 @@ async fn old_cli_version_is_reported_as_unsupported() {
 
 #[tokio::test]
 async fn engine_version_uses_minimum_without_rejecting_newer_versions() {
+    let _guard = MOCK_EXECUTION.lock().await;
     let (_root, probe) = fixture();
     let original = fs::read_to_string(&probe.executable).unwrap();
     replace_executable(
@@ -196,6 +205,7 @@ async fn engine_version_uses_minimum_without_rejecting_newer_versions() {
 
 #[tokio::test]
 async fn registered_target_ignores_later_context_switch() {
+    let _guard = MOCK_EXECUTION.lock().await;
     let (_root, probe) = fixture();
     let target = probe
         .diagnose(None)

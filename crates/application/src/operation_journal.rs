@@ -61,6 +61,8 @@ pub struct CloneSourceGuard {
     pub instance_id: String,
     /// Source revision observed before external checks.
     pub revision: u64,
+    /// Committed spec revision observed before external checks.
+    pub spec_revision: u64,
 }
 
 /// One durable external effect intent, without command arguments or inspect data.

@@ -88,7 +88,7 @@ pub struct InstanceRecord {
     pub project_name: String,
     /// Optional clone source retained for history.
     pub clone_source_id: Option<String>,
-    /// Template revision to copy into the instance snapshot.
+    /// Registered Template revision for creation; clones copy the source Snapshot instead.
     pub template_revision_id: String,
     /// Version selected from the copied package.
     pub selected_version: String,
@@ -99,6 +99,35 @@ pub struct InstanceRecord {
     /// Port allocations to reserve at confirmation.
     pub ports: Vec<PortAllocation>,
     /// Independent writable storage allocations.
+    pub storage: Vec<StorageAllocation>,
+}
+
+/// A consistent view of a managed clone source and its committed configuration.
+#[derive(Debug, Clone)]
+pub struct CloneSource {
+    /// Source instance ID.
+    pub id: String,
+    /// Management scope containing the source.
+    pub scope_id: String,
+    /// Runtime target to reuse for the clone.
+    pub target_id: String,
+    /// Current instance revision guarded again at commit.
+    pub revision: u64,
+    /// Current committed spec revision, excluding abandoned pending changes.
+    pub spec_revision: u64,
+    /// Source display name.
+    pub name: String,
+    /// Complete immutable package definition from the private Snapshot.
+    pub snapshot_json: String,
+    /// Selected service Version from the current CommittedSpec.
+    pub selected_version: String,
+    /// Committed storage method.
+    pub storage_method: StorageMethod,
+    /// Committed inputs, including secrets, as JSON.
+    pub inputs_json: String,
+    /// Committed port bindings.
+    pub ports: Vec<PortAllocation>,
+    /// Source writable allocations that the clone must not reuse.
     pub storage: Vec<StorageAllocation>,
 }
 
@@ -192,6 +221,16 @@ pub trait StateStore: Send + Sync {
 
     /// Lists immutable revisions even when their source packages have changed or disappeared.
     fn list_templates(&self) -> Result<Vec<TemplateCatalogItem>, StoreConflict>;
+
+    /// Reads a managed source, its current spec and private Snapshot in one view.
+    /// Returns no source while an operation that may change it is unresolved.
+    fn clone_source(&self, scope_id: &str, id: &str) -> Result<Option<CloneSource>, StoreConflict>;
+
+    /// Reads the source revision even while an operation is unresolved or after retirement.
+    fn source_revision(&self, scope_id: &str, id: &str) -> Result<Option<u64>, StoreConflict>;
+
+    /// Checks whether an instance ID is already used, including retained history.
+    fn instance_id_exists(&self, id: &str) -> Result<bool, StoreConflict>;
 
     /// Commits an instance, private snapshot, spec, ports and storage atomically.
     fn commit_instance(&self, instance: &InstanceRecord) -> Result<(), StoreConflict>;

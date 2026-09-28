@@ -102,6 +102,33 @@ pub struct InstanceRecord {
     pub storage: Vec<StorageAllocation>,
 }
 
+/// A consistent view of a managed clone source and its committed configuration.
+#[derive(Debug, Clone)]
+pub struct CloneSource {
+    /// Source instance ID.
+    pub id: String,
+    /// Management scope containing the source.
+    pub scope_id: String,
+    /// Runtime target to reuse for the clone.
+    pub target_id: String,
+    /// Current instance revision guarded again at commit.
+    pub revision: u64,
+    /// Source display name.
+    pub name: String,
+    /// Complete immutable package definition from the private Snapshot.
+    pub snapshot_json: String,
+    /// Selected service Version from the current CommittedSpec.
+    pub selected_version: String,
+    /// Committed storage method.
+    pub storage_method: StorageMethod,
+    /// Committed inputs, including secrets, as JSON.
+    pub inputs_json: String,
+    /// Committed port bindings.
+    pub ports: Vec<PortAllocation>,
+    /// Source writable allocations that the clone must not reuse.
+    pub storage: Vec<StorageAllocation>,
+}
+
 /// One TCP port binding and reservation.
 #[derive(Debug, Clone)]
 pub struct PortAllocation {
@@ -192,6 +219,10 @@ pub trait StateStore: Send + Sync {
 
     /// Lists immutable revisions even when their source packages have changed or disappeared.
     fn list_templates(&self) -> Result<Vec<TemplateCatalogItem>, StoreConflict>;
+
+    /// Reads a managed source, its current spec and private Snapshot in one view.
+    /// Returns no source while an operation that may change it is unresolved.
+    fn clone_source(&self, scope_id: &str, id: &str) -> Result<Option<CloneSource>, StoreConflict>;
 
     /// Commits an instance, private snapshot, spec, ports and storage atomically.
     fn commit_instance(&self, instance: &InstanceRecord) -> Result<(), StoreConflict>;

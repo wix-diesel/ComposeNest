@@ -14,6 +14,8 @@ use crate::{
     state_store::StoreConflict,
 };
 
+const MAX_CONCURRENT_CHANGES: usize = 2;
+
 /// Performs a fixed, validated external action and observes its actual result.
 pub trait OperationStep {
     /// Rechecks prerequisites immediately before recording an effect intent.
@@ -94,7 +96,7 @@ impl OperationRunner {
         if active.instances.contains(instance_id) {
             return Err(RunnerError::InstanceBusy);
         }
-        if active.instances.len() == 2 {
+        if active.instances.len() == MAX_CONCURRENT_CHANGES {
             return Err(RunnerError::CapacityReached);
         }
         active.instances.insert(instance_id.to_owned());
@@ -216,6 +218,7 @@ mod tests {
     #[derive(Default)]
     struct FakeJournal {
         log: Mutex<Vec<&'static str>>,
+        statuses: Mutex<Vec<OperationStatus>>,
     }
 
     impl OperationJournal for FakeJournal {
@@ -246,8 +249,14 @@ mod tests {
         fn retry(&self, _: &str, _: &str) -> Result<u64, StoreConflict> {
             unreachable!()
         }
-        fn set_status(&self, _: &str, _: OperationStatus, _: &str) -> Result<(), StoreConflict> {
+        fn set_status(
+            &self,
+            _: &str,
+            status: OperationStatus,
+            _: &str,
+        ) -> Result<(), StoreConflict> {
             self.log.lock().unwrap().push("status");
+            self.statuses.lock().unwrap().push(status);
             Ok(())
         }
     }
@@ -274,6 +283,17 @@ mod tests {
     impl ProgressSink for FakeProgress<'_> {
         fn send(&self, _: OperationEvent) {
             self.0.log.lock().unwrap().push("notify");
+        }
+    }
+
+    struct CapturingProgress<'a> {
+        journal: &'a FakeJournal,
+        events: Mutex<Vec<OperationEvent>>,
+    }
+    impl ProgressSink for CapturingProgress<'_> {
+        fn send(&self, event: OperationEvent) {
+            self.journal.log.lock().unwrap().push("notify");
+            self.events.lock().unwrap().push(event);
         }
     }
 
@@ -340,6 +360,37 @@ mod tests {
             &FakeProgress(&journal),
         );
         assert_eq!(result, Err(RunnerError::OutcomeUnknown));
+        assert_eq!(journal.log.lock().unwrap().last(), Some(&"notify"));
+    }
+
+    #[test]
+    fn failed_observation_persists_failure_before_notifying() {
+        let journal = FakeJournal::default();
+        let action = FakeStep {
+            journal: &journal,
+            observed: Ok(StepOutcome::Failed),
+        };
+        let progress = CapturingProgress {
+            journal: &journal,
+            events: Mutex::new(Vec::new()),
+        };
+        let result = OperationRunner::new().run_step(
+            &journal,
+            &step(),
+            &receipt(),
+            true,
+            &action,
+            &progress,
+        );
+        assert_eq!(result, Err(RunnerError::Failed));
+        assert_eq!(
+            journal.statuses.lock().unwrap().last(),
+            Some(&OperationStatus::Failed)
+        );
+        let events = progress.events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].sequence, 1);
+        assert_eq!(events[0].kind, OperationEventKind::Failed);
         assert_eq!(journal.log.lock().unwrap().last(), Some(&"notify"));
     }
 

@@ -87,6 +87,7 @@ pub struct StepIntent {
 pub enum StepCommand {
     GenerateArtifact,
     ResolveImage,
+    CreateBind,
     CreateVolume,
     ComposeCreate,
     ComposeStart,
@@ -101,6 +102,7 @@ impl StepCommand {
         match self {
             Self::GenerateArtifact => "generate_artifact",
             Self::ResolveImage => "resolve_image",
+            Self::CreateBind => "create_bind",
             Self::CreateVolume => "create_volume",
             Self::ComposeCreate => "compose_create",
             Self::ComposeStart => "compose_start",
@@ -116,6 +118,7 @@ impl StepCommand {
 pub enum ExpectedResult {
     ArtifactReady,
     ImageResolved,
+    BindCreated,
     VolumeCreated,
     ContainerCreated,
     ContainerRunning,
@@ -130,6 +133,7 @@ impl ExpectedResult {
         match self {
             Self::ArtifactReady => "artifact_ready",
             Self::ImageResolved => "image_resolved",
+            Self::BindCreated => "bind_created",
             Self::VolumeCreated => "volume_created",
             Self::ContainerCreated => "container_created",
             Self::ContainerRunning => "container_running",

@@ -44,7 +44,7 @@ fn fixture(kind: &str) -> (TempDir, DatabaseWorker, RequestReceipt) {
                 ownership, presence, initialization)
                 VALUES ('instance', 'data', 'bind', 'data/instance/data', 'proof', 'assigned', 'present', 'not_attempted');")?;
         db.execute("INSERT INTO operations (id, instance_id, kind, status, phase, expected_instance_revision,
-                new_spec_revision) VALUES ('operation', 'instance', ?1, 'Executing', 'storage', 1, 1)",
+                new_spec_revision) VALUES ('operation', 'instance', ?1, 'Accepted', 'accepted', 1, 1)",
             [&kind])?;
         db.execute_batch("INSERT INTO request_receipts (scope_id, request_id, plan_id, confirmed_revision,
                 request_hash, instance_id, operation_id)
@@ -127,6 +127,14 @@ fn confirmed_create_rejects_inconsistent_committed_records() {
 fn ready_requires_observed_success_and_preserves_allocations_on_failure() {
     let (_root, db, receipt) = fixture("create");
     let id = "a".repeat(64);
+    db.write(|db| {
+        db.execute(
+            "UPDATE operations SET status='Executing', phase='create' WHERE id='operation'",
+            [],
+        )?;
+        Ok(())
+    })
+    .unwrap();
     assert_eq!(
         db.complete_ready(&receipt.operation_id, &id),
         Err(StoreConflict::Missing)

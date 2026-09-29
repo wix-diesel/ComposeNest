@@ -4,6 +4,7 @@ use composenest_domain::application_title;
 use serde::{Deserialize, Serialize};
 
 pub mod clone_plan;
+pub mod create_operation;
 pub mod create_plan;
 pub mod create_state;
 pub mod host_ports;

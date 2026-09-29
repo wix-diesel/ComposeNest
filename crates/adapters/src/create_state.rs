@@ -52,7 +52,7 @@ impl CreateStateStore for DatabaseWorker {
                 || op.instance_id != owned.id
                 || owned.scope_id != receipt.scope_id
                 || owned.lifecycle != "managed"
-                || !matches!(op.status.as_str(), "Accepted" | "Executing")
+                || op.status != "Accepted"
                 || op.new_spec_revision != Some(1)
                 || op.expected_instance_revision != owned.revision
             {

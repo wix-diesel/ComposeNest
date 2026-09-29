@@ -94,20 +94,20 @@ pub async fn run_confirmed_lifecycle(
     .await
 }
 
-struct AdapterLifecycleStages<'a> {
-    database: &'a DatabaseWorker,
-    docker: &'a BoundDocker,
-    volumes: &'a DockerNamedVolumes,
-    binds: &'a BindStorage,
-    artifacts: &'a ArtifactStore<'a>,
-    confirmed: ConfirmedCreate,
-    artifact_id: String,
-    image: Option<ImageResolution>,
-    kind: OperationKind,
+pub(crate) struct AdapterLifecycleStages<'a> {
+    pub(crate) database: &'a DatabaseWorker,
+    pub(crate) docker: &'a BoundDocker,
+    pub(crate) volumes: &'a DockerNamedVolumes,
+    pub(crate) binds: &'a BindStorage,
+    pub(crate) artifacts: &'a ArtifactStore<'a>,
+    pub(crate) confirmed: ConfirmedCreate,
+    pub(crate) artifact_id: String,
+    pub(crate) image: Option<ImageResolution>,
+    pub(crate) kind: OperationKind,
 }
 
 impl AdapterLifecycleStages<'_> {
-    fn docker_create(&self) -> Result<DockerCreate<'_>, LifecycleEffectError> {
+    pub(crate) fn docker_create(&self) -> Result<DockerCreate<'_>, LifecycleEffectError> {
         DockerCreate::new(
             self.docker,
             self.artifacts,
@@ -118,7 +118,7 @@ impl AdapterLifecycleStages<'_> {
         .map_err(map_create)
     }
 
-    async fn expected(
+    pub(crate) async fn expected(
         &self,
         container_id: &str,
     ) -> Result<ExpectedContainer, LifecycleEffectError> {
@@ -139,7 +139,7 @@ impl AdapterLifecycleStages<'_> {
             .map_err(map_effect)
     }
 
-    fn ownership_only(&self, container_id: &str) -> ExpectedContainer {
+    pub(crate) fn ownership_only(&self, container_id: &str) -> ExpectedContainer {
         ExpectedContainer {
             container_id: container_id.into(),
             project: self.confirmed.project_name.clone(),

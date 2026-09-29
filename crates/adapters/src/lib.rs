@@ -47,6 +47,7 @@ pub mod lifecycle_stages;
 pub mod lifecycle_state;
 pub mod named_volumes;
 pub mod operation_journal;
+pub mod port_edit_stages;
 pub mod port_edit_state;
 pub mod query_service;
 pub mod sqlite;

@@ -250,13 +250,15 @@ pub fn storage_destinations(
         .iter()
         .find(|version| version.key == selected_version)
         .ok_or(CreateEffectError::Failed)?;
-    map_field(&version.definition.document, "service")
-        .and_then(|service| map_field(service, "storage"))
-        .and_then(|storage| match &storage.value {
-            Value::Map(slots) => Some(slots),
-            _ => None,
-        })
-        .ok_or(CreateEffectError::Failed)?
+    let service =
+        map_field(&version.definition.document, "service").ok_or(CreateEffectError::Failed)?;
+    let Some(storage) = map_field(service, "storage") else {
+        return Ok(Vec::new());
+    };
+    let Value::Map(slots) = &storage.value else {
+        return Err(CreateEffectError::Failed);
+    };
+    slots
         .iter()
         .map(|(_, slot)| {
             map_field(slot, "container")
@@ -389,13 +391,27 @@ mod tests {
             ports: vec![],
             storage: vec![],
         };
-        let snapshot = CreateProjection::snapshot(&confirmed).unwrap();
+        let mut snapshot = CreateProjection::snapshot(&confirmed).unwrap();
         assert_eq!(snapshot.versions.len(), 2);
         assert_eq!(snapshot.versions[0].definition.image, "postgres:18");
         assert_eq!(
             storage_destinations(&snapshot, "17").unwrap(),
             ["/var/lib/postgresql/data"]
         );
+        let version = snapshot
+            .versions
+            .iter_mut()
+            .find(|version| version.key == "17")
+            .unwrap();
+        let Value::Map(root) = &mut version.definition.document.value else {
+            panic!("validated version must be a map");
+        };
+        let (_, service) = root.iter_mut().find(|(name, _)| name == "service").unwrap();
+        let Value::Map(fields) = &mut service.value else {
+            panic!("validated service must be a map");
+        };
+        fields.retain(|(name, _)| name != "storage");
+        assert_eq!(storage_destinations(&snapshot, "17"), Ok(Vec::new()));
         confirmed.snapshot_files.pop();
         assert_eq!(
             CreateProjection::snapshot(&confirmed),

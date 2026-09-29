@@ -77,6 +77,53 @@ fn create_and_clone_load_the_same_confirmed_records() {
 }
 
 #[test]
+fn confirmed_create_rejects_inconsistent_committed_records() {
+    for sql in [
+        "UPDATE operations SET status='Failed' WHERE id='operation'",
+        "UPDATE operations SET expected_instance_revision=2 WHERE id='operation'",
+        "UPDATE template_snapshots SET selected_version='2' WHERE id='snapshot'",
+        "UPDATE port_reservations SET status='released' WHERE id='reservation'",
+        "UPDATE instance_specs SET storage_method='volume' WHERE instance_id='instance'",
+    ] {
+        let (_root, db, receipt) = fixture("create");
+        db.write(|db| {
+            db.execute(sql, [])?;
+            Ok(())
+        })
+        .unwrap();
+        assert!(
+            matches!(
+                db.confirmed_create(&receipt),
+                Err(StoreConflict::InvalidInput)
+            ),
+            "inconsistent record was accepted: {sql}; got {:?}",
+            db.confirmed_create(&receipt).err()
+        );
+    }
+
+    let (_root, db, mut receipt) = fixture("clone");
+    receipt.request_hash = "different".into();
+    assert!(matches!(
+        db.confirmed_create(&receipt),
+        Err(StoreConflict::InvalidInput)
+    ));
+
+    let (_root, db, receipt) = fixture("create");
+    db.write(|db| {
+        db.execute(
+            "DELETE FROM template_snapshot_files WHERE snapshot_id='snapshot'",
+            [],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    assert!(matches!(
+        db.confirmed_create(&receipt),
+        Err(StoreConflict::Missing)
+    ));
+}
+
+#[test]
 fn ready_requires_observed_success_and_preserves_allocations_on_failure() {
     let (_root, db, receipt) = fixture("create");
     let id = "a".repeat(64);

@@ -32,7 +32,11 @@ impl RandomSource for SystemRandom {
 }
 
 pub mod artifact_store;
+pub mod create_projection;
+pub mod create_stages;
+pub mod create_state;
 pub mod docker_cli;
+pub mod docker_create;
 pub mod docker_observation;
 pub mod docker_target;
 mod entities;

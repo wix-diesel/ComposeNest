@@ -2,6 +2,7 @@
 
 use std::{
     collections::HashSet,
+    future::Future,
     sync::{Condvar, Mutex},
     time::{Duration, Instant},
 };
@@ -104,6 +105,20 @@ impl OperationRunner {
             runner: self,
             instance_id: instance_id.to_owned(),
         })
+    }
+
+    /// Holds one instance's change gate across every stage of an async operation.
+    pub async fn run_exclusive<T, E, F, Fut>(
+        &self,
+        instance_id: &str,
+        work: F,
+    ) -> Result<Result<T, E>, RunnerError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<T, E>>,
+    {
+        let _guard = self.enter(instance_id)?;
+        Ok(work().await)
     }
 
     /// Executes one step of an already accepted operation using its durable journal.

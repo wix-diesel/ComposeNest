@@ -2,7 +2,9 @@ use std::fs;
 
 use composenest_adapters::sqlite::DatabaseWorker;
 use composenest_application::{
-    create_state::CreateStateStore, operation_journal::RequestReceipt, state_store::StoreConflict,
+    create_state::CreateStateStore,
+    operation_journal::RequestReceipt,
+    state_store::{StorageAllocation, StoreConflict},
 };
 use tempfile::TempDir;
 
@@ -44,7 +46,7 @@ fn fixture(kind: &str) -> (TempDir, DatabaseWorker, RequestReceipt) {
                 ownership, presence, initialization)
                 VALUES ('instance', 'data', 'bind', 'data/instance/data', 'proof', 'assigned', 'present', 'not_attempted');")?;
         db.execute("INSERT INTO operations (id, instance_id, kind, status, phase, expected_instance_revision,
-                new_spec_revision) VALUES ('operation', 'instance', ?1, 'Executing', 'storage', 1, 1)",
+                new_spec_revision) VALUES ('operation', 'instance', ?1, 'Accepted', 'accepted', 1, 1)",
             [&kind])?;
         db.execute_batch("INSERT INTO request_receipts (scope_id, request_id, plan_id, confirmed_revision,
                 request_hash, instance_id, operation_id)
@@ -127,6 +129,14 @@ fn confirmed_create_rejects_inconsistent_committed_records() {
 fn ready_requires_observed_success_and_preserves_allocations_on_failure() {
     let (_root, db, receipt) = fixture("create");
     let id = "a".repeat(64);
+    db.write(|db| {
+        db.execute(
+            "UPDATE operations SET status='Executing', phase='create' WHERE id='operation'",
+            [],
+        )?;
+        Ok(())
+    })
+    .unwrap();
     assert_eq!(
         db.complete_ready(&receipt.operation_id, &id),
         Err(StoreConflict::Missing)
@@ -187,4 +197,48 @@ fn ready_requires_observed_success_and_preserves_allocations_on_failure() {
         Ok(())
     })
     .unwrap();
+}
+
+#[test]
+fn bind_proof_is_recorded_only_for_the_allocated_path() {
+    let (_root, db, _receipt) = fixture("clone");
+    db.write(|db| {
+        db.execute(
+            "UPDATE operations SET status='Executing', phase='storage' WHERE id='operation'",
+            [],
+        )?;
+        db.execute(
+            "UPDATE storage_allocations SET presence='not_materialized' WHERE instance_id='instance'",
+            [],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    let proof = "a".repeat(64);
+    let wrong = StorageAllocation {
+        slot: "data".into(),
+        resource_identity: "data/other/data".into(),
+        ownership_evidence: proof.clone(),
+    };
+    assert_eq!(
+        db.record_bind_materialization("operation", &wrong),
+        Err(StoreConflict::InvalidInput)
+    );
+    let allocation = StorageAllocation {
+        resource_identity: "data/instance/data".into(),
+        ..wrong
+    };
+    db.record_bind_materialization("operation", &allocation)
+        .unwrap();
+    assert_eq!(
+        db.record_bind_materialization("operation", &allocation),
+        Err(StoreConflict::InvalidInput)
+    );
+    db.read(|db| {
+        let (presence, evidence): (String, String) = db.query_row(
+            "SELECT presence, ownership_evidence FROM storage_allocations WHERE instance_id='instance' AND slot='data'",
+            [], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        assert_eq!((presence.as_str(), evidence.as_str()), ("present", proof.as_str()));
+        Ok(())
+    }).unwrap();
 }

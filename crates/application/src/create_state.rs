@@ -2,7 +2,10 @@
 
 use crate::{
     operation_journal::RequestReceipt,
-    state_store::{PortAllocation, RuntimeTarget, StorageLedgerEntry, StoreConflict, TemplateFile},
+    state_store::{
+        PortAllocation, RuntimeTarget, StorageAllocation, StorageLedgerEntry, StoreConflict,
+        TemplateFile,
+    },
 };
 
 /// Immutable records needed to execute an accepted create or clone operation.
@@ -33,6 +36,13 @@ pub struct ConfirmedCreate {
 pub trait CreateStateStore: Send + Sync {
     /// Reads all confirmed records for an accepted create or clone request.
     fn confirmed_create(&self, receipt: &RequestReceipt) -> Result<ConfirmedCreate, StoreConflict>;
+
+    /// Records proof from an exclusively created bind directory before it can be mounted.
+    fn record_bind_materialization(
+        &self,
+        operation_id: &str,
+        allocation: &StorageAllocation,
+    ) -> Result<(), StoreConflict>;
 
     /// Marks every present storage slot as possibly initialized before start is sent.
     fn mark_may_have_initialized(&self, operation_id: &str) -> Result<(), StoreConflict>;

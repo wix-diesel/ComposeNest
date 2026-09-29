@@ -54,6 +54,12 @@ if [ "$1" = compose ]; then
   esac
 fi
 if [ "$1" = container ] && [ "$2" = ls ]; then
+  if [ -f foreign ]; then
+    case "$*" in
+      *io.composenest.instance*) exit 0 ;;
+      *) printf '{CONTAINER}\n'; exit 0 ;;
+    esac
+  fi
   if [ -f created ]; then printf '{CONTAINER}\n'; fi
   exit 0
 fi
@@ -156,6 +162,22 @@ async fn config_failure_never_creates_or_starts() {
     );
     assert!(!root.path().join("created").exists());
     assert!(!root.path().join("started").exists());
+}
+
+#[tokio::test]
+async fn foreign_project_container_blocks_recreation() {
+    let (root, database, probe) = fixture();
+    publish(&root, &database);
+    fs::write(root.path().join("foreign"), "").unwrap();
+    let docker = probe.bind(target()).unwrap();
+    let artifacts = ArtifactStore::new(root.path(), &database);
+    let project = format!("cn-{ID}");
+    let create = DockerCreate::new(&docker, &artifacts, "artifact", &project, ID).unwrap();
+    assert_eq!(
+        create.create_stopped().await,
+        Err(CreateDockerError::ExistingContainer)
+    );
+    assert!(!root.path().join("created").exists());
 }
 
 #[tokio::test]

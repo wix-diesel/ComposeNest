@@ -20,6 +20,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../../migrations/0005_artifact_publication.sql"),
     include_str!("../../../migrations/0006_applied_spec.sql"),
     include_str!("../../../migrations/0007_bind_steps.sql"),
+    include_str!("../../../migrations/0008_restart_steps.sql"),
 ];
 const DATABASE_FILE: &str = "composenest.sqlite";
 
@@ -537,6 +538,40 @@ mod tests {
                 [],
             )
             .unwrap();
+    }
+
+    #[test]
+    fn restart_step_migration_preserves_prior_rows_and_accepts_restart() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        apply_migrations(&mut connection, 0, &MIGRATIONS[..7]).unwrap();
+        connection.execute_batch("INSERT INTO management_scopes (id, owner_id, root_identity)
+            VALUES ('scope', 'owner', 'root');
+            INSERT INTO runtime_targets (id, scope_id, endpoint, engine_id, platform)
+            VALUES ('target', 'scope', 'unix:///tmp/docker.sock', 'engine', 'linux/amd64');
+            INSERT INTO instances (id, scope_id, target_id, display_name, normalized_name, project_name)
+            VALUES ('instance', 'scope', 'target', 'Instance', 'Instance', 'cn-instance');
+            INSERT INTO operations (id, instance_id, kind, phase, expected_instance_revision)
+            VALUES ('op', 'instance', 'restart', 'accepted', 1);
+            INSERT INTO operation_steps
+            (operation_id, sequence, attempt, command_kind, resource_id, expected_result)
+            VALUES ('op', 1, 1, 'observe', 'container', 'state_observed');").unwrap();
+        apply_migrations(&mut connection, 7, MIGRATIONS).unwrap();
+        connection
+            .execute(
+                "INSERT INTO operation_steps
+            (operation_id, sequence, attempt, command_kind, resource_id, expected_result)
+            VALUES ('op', 2, 1, 'compose_restart', 'container', 'container_running')",
+                [],
+            )
+            .unwrap();
+        let kinds = connection
+            .prepare("SELECT command_kind FROM operation_steps ORDER BY sequence")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(kinds, ["observe", "compose_restart"]);
     }
 
     #[test]

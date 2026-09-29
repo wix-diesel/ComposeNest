@@ -204,7 +204,7 @@ impl<'a> DockerCreate<'a> {
     }
 
     async fn find_container(&self) -> Result<Option<String>, CreateDockerError> {
-        let args: [OsString; 11] = [
+        let args: [OsString; 9] = [
             "container".into(),
             "ls".into(),
             "--all".into(),
@@ -212,8 +212,6 @@ impl<'a> DockerCreate<'a> {
             "--quiet".into(),
             "--filter".into(),
             format!("label=com.docker.compose.project={}", self.project).into(),
-            "--filter".into(),
-            format!("label=io.composenest.instance={}", self.instance_id).into(),
             "--filter".into(),
             "label=com.docker.compose.service=main".into(),
         ];

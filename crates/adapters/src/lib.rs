@@ -43,6 +43,8 @@ mod entities;
 pub mod host_ports;
 pub mod image_resolution;
 pub mod image_store;
+pub mod lifecycle_stages;
+pub mod lifecycle_state;
 pub mod named_volumes;
 pub mod operation_journal;
 pub mod sqlite;

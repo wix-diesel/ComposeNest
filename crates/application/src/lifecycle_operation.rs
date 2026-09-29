@@ -559,6 +559,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stopped_start_uses_the_recorded_id_without_recreation() {
+        let fake = Fake::new(RuntimeStatus::Stopped);
+        assert_eq!(run(&fake, OperationKind::Start).await, Ok("a".repeat(64)));
+        let events = fake.events();
+        assert!(events.iter().any(|event| event == "step:1:compose_start"));
+        assert!(!events.iter().any(|event| event == "recreate"));
+        assert_eq!(events.last().map(String::as_str), Some("complete:Ready"));
+    }
+
+    #[tokio::test]
+    async fn matching_restart_waits_for_ready_before_completion() {
+        let fake = Fake::new(RuntimeStatus::Ready);
+        assert_eq!(run(&fake, OperationKind::Restart).await, Ok("a".repeat(64)));
+        let events = fake.events();
+        let position = |name: &str| events.iter().position(|event| event == name).unwrap();
+        assert!(position("artifact") < position("step:1:compose_restart"));
+        assert!(position("step:1:compose_restart") < position("restart"));
+        assert!(position("restart") < position("ready"));
+        assert!(position("ready") < position("complete:Ready"));
+    }
+
+    #[tokio::test]
     async fn owned_stop_ignores_configuration_and_artifact_drift() {
         let mut fake = Fake::new(RuntimeStatus::Stopped);
         fake.observation.configuration_matches = false;

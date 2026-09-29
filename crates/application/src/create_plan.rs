@@ -546,6 +546,7 @@ pub(crate) fn commit_store_error(conflict: StoreConflict) -> PlanError {
             StoreConflict::StaleRevision => "PLAN_STALE",
             StoreConflict::Missing => "RESOURCE_MISSING",
             StoreConflict::InvalidLifecycle => "SOURCE_UNAVAILABLE",
+            StoreConflict::UnresolvedOperation => "SOURCE_UNAVAILABLE",
             StoreConflict::InvalidInput => "COMMIT_INVALID",
             StoreConflict::Backend => "STORE_UNAVAILABLE",
         },

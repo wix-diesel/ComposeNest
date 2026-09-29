@@ -187,6 +187,8 @@ pub enum StoreConflict {
     Missing,
     /// The record cannot be changed in its current lifecycle.
     InvalidLifecycle,
+    /// A mutation is still unresolved for this instance.
+    UnresolvedOperation,
     /// Input failed a persistence boundary check.
     InvalidInput,
     /// Persistence backend failed unexpectedly.

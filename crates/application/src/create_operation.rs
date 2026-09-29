@@ -232,7 +232,7 @@ impl<S: CreateStateStore, J: OperationJournal, A: CreateStages, P: ProgressSink>
         self.progress.send(OperationEvent {
             operation_id: receipt.operation_id.clone(),
             instance_id: Some(receipt.instance_id.clone()),
-            revision: confirmed.spec_revision,
+            revision: receipt.confirmed_revision,
             sequence,
             kind: OperationEventKind::Completed,
         });
@@ -418,16 +418,14 @@ mod tests {
 
     struct FakeStages {
         log: Log,
-        fail: Option<&'static str>,
+        fail: Option<(&'static str, CreateEffectError)>,
     }
     impl FakeStages {
         fn action(&self, name: &'static str) -> Result<(), CreateEffectError> {
             self.log.push(name);
-            if self.fail == Some(name) {
-                Err(CreateEffectError::Failed)
-            } else {
-                Ok(())
-            }
+            self.fail
+                .filter(|(stage, _)| *stage == name)
+                .map_or(Ok(()), |(_, error)| Err(error))
         }
     }
     impl CreateStages for FakeStages {
@@ -531,7 +529,7 @@ mod tests {
             let journal = FakeJournal(log.clone());
             let stages = FakeStages {
                 log: log.clone(),
-                fail: Some(fail),
+                fail: Some((fail, CreateEffectError::Failed)),
             };
             let progress = FakeProgress(log.clone());
             let runner = OperationRunner::new();
@@ -557,5 +555,36 @@ mod tests {
                     .any(|event| event.starts_with("status:Failed:"))
             );
         }
+    }
+
+    #[tokio::test]
+    async fn unknown_stage_outcome_is_journaled_and_blocks_start() {
+        let log = Log::default();
+        let state = FakeState(log.clone());
+        let journal = FakeJournal(log.clone());
+        let stages = FakeStages {
+            log: log.clone(),
+            fail: Some(("create", CreateEffectError::OutcomeUnknown)),
+        };
+        let progress = FakeProgress(log.clone());
+        let runner = OperationRunner::new();
+        let result = CreateOperation {
+            state: &state,
+            journal: &journal,
+            runner: &runner,
+            stages: &stages,
+            progress: &progress,
+        }
+        .run(&receipt())
+        .await;
+        assert_eq!(result, Err(CreateOperationError::OutcomeUnknown));
+        let entries = log.entries();
+        assert!(entries.iter().any(|entry| entry == "outcome:Unknown"));
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry == "status:OutcomeUnknown:create")
+        );
+        assert!(!entries.iter().any(|entry| entry == "start"));
     }
 }

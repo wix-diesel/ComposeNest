@@ -884,6 +884,15 @@ fn update_instance(
     if current.lifecycle != "managed" {
         return Ok(Err(StoreConflict::InvalidLifecycle));
     }
+    if name.is_some()
+        && operation::Entity::find()
+            .filter(operation::Column::InstanceId.eq(id))
+            .all(&transaction)?
+            .iter()
+            .any(|operation| !matches!(operation.status.as_str(), "Succeeded" | "Abandoned"))
+    {
+        return Ok(Err(StoreConflict::UnresolvedOperation));
+    }
     let next_revision = current
         .revision
         .checked_add(1)

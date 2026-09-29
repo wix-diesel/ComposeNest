@@ -49,7 +49,8 @@ impl CreateStateStore for DatabaseWorker {
                 .one(db)?
                 .ok_or(DatabaseError::Missing)?;
             let lifecycle = matches!(op.kind.as_str(), "start" | "stop" | "restart");
-            if !create_operation(&op.kind) && !lifecycle
+            let edit = op.kind == "edit_port";
+            if !create_operation(&op.kind) && !lifecycle && !edit
                 || op.instance_id != owned.id
                 || owned.scope_id != receipt.scope_id
                 || owned.lifecycle != "managed"
@@ -57,7 +58,11 @@ impl CreateStateStore for DatabaseWorker {
                 || (lifecycle
                     && (op.old_spec_revision != owned.applied_spec_revision
                         || op.new_spec_revision.is_some()))
-                || (!lifecycle && op.new_spec_revision != Some(1))
+                || (edit
+                    && (op.old_spec_revision != owned.applied_spec_revision
+                        || op.new_spec_revision
+                            != op.old_spec_revision.and_then(|old| old.checked_add(1))))
+                || (create_operation(&op.kind) && op.new_spec_revision != Some(1))
                 || op.expected_instance_revision != owned.revision
             {
                 return Err(DatabaseError::InvalidInput);
@@ -116,9 +121,13 @@ impl CreateStateStore for DatabaseWorker {
                 .collect::<Result<Vec<_>, DatabaseError>>()?;
             let reservations = port_reservation::Entity::find()
                 .filter(port_reservation::Column::InstanceId.eq(&owned.id))
-                .filter(port_reservation::Column::Status.eq("committed"))
+                .filter(port_reservation::Column::Status.is_in(if edit {
+                    vec!["committed", "held"]
+                } else {
+                    vec!["committed"]
+                }))
                 .all(db)?;
-            if ports.len() != reservations.len()
+            if (!edit && ports.len() != reservations.len())
                 || ports.iter().any(|port| {
                     !reservations.iter().any(|reserved| {
                         reserved.scope_id == owned.scope_id

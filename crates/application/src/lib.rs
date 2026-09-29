@@ -9,6 +9,7 @@ pub mod create_plan;
 pub mod create_state;
 pub mod host_ports;
 pub mod image_resolution;
+pub mod lifecycle_operation;
 pub mod named_volumes;
 pub mod operation_journal;
 pub mod operation_recovery;

@@ -72,7 +72,8 @@ pub struct RecoveryEvidence {
     pub artifact_matches: bool,
     /// Every storage allocation matches the ledger, with no Missing or unknown owner.
     pub storage_verified: bool,
-    /// Docker ownership and configuration, or absence on the fixed target, were verified.
+    /// Docker ownership and required configuration, or absence on the fixed target, were verified.
+    /// Stop requires ownership only, matching its execution path.
     pub docker_verified: bool,
     /// Current runtime observation, separate from the historical operation status.
     pub runtime: CurrentRuntime,
@@ -134,8 +135,8 @@ pub fn classify_recovery(
 ) -> RecoveryDecision {
     if !evidence.previous_cli_exited
         || !evidence.target_matches
-        || !evidence.artifact_matches
-        || !evidence.storage_verified
+        || (operation.kind != OperationKind::Stop
+            && (!evidence.artifact_matches || !evidence.storage_verified))
     {
         return RecoveryDecision::Hold;
     }
@@ -148,10 +149,23 @@ pub fn classify_recovery(
     ) && operation.steps.iter().any(|step| {
         matches!(
             step.command_kind,
-            StepCommand::ComposeStart | StepCommand::Observe
+            StepCommand::ComposeStart | StepCommand::ComposeRestart | StepCommand::Observe
         )
     });
     if ready_operation && evidence.docker_verified && evidence.runtime == CurrentRuntime::Ready {
+        return RecoveryDecision::Complete;
+    }
+    if operation.kind == OperationKind::Stop
+        && evidence.docker_verified
+        && matches!(
+            evidence.runtime,
+            CurrentRuntime::Stopped | CurrentRuntime::Absent
+        )
+        && operation
+            .steps
+            .iter()
+            .any(|step| step.command_kind == StepCommand::ComposeStop)
+    {
         return RecoveryDecision::Complete;
     }
     // A missing resource is deliberately not treated as proof that the prior
@@ -327,5 +341,31 @@ mod tests {
         );
         op.kind = OperationKind::Delete;
         assert_eq!(classify_recovery(&op, evidence()), RecoveryDecision::Hold);
+    }
+
+    #[test]
+    fn restart_and_stop_reconcile_their_own_observed_postconditions() {
+        let mut op = operation(OperationStatus::OutcomeUnknown);
+        op.kind = OperationKind::Restart;
+        op.steps[0].command_kind = StepCommand::ComposeRestart;
+        assert_eq!(
+            classify_recovery(&op, evidence()),
+            RecoveryDecision::Complete
+        );
+
+        op.kind = OperationKind::Stop;
+        op.steps[0].command_kind = StepCommand::ComposeStop;
+        assert_eq!(
+            classify_recovery(
+                &op,
+                RecoveryEvidence {
+                    artifact_matches: false,
+                    storage_verified: false,
+                    runtime: CurrentRuntime::Stopped,
+                    ..evidence()
+                }
+            ),
+            RecoveryDecision::Complete
+        );
     }
 }

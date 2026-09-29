@@ -92,6 +92,7 @@ pub enum StepCommand {
     ComposeCreate,
     ComposeStart,
     ComposeStop,
+    ComposeRestart,
     RemoveContainer,
     Observe,
 }
@@ -107,6 +108,7 @@ impl StepCommand {
             Self::ComposeCreate => "compose_create",
             Self::ComposeStart => "compose_start",
             Self::ComposeStop => "compose_stop",
+            Self::ComposeRestart => "compose_restart",
             Self::RemoveContainer => "remove_container",
             Self::Observe => "observe",
         }

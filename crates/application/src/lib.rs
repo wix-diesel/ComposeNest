@@ -11,6 +11,7 @@ pub mod host_ports;
 pub mod image_resolution;
 pub mod named_volumes;
 pub mod operation_journal;
+pub mod operation_recovery;
 pub mod operation_runner;
 pub mod state_store;
 pub mod storage;

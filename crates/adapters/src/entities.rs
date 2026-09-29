@@ -40,6 +40,7 @@ pub(crate) mod instance {
         pub revision: i64,
         pub project_name: String,
         pub clone_source_id: Option<String>,
+        pub applied_spec_revision: Option<i64>,
     }
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
     pub enum Relation {}
@@ -343,6 +344,26 @@ pub(crate) mod request_receipt {
         pub instance_id: String,
         pub operation_id: String,
         pub created_at: String,
+    }
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+pub(crate) mod runtime_observation {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+    #[sea_orm(table_name = "runtime_observations")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub instance_id: String,
+        pub operation_id: Option<String>,
+        pub container_id: Option<String>,
+        pub runtime_state: String,
+        pub health: Option<String>,
+        pub observed_at: String,
+        pub freshness: String,
     }
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
     pub enum Relation {}

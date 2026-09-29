@@ -86,7 +86,7 @@ fn initialization_from_name(value: &str) -> Option<Initialization> {
     }
 }
 
-fn storage_entry(
+pub(crate) fn storage_entry(
     row: storage_allocation::Model,
     scope_id: String,
 ) -> Result<StorageLedgerEntry, DatabaseError> {

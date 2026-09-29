@@ -16,6 +16,7 @@ const INSPECT_FORMAT: &str = r#"{"Id":{{json .Id}},"Image":{{json .Image}},"Conf
 
 /// Expected Docker state built from the confirmed spec and recorded allocations.
 /// Environment and command values may contain secrets; keep this input private.
+#[derive(Clone)]
 pub struct ExpectedContainer {
     /// Full recorded Docker container ID, never a mutable name or label.
     pub container_id: String,
@@ -44,7 +45,7 @@ pub struct ExpectedContainer {
 }
 
 /// A mount as projected from Docker inspect (no host path is returned in observations).
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ExpectedMount {
     /// Docker mount type (bind or volume).
     pub kind: String,
@@ -57,7 +58,7 @@ pub struct ExpectedMount {
 }
 
 /// A published port binding in Docker's canonical host representation.
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PortBinding {
     /// Canonical HostIp returned by Docker (for example 0.0.0.0).
     pub host_ip: String,
@@ -66,7 +67,7 @@ pub struct PortBinding {
 }
 
 /// Effective healthcheck fields as reported by Docker, including defaults.
-#[derive(PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ExpectedHealthcheck {
     /// Exec or shell test argv.
     pub test: Vec<String>,

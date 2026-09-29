@@ -3,8 +3,9 @@
 use composenest_adapters::{SystemClock, sqlite::DatabaseWorker};
 use composenest_application::{
     Bootstrap, BootstrapRequest, BootstrapResponse, BootstrapService, ResponseEnvelope,
+    operation_runner::OperationRunner,
 };
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc, time::Duration};
 use tauri::State;
 
 /// Returns the non-sensitive state required to initialize the desktop UI.
@@ -38,11 +39,14 @@ fn management_root() -> std::io::Result<PathBuf> {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bootstrap = BootstrapService::new(SystemClock).bootstrap();
     let database = DatabaseWorker::start(&management_root()?)?;
+    let runner = Arc::new(OperationRunner::new());
 
     tauri::Builder::default()
         .manage(bootstrap)
         .manage(database)
+        .manage(Arc::clone(&runner))
         .invoke_handler(tauri::generate_handler![get_bootstrap])
         .run(tauri::generate_context!())?;
+    runner.shutdown(Duration::from_secs(30));
     Ok(())
 }

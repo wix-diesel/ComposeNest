@@ -389,10 +389,20 @@ impl OperationJournal for DatabaseWorker {
                 operation_entity::Entity::find_by_id(&step.operation_id).one(&transaction)?;
             let Some(parent) = parent.filter(|parent| {
                 parent.attempt == attempt
-                    && !matches!(parent.status.as_str(), "Succeeded" | "Abandoned")
+                    && matches!(parent.status.as_str(), "Accepted" | "Executing")
             }) else {
                 return Err(DatabaseError::Missing);
             };
+            let previous = operation_step::Entity::find()
+                .filter(operation_step::Column::OperationId.eq(&step.operation_id))
+                .order_by_desc(operation_step::Column::Sequence)
+                .one(&transaction)?;
+            let next = previous
+                .as_ref()
+                .map_or(1, |last| last.sequence.saturating_add(1));
+            if sequence != next || previous.is_some_and(|last| last.outcome.is_none()) {
+                return Err(DatabaseError::InvalidInput);
+            }
             operation_step::Entity::insert(operation_step::ActiveModel {
                 operation_id: Set(parent.id),
                 sequence: Set(sequence),
@@ -711,6 +721,35 @@ mod tests {
             "SELECT command_kind, expected_result FROM operation_steps WHERE operation_id = 'first'",
             [], |row| Ok((row.get(0)?, row.get(1)?)))?)).unwrap();
         assert_eq!(stored, ("compose_start".into(), "container_running".into()));
+    }
+
+    #[test]
+    fn next_step_requires_prior_observation_and_monotonic_sequence() {
+        let (_root, worker) = store();
+        worker.accept(&intent("first"), &receipt("first")).unwrap();
+        let first = StepIntent {
+            operation_id: "first".into(),
+            sequence: 1,
+            attempt: 1,
+            command_kind: StepCommand::Observe,
+            resource_id: "instance".into(),
+            expected_result: ExpectedResult::StateObserved,
+        };
+        let mut next = first.clone();
+        next.sequence = 2;
+        assert_eq!(worker.record_step(&next), Err(StoreConflict::InvalidInput));
+        worker.record_step(&first).unwrap();
+        assert_eq!(worker.record_step(&next), Err(StoreConflict::InvalidInput));
+        worker
+            .finish_step("first", 1, StepOutcome::Succeeded)
+            .unwrap();
+        worker.record_step(&next).unwrap();
+        worker
+            .set_status("first", OperationStatus::Failed, "observe")
+            .unwrap();
+        let mut third = next;
+        third.sequence = 3;
+        assert_eq!(worker.record_step(&third), Err(StoreConflict::Missing));
     }
 
     #[test]

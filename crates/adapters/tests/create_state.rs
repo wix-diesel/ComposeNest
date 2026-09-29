@@ -2,7 +2,9 @@ use std::fs;
 
 use composenest_adapters::sqlite::DatabaseWorker;
 use composenest_application::{
-    create_state::CreateStateStore, operation_journal::RequestReceipt, state_store::StoreConflict,
+    create_state::CreateStateStore,
+    operation_journal::RequestReceipt,
+    state_store::{StorageAllocation, StoreConflict},
 };
 use tempfile::TempDir;
 
@@ -195,4 +197,48 @@ fn ready_requires_observed_success_and_preserves_allocations_on_failure() {
         Ok(())
     })
     .unwrap();
+}
+
+#[test]
+fn bind_proof_is_recorded_only_for_the_allocated_path() {
+    let (_root, db, _receipt) = fixture("clone");
+    db.write(|db| {
+        db.execute(
+            "UPDATE operations SET status='Executing', phase='storage' WHERE id='operation'",
+            [],
+        )?;
+        db.execute(
+            "UPDATE storage_allocations SET presence='not_materialized' WHERE instance_id='instance'",
+            [],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    let proof = "a".repeat(64);
+    let wrong = StorageAllocation {
+        slot: "data".into(),
+        resource_identity: "data/other/data".into(),
+        ownership_evidence: proof.clone(),
+    };
+    assert_eq!(
+        db.record_bind_materialization("operation", &wrong),
+        Err(StoreConflict::InvalidInput)
+    );
+    let allocation = StorageAllocation {
+        resource_identity: "data/instance/data".into(),
+        ..wrong
+    };
+    db.record_bind_materialization("operation", &allocation)
+        .unwrap();
+    assert_eq!(
+        db.record_bind_materialization("operation", &allocation),
+        Err(StoreConflict::InvalidInput)
+    );
+    db.read(|db| {
+        let (presence, evidence): (String, String) = db.query_row(
+            "SELECT presence, ownership_evidence FROM storage_allocations WHERE instance_id='instance' AND slot='data'",
+            [], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        assert_eq!((presence.as_str(), evidence.as_str()), ("present", proof.as_str()));
+        Ok(())
+    }).unwrap();
 }

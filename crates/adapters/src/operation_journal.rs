@@ -194,6 +194,7 @@ fn step_command(value: &str) -> Option<StepCommand> {
     Some(match value {
         "generate_artifact" => StepCommand::GenerateArtifact,
         "resolve_image" => StepCommand::ResolveImage,
+        "create_bind" => StepCommand::CreateBind,
         "create_volume" => StepCommand::CreateVolume,
         "compose_create" => StepCommand::ComposeCreate,
         "compose_start" => StepCommand::ComposeStart,
@@ -208,6 +209,7 @@ fn expected_result(value: &str) -> Option<ExpectedResult> {
     Some(match value {
         "artifact_ready" => ExpectedResult::ArtifactReady,
         "image_resolved" => ExpectedResult::ImageResolved,
+        "bind_created" => ExpectedResult::BindCreated,
         "volume_created" => ExpectedResult::VolumeCreated,
         "container_created" => ExpectedResult::ContainerCreated,
         "container_running" => ExpectedResult::ContainerRunning,

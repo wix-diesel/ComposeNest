@@ -365,6 +365,13 @@ mod tests {
                 storage: vec![],
             })
         }
+        fn record_bind_materialization(
+            &self,
+            _: &str,
+            _: &crate::state_store::StorageAllocation,
+        ) -> Result<(), StoreConflict> {
+            unreachable!()
+        }
         fn mark_may_have_initialized(&self, _: &str) -> Result<(), StoreConflict> {
             self.0.push("may_have_initialized");
             Ok(())

@@ -273,3 +273,93 @@ fn map_create(error: CreateDockerError) -> LifecycleEffectError {
         _ => LifecycleEffectError::Rejected,
     }
 }
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::{fs, os::unix::fs::PermissionsExt};
+
+    use composenest_application::state_store::RuntimeTarget;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn stop_observes_ownership_and_uses_the_id_without_compose() {
+        let root = tempfile::tempdir().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        for name in ["state", "locks"] {
+            let path = root.path().join(name);
+            fs::create_dir(&path).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let script = root.path().join("docker");
+        fs::write(
+            &script,
+            r#"#!/bin/sh
+if [ "$1" != '--host' ]; then exit 1; fi
+shift 2
+if [ "$1" = info ]; then printf '{"ID":"engine"}\n'; exit 0; fi
+if [ "$1" = container ] && [ "$2" = inspect ]; then /bin/cat inspected.json; exit 0; fi
+if [ "$1" = container ] && [ "$2" = stop ]; then printf '%s\n' "$3" > stopped-id; exit 0; fi
+exit 1
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+        let id = "b".repeat(64);
+        fs::write(root.path().join("inspected.json"), format!(
+            r#"{{"Id":"{id}","Config":{{"Labels":{{"com.docker.compose.project":"cn-{instance}","com.docker.compose.service":"main","io.composenest.scope":"scope","io.composenest.instance":"{instance}"}}}},"State":{{"Status":"running","Health":{{"Status":"healthy"}}}}}}"#,
+            instance = "a".repeat(32),
+        )).unwrap();
+        let database = DatabaseWorker::start(root.path()).unwrap();
+        let target = RuntimeTarget {
+            id: "target".into(),
+            scope_id: "scope".into(),
+            endpoint: "unix:///tmp/composenest-test.sock".into(),
+            engine_id: "engine".into(),
+            platform: "linux/amd64".into(),
+        };
+        let probe = DockerProbe {
+            executable: script,
+            directory: root.path().into(),
+            config_directory: root.path().into(),
+        };
+        let docker = probe.bind(target.clone()).unwrap();
+        let volumes = DockerNamedVolumes::new(probe.bind(target.clone()).unwrap());
+        let binds = BindStorage::new(root.path());
+        let artifacts = ArtifactStore::new(root.path(), &database);
+        let instance = "a".repeat(32);
+        let stages = AdapterLifecycleStages {
+            database: &database,
+            docker: &docker,
+            volumes: &volumes,
+            binds: &binds,
+            artifacts: &artifacts,
+            confirmed: ConfirmedCreate {
+                instance_id: instance.clone(),
+                scope_id: "scope".into(),
+                project_name: format!("cn-{instance}"),
+                target,
+                spec_revision: 1,
+                selected_version: "1".into(),
+                snapshot_files: vec![],
+                inputs_json: "{}".into(),
+                ports: vec![],
+                storage: vec![],
+            },
+            artifact_id: "unavailable".into(),
+            image: None,
+            kind: OperationKind::Stop,
+        };
+        let observed = stages.observe(&id).await;
+        assert!(observed.owned);
+        assert!(!observed.configuration_matches);
+        assert_eq!(observed.status, RuntimeStatus::Ready);
+        stages.stop(&id).await.unwrap();
+        assert_eq!(
+            fs::read_to_string(root.path().join("stopped-id"))
+                .unwrap()
+                .trim(),
+            id
+        );
+    }
+}

@@ -5,6 +5,9 @@ use composenest_application::operation_journal::{
     OperationStatus, PlanCommitStore, RequestReceipt, StepCommand, StepIntent, StepOutcome,
     StepRecord,
 };
+use composenest_application::operation_recovery::{
+    RecoverableOperation, RecoveryJournal, VerifiedAbsence,
+};
 use composenest_application::state_store::{InstanceRecord, RuntimeTarget, StoreConflict};
 use rusqlite::Error;
 use sea_orm::{
@@ -31,6 +34,21 @@ fn kind_name(kind: OperationKind) -> &'static str {
         OperationKind::Delete => "delete",
         OperationKind::Recover => "recover",
     }
+}
+
+fn operation_kind(value: &str) -> Option<OperationKind> {
+    Some(match value {
+        "create" => OperationKind::Create,
+        "clone" => OperationKind::Clone,
+        "start" => OperationKind::Start,
+        "stop" => OperationKind::Stop,
+        "restart" => OperationKind::Restart,
+        "rename" => OperationKind::Rename,
+        "edit_port" => OperationKind::EditPort,
+        "delete" => OperationKind::Delete,
+        "recover" => OperationKind::Recover,
+        _ => return None,
+    })
 }
 
 impl PlanCommitStore for DatabaseWorker {
@@ -188,6 +206,19 @@ fn status_name(status: OperationStatus) -> &'static str {
         OperationStatus::Succeeded => "Succeeded",
         OperationStatus::Abandoned => "Abandoned",
     }
+}
+
+fn operation_status(value: &str) -> Option<OperationStatus> {
+    Some(match value {
+        "Accepted" => OperationStatus::Accepted,
+        "Executing" => OperationStatus::Executing,
+        "Failed" => OperationStatus::Failed,
+        "AwaitingDecision" => OperationStatus::AwaitingDecision,
+        "OutcomeUnknown" => OperationStatus::OutcomeUnknown,
+        "Succeeded" => OperationStatus::Succeeded,
+        "Abandoned" => OperationStatus::Abandoned,
+        _ => return None,
+    })
 }
 
 fn step_command(value: &str) -> Option<StepCommand> {
@@ -516,6 +547,14 @@ impl OperationJournal for DatabaseWorker {
             }) else {
                 return Ok(None);
             };
+            if operation_step::Entity::find()
+                .filter(operation_step::Column::OperationId.eq(&operation_id))
+                .filter(operation_step::Column::Outcome.is_null())
+                .one(&transaction)?
+                .is_some()
+            {
+                return Ok(None);
+            }
             let attempt = operation
                 .attempt
                 .checked_add(1)
@@ -544,6 +583,9 @@ impl OperationJournal for DatabaseWorker {
     ) -> Result<(), StoreConflict> {
         if phase.is_empty() {
             return Err(StoreConflict::InvalidInput);
+        }
+        if status == OperationStatus::Abandoned {
+            return Err(StoreConflict::InvalidLifecycle);
         }
         let (operation_id, phase) = (operation_id.to_owned(), phase.to_owned());
         self.orm_write(move |db| {
@@ -591,10 +633,174 @@ impl OperationJournal for DatabaseWorker {
     }
 }
 
+fn recovery_snapshot(
+    db: &sea_orm::DatabaseTransaction,
+    operation: operation_entity::Model,
+) -> Result<RecoverableOperation, DatabaseError> {
+    let receipt = request_receipt::Entity::find()
+        .filter(request_receipt::Column::OperationId.eq(&operation.id))
+        .one(db)?
+        .ok_or(DatabaseError::Missing)?;
+    let steps = operation_step::Entity::find()
+        .filter(operation_step::Column::OperationId.eq(&operation.id))
+        .order_by_asc(operation_step::Column::Sequence)
+        .all(db)?
+        .into_iter()
+        .map(|step| {
+            Ok(StepRecord {
+                instance_id: operation.instance_id.clone(),
+                scope_id: receipt.scope_id.clone(),
+                sequence: u64::try_from(step.sequence).map_err(|_| DatabaseError::InvalidInput)?,
+                attempt: u64::try_from(step.attempt).map_err(|_| DatabaseError::InvalidInput)?,
+                command_kind: step_command(&step.command_kind)
+                    .ok_or(DatabaseError::InvalidInput)?,
+                resource_id: step.resource_id,
+                expected_result: expected_result(&step.expected_result)
+                    .ok_or(DatabaseError::InvalidInput)?,
+                outcome: step_outcome(step.outcome).ok_or(DatabaseError::InvalidInput)?,
+            })
+        })
+        .collect::<Result<Vec<_>, DatabaseError>>()?;
+    Ok(RecoverableOperation {
+        id: operation.id,
+        instance_id: operation.instance_id,
+        kind: operation_kind(&operation.kind).ok_or(DatabaseError::InvalidInput)?,
+        status: operation_status(&operation.status).ok_or(DatabaseError::InvalidInput)?,
+        phase: operation.phase,
+        attempt: u64::try_from(operation.attempt).map_err(|_| DatabaseError::InvalidInput)?,
+        steps,
+    })
+}
+
+impl RecoveryJournal for DatabaseWorker {
+    fn recover_on_startup(&self) -> Result<Vec<RecoverableOperation>, StoreConflict> {
+        self.orm_write(|db| {
+            let transaction = db.begin()?;
+            operation_entity::Entity::update_many()
+                .col_expr(
+                    operation_entity::Column::Status,
+                    Expr::value("OutcomeUnknown"),
+                )
+                .filter(operation_entity::Column::Status.eq("Executing"))
+                .exec(&transaction)?;
+            let unresolved = operation_entity::Entity::find()
+                .filter(operation_entity::Column::Status.is_not_in(["Succeeded", "Abandoned"]))
+                .order_by_asc(operation_entity::Column::StartedAt)
+                .all(&transaction)?;
+            let snapshots = unresolved
+                .into_iter()
+                .map(|operation| recovery_snapshot(&transaction, operation))
+                .collect::<Result<Vec<_>, _>>()?;
+            transaction.commit()?;
+            Ok(snapshots)
+        })
+        .map_err(map_error)
+    }
+
+    fn recoverable(&self, operation_id: &str) -> Result<RecoverableOperation, StoreConflict> {
+        self.orm_read(|db| {
+            let operation = operation_entity::Entity::find_by_id(operation_id)
+                .one(db)?
+                .filter(|operation| !matches!(operation.status.as_str(), "Succeeded" | "Abandoned"))
+                .ok_or(DatabaseError::Missing)?;
+            recovery_snapshot(db, operation)
+        })
+        .map_err(map_error)
+    }
+
+    fn reconcile_step(
+        &self,
+        operation_id: &str,
+        sequence: u64,
+        outcome: StepOutcome,
+    ) -> Result<(), StoreConflict> {
+        let sequence = checked_revision(sequence)?;
+        let operation_id = operation_id.to_owned();
+        self.orm_write(move |db| {
+            let transaction = db.begin()?;
+            let operation = operation_entity::Entity::find_by_id(&operation_id)
+                .one(&transaction)?
+                .ok_or(DatabaseError::Missing)?;
+            if !matches!(
+                operation.status.as_str(),
+                "OutcomeUnknown" | "Failed" | "AwaitingDecision"
+            ) {
+                return Err(DatabaseError::InvalidInput);
+            }
+            let step = operation_step::Entity::find_by_id((operation_id.clone(), sequence))
+                .one(&transaction)?
+                .ok_or(DatabaseError::Missing)?;
+            if !matches!(step.outcome.as_deref(), None | Some("unknown")) {
+                return Err(DatabaseError::InvalidInput);
+            }
+            operation_step::Entity::update_many()
+                .col_expr(
+                    operation_step::Column::Outcome,
+                    Expr::value(outcome.as_str()),
+                )
+                .col_expr(
+                    operation_step::Column::ObservedAt,
+                    Expr::cust("CURRENT_TIMESTAMP"),
+                )
+                .filter(operation_step::Column::OperationId.eq(&operation_id))
+                .filter(operation_step::Column::Sequence.eq(sequence))
+                .exec(&transaction)?;
+            transaction.commit()?;
+            Ok(())
+        })
+        .map_err(map_error)
+    }
+
+    fn abandon_verified(&self, evidence: &VerifiedAbsence) -> Result<(), StoreConflict> {
+        let attempt = checked_revision(evidence.attempt())?;
+        let operation_id = evidence.operation_id().to_owned();
+        self.orm_write(move |db| {
+            let transaction = db.begin()?;
+            let operation = operation_entity::Entity::find_by_id(&operation_id)
+                .one(&transaction)?
+                .ok_or(DatabaseError::Missing)?;
+            if operation.attempt != attempt
+                || !matches!(
+                    operation.status.as_str(),
+                    "Failed" | "AwaitingDecision" | "OutcomeUnknown"
+                )
+                || operation_step::Entity::find()
+                    .filter(operation_step::Column::OperationId.eq(&operation_id))
+                    .filter(operation_step::Column::Outcome.is_null())
+                    .one(&transaction)?
+                    .is_some()
+                || operation_step::Entity::find()
+                    .filter(operation_step::Column::OperationId.eq(&operation_id))
+                    .filter(operation_step::Column::Outcome.eq("unknown"))
+                    .one(&transaction)?
+                    .is_some()
+            {
+                return Err(DatabaseError::InvalidInput);
+            }
+            operation_entity::Entity::update_many()
+                .col_expr(operation_entity::Column::Status, Expr::value("Abandoned"))
+                .col_expr(operation_entity::Column::Phase, Expr::value("abandoned"))
+                .col_expr(
+                    operation_entity::Column::CompletedAt,
+                    Expr::cust("CURRENT_TIMESTAMP"),
+                )
+                .filter(operation_entity::Column::Id.eq(&operation_id))
+                .exec(&transaction)?;
+            transaction.commit()?;
+            Ok(())
+        })
+        .map_err(map_error)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use composenest_application::operation_journal::{ExpectedResult, StepCommand};
+    use composenest_application::operation_recovery::{
+        CurrentRuntime, RecoveryDecision, RecoveryEvidence, RecoveryProbe, abandon_operation,
+        resolve_operation,
+    };
     use std::fs;
     use tempfile::TempDir;
 
@@ -652,8 +858,114 @@ mod tests {
         }
     }
 
-    #[test]
-    fn unresolved_statuses_keep_instance_exclusive() {
+    struct VerifiedRuntime(CurrentRuntime);
+
+    impl RecoveryProbe for VerifiedRuntime {
+        fn inspect(
+            &self,
+            _: &RecoverableOperation,
+        ) -> impl std::future::Future<Output = RecoveryEvidence> + Send {
+            std::future::ready(RecoveryEvidence {
+                previous_cli_exited: true,
+                target_matches: true,
+                artifact_matches: true,
+                storage_verified: true,
+                docker_verified: true,
+                runtime: self.0,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn startup_marks_executing_unknown_and_preserves_identity_and_reservations() {
+        let (root, worker) = store();
+        worker.accept(&intent("first"), &receipt("first")).unwrap();
+        worker
+            .record_step(&StepIntent {
+                operation_id: "first".into(),
+                sequence: 1,
+                attempt: 1,
+                command_kind: StepCommand::ComposeStart,
+                resource_id: "instance".into(),
+                expected_result: ExpectedResult::ContainerRunning,
+            })
+            .unwrap();
+        worker
+            .set_status("first", OperationStatus::Executing, "start")
+            .unwrap();
+        drop(worker);
+
+        let worker = DatabaseWorker::start(root.path()).unwrap();
+        let pending = worker.recover_on_startup().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].status, OperationStatus::OutcomeUnknown);
+        assert_eq!(pending[0].attempt, 1);
+        assert_eq!(pending[0].steps[0].outcome, None);
+        assert_eq!(
+            worker.retry("first", "start"),
+            Err(StoreConflict::InvalidLifecycle)
+        );
+        assert_eq!(
+            worker.accept(&intent("second"), &receipt("second")),
+            Err(StoreConflict::Duplicate)
+        );
+        worker
+            .reconcile_step("first", 1, StepOutcome::Failed)
+            .unwrap();
+        worker
+            .set_status("first", OperationStatus::Failed, "start")
+            .unwrap();
+        assert_eq!(
+            composenest_application::operation_recovery::retry_operation(
+                &worker,
+                "first",
+                &VerifiedRuntime(CurrentRuntime::Stopped)
+            )
+            .await,
+            Ok(2)
+        );
+        assert_eq!(
+            worker
+                .receipt("scope", "first")
+                .unwrap()
+                .unwrap()
+                .operation_id,
+            "first"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_status_remains_visible_when_current_runtime_is_ready() {
+        let (_root, worker) = store();
+        worker.accept(&intent("first"), &receipt("first")).unwrap();
+        worker
+            .record_step(&StepIntent {
+                operation_id: "first".into(),
+                sequence: 1,
+                attempt: 1,
+                command_kind: StepCommand::ComposeStart,
+                resource_id: "instance".into(),
+                expected_result: ExpectedResult::ContainerRunning,
+            })
+            .unwrap();
+        worker.finish_step("first", 1, StepOutcome::Failed).unwrap();
+        worker
+            .set_status("first", OperationStatus::Failed, "start")
+            .unwrap();
+        let report = resolve_operation(&worker, "first", &VerifiedRuntime(CurrentRuntime::Ready))
+            .await
+            .unwrap();
+        assert_eq!(report.operation.status, OperationStatus::Failed);
+        assert_eq!(report.current_runtime, CurrentRuntime::Ready);
+        assert_eq!(report.decision, RecoveryDecision::Complete);
+        assert_eq!(
+            worker.recoverable("first").unwrap().status,
+            OperationStatus::Failed
+        );
+    }
+
+    #[tokio::test]
+    async fn unresolved_statuses_keep_instance_exclusive() {
         let (_root, worker) = store();
         worker.accept(&intent("first"), &receipt("first")).unwrap();
         for status in [
@@ -674,7 +986,14 @@ mod tests {
             Err(StoreConflict::Duplicate)
         );
         worker
-            .set_status("first", OperationStatus::Abandoned, "done")
+            .set_status("first", OperationStatus::Failed, "observe")
+            .unwrap();
+        assert_eq!(
+            worker.set_status("first", OperationStatus::Abandoned, "done"),
+            Err(StoreConflict::InvalidLifecycle)
+        );
+        abandon_operation(&worker, "first", &VerifiedRuntime(CurrentRuntime::Absent))
+            .await
             .unwrap();
         worker
             .accept(&intent("second"), &receipt("second"))
@@ -803,8 +1122,8 @@ mod tests {
         assert_eq!(map_error(invalid_status), StoreConflict::InvalidInput);
     }
 
-    #[test]
-    fn journal_uses_domain_kind_and_status_vocabulary() {
+    #[tokio::test]
+    async fn journal_uses_domain_kind_and_status_vocabulary() {
         let (_root, worker) = store();
         let mut operation = intent("rename");
         operation.kind = OperationKind::Rename;
@@ -825,8 +1144,8 @@ mod tests {
         worker
             .set_status("rename", OperationStatus::Failed, "observe")
             .unwrap();
-        worker
-            .set_status("rename", OperationStatus::Abandoned, "done")
+        abandon_operation(&worker, "rename", &VerifiedRuntime(CurrentRuntime::Absent))
+            .await
             .unwrap();
         let mut recovery = intent("recover");
         recovery.kind = OperationKind::Recover;

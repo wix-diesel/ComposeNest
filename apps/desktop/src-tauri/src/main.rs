@@ -3,7 +3,7 @@
 use composenest_adapters::{SystemClock, sqlite::DatabaseWorker};
 use composenest_application::{
     Bootstrap, BootstrapRequest, BootstrapResponse, BootstrapService, ResponseEnvelope,
-    operation_runner::OperationRunner,
+    operation_recovery::RecoveryJournal, operation_runner::OperationRunner,
 };
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use tauri::State;
@@ -39,6 +39,9 @@ fn management_root() -> std::io::Result<PathBuf> {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bootstrap = BootstrapService::new(SystemClock).bootstrap();
     let database = DatabaseWorker::start(&management_root()?)?;
+    database.recover_on_startup().map_err(|error| {
+        std::io::Error::other(format!("operation recovery startup failed: {error:?}"))
+    })?;
     let runner = Arc::new(OperationRunner::new());
 
     tauri::Builder::default()

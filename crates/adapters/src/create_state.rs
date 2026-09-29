@@ -3,7 +3,7 @@
 use composenest_application::{
     create_state::{ConfirmedCreate, CreateStateStore},
     operation_journal::RequestReceipt,
-    state_store::{PortAllocation, RuntimeTarget, StoreConflict, TemplateFile},
+    state_store::{PortAllocation, RuntimeTarget, StorageAllocation, StoreConflict, TemplateFile},
 };
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
@@ -52,7 +52,7 @@ impl CreateStateStore for DatabaseWorker {
                 || op.instance_id != owned.id
                 || owned.scope_id != receipt.scope_id
                 || owned.lifecycle != "managed"
-                || !matches!(op.status.as_str(), "Accepted" | "Executing")
+                || op.status != "Accepted"
                 || op.new_spec_revision != Some(1)
                 || op.expected_instance_revision != owned.revision
             {
@@ -156,6 +156,54 @@ impl CreateStateStore for DatabaseWorker {
                 ports,
                 storage,
             })
+        })
+        .map_err(map_error)
+    }
+
+    fn record_bind_materialization(
+        &self,
+        operation_id: &str,
+        allocation: &StorageAllocation,
+    ) -> Result<(), StoreConflict> {
+        if allocation.ownership_evidence.len() != 64
+            || !allocation
+                .ownership_evidence
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return Err(StoreConflict::InvalidInput);
+        }
+        let (operation_id, allocation) = (operation_id.to_owned(), allocation.clone());
+        self.orm_write(move |db| {
+            let tx = db.begin()?;
+            let op = operation::Entity::find_by_id(&operation_id)
+                .one(&tx)?
+                .ok_or(DatabaseError::Missing)?;
+            if !create_operation(&op.kind) || op.status != "Executing" {
+                return Err(DatabaseError::InvalidInput);
+            }
+            let saved = storage_allocation::Entity::find_by_id((
+                op.instance_id.clone(),
+                allocation.slot.clone(),
+            ))
+            .one(&tx)?
+            .ok_or(DatabaseError::Missing)?;
+            if saved.method != "bind"
+                || saved.presence != "not_materialized"
+                || saved.resource_identity != allocation.resource_identity
+            {
+                return Err(DatabaseError::InvalidInput);
+            }
+            storage_allocation::ActiveModel {
+                instance_id: Set(op.instance_id),
+                slot: Set(allocation.slot),
+                ownership_evidence: Set(allocation.ownership_evidence),
+                presence: Set("present".into()),
+                ..Default::default()
+            }
+            .update(&tx)?;
+            tx.commit()?;
+            Ok(())
         })
         .map_err(map_error)
     }

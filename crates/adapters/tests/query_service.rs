@@ -31,9 +31,9 @@ fn fixture() -> (TempDir, DatabaseWorker) {
             INSERT INTO template_snapshots (id, instance_id, template_id, template_version, selected_version,
                 schema_version, normalization, semantic_hash, canonical_json) VALUES
                 ('snapshot', 'one', 'postgresql', '17', '17', 1, 'template-normalization-v1', 'hash',
-                '{"versions":[{"key":"17","definition":{"image":"postgres:17","inputs":{"order":["username","password"],"values":{"username":{"type":"string"},"password":{"type":"secret"}}},"connections":{"order":["database"],"values":{"database":{"label":"PostgreSQL","port":"database","inputs":["username","password"]}}}}}]}');
+                '{"versions":[{"key":"17","definition":{"image":"postgres:17","inputs":{"order":["username","password","mode"],"values":{"username":{"type":"string"},"password":{"type":"secret"},"mode":{"type":"select"}}},"connections":{"order":["database"],"values":{"database":{"label":"PostgreSQL","port":"database","inputs":["username","password"]}}}}}]}');
             INSERT INTO instance_specs (instance_id, revision, selected_version, storage_method, inputs_json)
-                VALUES ('one', 1, '17', 'bind', '{"username":"app","password":"top-secret"}');
+                VALUES ('one', 1, '17', 'bind', '{"username":"app","password":"top-secret","mode":"safe"}');
             INSERT INTO port_bindings (instance_id, spec_revision, slot, host_ip, host_port, container_port)
                 VALUES ('one', 1, 'database', '127.0.0.1', 15432, 5432);
             INSERT INTO storage_allocations (instance_id, slot, method, resource_identity, ownership_evidence,
@@ -86,6 +86,9 @@ fn saved_list_and_detail_use_committed_ports_and_mask_secrets() {
             .value
             .is_none()
     );
+    let mode = view.inputs.iter().find(|item| item.slot == "mode").unwrap();
+    assert!(!mode.secret);
+    assert_eq!(mode.value.as_ref().unwrap(), "safe");
     let json = serde_json::to_string(view).unwrap();
     assert!(!json.contains("top-secret"));
     assert!(!json.contains("different-secret"));

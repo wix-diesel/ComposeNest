@@ -170,11 +170,11 @@ fn project_inputs(definition: &Value, saved: &Value) -> Result<Vec<InputView>, D
     Ok(saved
         .iter()
         .map(|(slot, value)| {
-            let secret = definitions.get(slot).and_then(|item| item["type"].as_str())
-                != Some("string")
-                && definitions.get(slot).and_then(|item| item["type"].as_str()) != Some("integer")
-                && definitions.get(slot).and_then(|item| item["type"].as_str()) != Some("boolean")
-                && definitions.get(slot).and_then(|item| item["type"].as_str()) != Some("choice");
+            let input_type = definitions.get(slot).and_then(|item| item["type"].as_str());
+            let secret = !matches!(
+                input_type,
+                Some("string" | "integer" | "boolean" | "select")
+            );
             InputView {
                 slot: slot.clone(),
                 secret,

@@ -1,4 +1,4 @@
-//! SQLite reads and completion commits for accepted create and clone operations.
+//! SQLite reads of confirmed execution inputs and creation completion commits.
 
 use composenest_application::{
     create_state::{ConfirmedCreate, CreateStateStore},
@@ -48,17 +48,26 @@ impl CreateStateStore for DatabaseWorker {
             let owned = instance::Entity::find_by_id(&receipt.instance_id)
                 .one(db)?
                 .ok_or(DatabaseError::Missing)?;
-            if !create_operation(&op.kind)
+            let lifecycle = matches!(op.kind.as_str(), "start" | "stop" | "restart");
+            if !create_operation(&op.kind) && !lifecycle
                 || op.instance_id != owned.id
                 || owned.scope_id != receipt.scope_id
                 || owned.lifecycle != "managed"
                 || op.status != "Accepted"
-                || op.new_spec_revision != Some(1)
+                || (lifecycle
+                    && (op.old_spec_revision != owned.applied_spec_revision
+                        || op.new_spec_revision.is_some()))
+                || (!lifecycle && op.new_spec_revision != Some(1))
                 || op.expected_instance_revision != owned.revision
             {
                 return Err(DatabaseError::InvalidInput);
             }
-            let revision = op.new_spec_revision.ok_or(DatabaseError::InvalidInput)?;
+            let revision = if lifecycle {
+                op.old_spec_revision
+            } else {
+                op.new_spec_revision
+            }
+            .ok_or(DatabaseError::InvalidInput)?;
             let spec = instance_spec::Entity::find_by_id((owned.id.clone(), revision))
                 .one(db)?
                 .ok_or(DatabaseError::Missing)?;

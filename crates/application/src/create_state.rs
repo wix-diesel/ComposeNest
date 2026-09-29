@@ -1,4 +1,4 @@
-//! Confirmed inputs and durable completion boundary for create and clone operations.
+//! Confirmed inputs shared by creation and lifecycle operations.
 
 use crate::{
     operation_journal::RequestReceipt,
@@ -34,7 +34,7 @@ pub struct ConfirmedCreate {
 
 /// Persists creation milestones without releasing confirmed allocations on failure.
 pub trait CreateStateStore: Send + Sync {
-    /// Reads all confirmed records for an accepted create or clone request.
+    /// Reads confirmed records for an accepted create, clone, or lifecycle request.
     fn confirmed_create(&self, receipt: &RequestReceipt) -> Result<ConfirmedCreate, StoreConflict>;
 
     /// Records proof from an exclusively created bind directory before it can be mounted.

@@ -3,9 +3,11 @@ use std::fs;
 use composenest_adapters::sqlite::DatabaseWorker;
 use composenest_application::{
     create_state::CreateStateStore,
-    operation_journal::RequestReceipt,
+    lifecycle_operation::LifecycleState,
+    operation_journal::{OperationKind, RequestReceipt},
     state_store::{StorageAllocation, StoreConflict},
 };
+use composenest_domain::instance::RuntimeStatus;
 use tempfile::TempDir;
 
 fn fixture(kind: &str) -> (TempDir, DatabaseWorker, RequestReceipt) {
@@ -76,6 +78,72 @@ fn create_and_clone_load_the_same_confirmed_records() {
         assert_eq!(state.ports[0].host_port, 15432);
         assert_eq!(state.storage.len(), 1);
     }
+}
+
+#[test]
+fn lifecycle_completion_preserves_spec_secret_storage_and_reservation() {
+    let (_root, db, receipt) = fixture("start");
+    let id = "a".repeat(64);
+    db.write({
+        let id = id.clone();
+        move |db| {
+            db.execute_batch("UPDATE instances SET applied_spec_revision=1 WHERE id='instance';
+                UPDATE operations SET new_spec_revision=NULL, old_spec_revision=1 WHERE id='operation';")?;
+            db.execute("INSERT INTO runtime_observations
+                (instance_id, operation_id, container_id, runtime_state, freshness)
+                VALUES ('instance', NULL, ?1, 'stopped', 'fresh')", [&id])?;
+            Ok(())
+        }
+    }).unwrap();
+    let saved = db.snapshot(&receipt, OperationKind::Start).unwrap();
+    assert_eq!(saved.container_id, id);
+    assert_eq!(saved.spec_revision, 1);
+    db.write(|db| {
+        db.execute(
+            "UPDATE operations SET status='Executing' WHERE id='operation'",
+            [],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    db.complete(&receipt.operation_id, &id, RuntimeStatus::Ready)
+        .unwrap();
+    let values = db
+        .read(|db| {
+            Ok(db.query_row(
+                "SELECT i.applied_spec_revision, s.inputs_json,
+            a.resource_identity, r.status, o.status, v.runtime_state
+            FROM instances i JOIN instance_specs s ON s.instance_id=i.id
+            JOIN storage_allocations a ON a.instance_id=i.id
+            JOIN port_reservations r ON r.instance_id=i.id
+            JOIN operations o ON o.instance_id=i.id
+            JOIN runtime_observations v ON v.instance_id=i.id
+            WHERE i.id='instance'",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                    ))
+                },
+            )?)
+        })
+        .unwrap();
+    assert_eq!(
+        values,
+        (
+            1,
+            r#"{"password":"secret"}"#.into(),
+            "data/instance/data".into(),
+            "committed".into(),
+            "Succeeded".into(),
+            "running".into()
+        )
+    );
 }
 
 #[test]

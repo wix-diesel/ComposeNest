@@ -46,7 +46,7 @@ fn checked_ports(
             .ok_or(StoreConflict::InvalidInput)?;
         if port.host_ip != previous.host_ip
             || port.container_port != previous.container_port
-            || port.host_port == 0
+            || port.host_port < 1024
             || !ports.insert((port.host_ip.clone(), port.host_port))
             || next.insert(port.slot.clone(), port.clone()).is_some()
         {
@@ -123,6 +123,11 @@ impl PortEditStore for DatabaseWorker {
             if busy != 0 { return Ok(Err(StoreConflict::UnresolvedOperation)); }
             let old = bindings(&tx, &receipt.instance_id, request.old_spec_revision as i64)?;
             let next = match checked_ports(&old, &request.ports) { Ok(next) => next, Err(error) => return Ok(Err(error)) };
+            for port in &old {
+                let count: i64 = tx.query_row("SELECT COUNT(*) FROM port_reservations WHERE scope_id = ?1 AND instance_id = ?2 AND host_ip = ?3 AND protocol = 'tcp' AND host_port = ?4 AND status = 'committed'",
+                    params![receipt.scope_id, receipt.instance_id, port.host_ip, port.host_port], |row| row.get(0))?;
+                if count != 1 { return Ok(Err(StoreConflict::InvalidInput)); }
+            }
             let new_revision = request.old_spec_revision.checked_add(1).ok_or(DatabaseError::InvalidInput)?;
             let old_spec: (String, String, String) = tx.query_row(
                 "SELECT selected_version, storage_method, inputs_json FROM instance_specs WHERE instance_id = ?1 AND revision = ?2",
@@ -193,6 +198,13 @@ impl PortEditStore for DatabaseWorker {
             let next = checked_ports(&old_ports, &new_ports).map_err(|_| DatabaseError::InvalidInput)?;
             let expected_hash: String = tx.query_row("SELECT confirmed_diff_hash FROM pending_changes WHERE operation_id = ?1", [&operation_id], |row| row.get(0))?;
             if hash_ports(&next) != expected_hash { return Err(DatabaseError::InvalidInput); }
+            for port in &new_ports {
+                let changed = old_ports.iter().all(|previous| previous.slot != port.slot || previous.host_port != port.host_port);
+                let status = if changed { "held" } else { "committed" };
+                let count: i64 = tx.query_row("SELECT COUNT(*) FROM port_reservations WHERE instance_id = ?1 AND host_ip = ?2 AND host_port = ?3 AND status = ?4",
+                    params![instance, port.host_ip, port.host_port, status], |row| row.get(0))?;
+                if count != 1 { return Err(DatabaseError::InvalidInput); }
+            }
             for port in &old_ports {
                 if next[&port.slot].host_port != port.host_port {
                     tx.execute("UPDATE port_reservations SET status = 'released' WHERE instance_id = ?1 AND host_ip = ?2 AND host_port = ?3 AND status = 'committed'", params![instance, port.host_ip, port.host_port])?;
@@ -200,7 +212,8 @@ impl PortEditStore for DatabaseWorker {
             }
             tx.execute("UPDATE port_reservations SET status = 'committed' WHERE id IN (SELECT reservation_id FROM pending_change_reservations WHERE operation_id = ?1) AND status = 'held'", [&operation_id])?;
             tx.execute("UPDATE instances SET revision = ?2, applied_spec_revision = ?3 WHERE id = ?1 AND revision = ?4", params![instance, revision + 1, new, revision])?;
-            tx.execute("UPDATE runtime_observations SET operation_id = ?2, container_id = ?3, runtime_state = 'stopped', health = NULL, freshness = 'fresh', observed_at = CURRENT_TIMESTAMP WHERE instance_id = ?1", params![instance, operation_id, container_id])?;
+            let observed = tx.execute("UPDATE runtime_observations SET operation_id = ?2, container_id = ?3, runtime_state = 'stopped', health = NULL, freshness = 'fresh', observed_at = CURRENT_TIMESTAMP WHERE instance_id = ?1", params![instance, operation_id, container_id])?;
+            if observed != 1 { return Err(DatabaseError::Missing); }
             tx.execute("UPDATE operations SET status = 'Succeeded', phase = 'stopped', completed_at = CURRENT_TIMESTAMP WHERE id = ?1", [&operation_id])?;
             tx.commit()?;
             Ok(())

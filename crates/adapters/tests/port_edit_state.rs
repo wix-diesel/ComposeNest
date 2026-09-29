@@ -32,8 +32,12 @@ fn fixture() -> (tempfile::TempDir, DatabaseWorker, PortEditRequest) {
                 VALUES ('instance', 1, '1', 'bind', '{}');
             INSERT INTO port_bindings (instance_id, spec_revision, slot, host_ip, host_port, container_port)
                 VALUES ('instance', 1, 'db', '127.0.0.1', 15432, 5432);
+            INSERT INTO port_bindings (instance_id, spec_revision, slot, host_ip, host_port, container_port)
+                VALUES ('instance', 1, 'metrics', '127.0.0.1', 19000, 9000);
             INSERT INTO port_reservations (id, scope_id, instance_id, host_ip, protocol, host_port, status)
                 VALUES ('old', 'scope', 'instance', '127.0.0.1', 'tcp', 15432, 'committed');
+            INSERT INTO port_reservations (id, scope_id, instance_id, host_ip, protocol, host_port, status)
+                VALUES ('unchanged', 'scope', 'instance', '127.0.0.1', 'tcp', 19000, 'committed');
             INSERT INTO runtime_observations (instance_id, container_id, runtime_state, freshness)
                 VALUES ('instance', NULL, 'absent', 'fresh');")?;
         Ok(())
@@ -50,12 +54,20 @@ fn fixture() -> (tempfile::TempDir, DatabaseWorker, PortEditRequest) {
         },
         expected_instance_revision: 1,
         old_spec_revision: 1,
-        ports: vec![PortAllocation {
-            slot: "db".into(),
-            host_ip: "127.0.0.1".into(),
-            host_port: 15433,
-            container_port: 5432,
-        }],
+        ports: vec![
+            PortAllocation {
+                slot: "db".into(),
+                host_ip: "127.0.0.1".into(),
+                host_port: 15433,
+                container_port: 5432,
+            },
+            PortAllocation {
+                slot: "metrics".into(),
+                host_ip: "127.0.0.1".into(),
+                host_port: 19000,
+                container_port: 9000,
+            },
+        ],
     };
     (root, db, request)
 }
@@ -80,6 +92,7 @@ fn reserves_only_changed_port_and_switches_after_verified_artifact() {
     assert_eq!(db.begin_port_edit(&request), Ok(request.receipt.clone()));
     assert_eq!(status(&db, 15432).as_deref(), Some("committed"));
     assert_eq!(status(&db, 15433).as_deref(), Some("held"));
+    assert_eq!(status(&db, 19000).as_deref(), Some("committed"));
     assert_eq!(db.pending_ports("edit").unwrap()[0].host_port, 15433);
     let id = "a".repeat(64);
     assert_eq!(
@@ -97,6 +110,7 @@ fn reserves_only_changed_port_and_switches_after_verified_artifact() {
     db.complete_port_edit("edit", &id).unwrap();
     assert_eq!(status(&db, 15432).as_deref(), Some("released"));
     assert_eq!(status(&db, 15433).as_deref(), Some("committed"));
+    assert_eq!(status(&db, 19000).as_deref(), Some("committed"));
     let applied: i64 = db
         .read(|db| {
             Ok(db.query_row(
@@ -123,4 +137,16 @@ fn rejects_duplicate_port_and_does_not_leave_pending_records() {
         .read(|db| Ok(db.query_row("SELECT COUNT(*) FROM pending_changes", [], |row| row.get(0))?))
         .unwrap();
     assert_eq!(count, 0);
+}
+
+#[test]
+fn rejects_privileged_host_port_before_recording_intent() {
+    let (_root, db, mut request) = fixture();
+    request.ports[0].host_port = 80;
+    assert_eq!(
+        db.begin_port_edit(&request),
+        Err(StoreConflict::InvalidInput)
+    );
+    assert_eq!(status(&db, 15432).as_deref(), Some("committed"));
+    assert_eq!(status(&db, 80), None);
 }

@@ -465,7 +465,27 @@ pub fn to_yaml(model: &ComposeModel) -> Result<String, ComposeError> {
     let document = object(vec![
         ("name", scalar(&model.name)),
         ("services", object(vec![("main", object(values))])),
-        ("networks", object(vec![("default", object(vec![]))])),
+        (
+            "networks",
+            object(vec![(
+                "default",
+                object(vec![(
+                    "labels",
+                    mapping(
+                        service
+                            .labels
+                            .iter()
+                            .filter(|(key, _)| {
+                                matches!(
+                                    key.as_str(),
+                                    "io.composenest.scope" | "io.composenest.instance"
+                                )
+                            })
+                            .map(|(key, value)| (key.clone(), scalar(value))),
+                    ),
+                )]),
+            )]),
+        ),
         (
             "volumes",
             mapping(model.volumes.iter().map(|name| {

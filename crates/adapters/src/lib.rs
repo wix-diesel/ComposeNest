@@ -1,5 +1,8 @@
 //! Concrete adapters used when assembling the desktop application.
 
+#[cfg(test)]
+extern crate self as composenest_adapters;
+
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use composenest_application::Clock;
@@ -38,6 +41,7 @@ pub mod create_state;
 pub mod delete_state;
 pub mod docker_cli;
 pub mod docker_create;
+pub mod docker_delete;
 pub mod docker_observation;
 pub mod docker_target;
 mod entities;

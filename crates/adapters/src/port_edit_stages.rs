@@ -229,6 +229,15 @@ async fn run_locked(
     let confirmed = database
         .confirmed_create(&receipt)
         .map_err(PortEditError::Store)?;
+    let artifact_id = format!("{}-r{}", receipt.instance_id, confirmed.spec_revision);
+    let create = DockerCreate::new(
+        &docker,
+        &artifacts,
+        &artifact_id,
+        &context.project,
+        &receipt.instance_id,
+    )
+    .map_err(map_docker)?;
     let expected_ports: BTreeMap<_, _> = request
         .ports
         .iter()

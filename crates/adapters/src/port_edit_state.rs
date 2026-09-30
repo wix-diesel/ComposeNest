@@ -128,7 +128,8 @@ impl PortEditStore for DatabaseWorker {
                     params![receipt.scope_id, receipt.instance_id, port.host_ip, port.host_port], |row| row.get(0))?;
                 if count != 1 { return Ok(Err(StoreConflict::InvalidInput)); }
             }
-            let new_revision = request.old_spec_revision.checked_add(1).ok_or(DatabaseError::InvalidInput)?;
+            let latest: u64 = tx.query_row("SELECT MAX(revision) FROM instance_specs WHERE instance_id = ?1", [&receipt.instance_id], |row| row.get(0))?;
+            let new_revision = latest.checked_add(1).ok_or(DatabaseError::InvalidInput)?;
             let old_spec: (String, String, String) = tx.query_row(
                 "SELECT selected_version, storage_method, inputs_json FROM instance_specs WHERE instance_id = ?1 AND revision = ?2",
                 params![receipt.instance_id, request.old_spec_revision],

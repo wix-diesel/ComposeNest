@@ -243,6 +243,7 @@ pub(crate) mod storage_allocation {
         pub ownership_evidence: String,
         pub ownership: String,
         pub presence: String,
+        pub observed_at: Option<String>,
         pub initialization: String,
     }
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

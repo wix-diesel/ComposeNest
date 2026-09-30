@@ -17,7 +17,7 @@ use serde_json::Value;
 
 use crate::docker_target::BoundDocker;
 
-const INSPECT_FORMAT: &str = r#"{"Name":{{json .Name}},"Driver":{{json .Driver}},"Labels":{"io.composenest.scope":{{if .Labels}}{{json (index .Labels "io.composenest.scope")}}{{else}}null{{end}},"io.composenest.instance":{{if .Labels}}{{json (index .Labels "io.composenest.instance")}}{{else}}null{{end}},"io.composenest.slot":{{if .Labels}}{{json (index .Labels "io.composenest.slot")}}{{else}}null{{end}},"io.composenest.allocation-operation":{{if .Labels}}{{json (index .Labels "io.composenest.allocation-operation")}}{{else}}null{{end}}}}}"#;
+const INSPECT_FORMAT: &str = r#"{"Name":{{json .Name}},"Driver":{{json .Driver}},"Labels":{"io.composenest.scope":{{if .Labels}}{{json (index .Labels "io.composenest.scope")}}{{else}}null{{end}},"io.composenest.instance":{{if .Labels}}{{json (index .Labels "io.composenest.instance")}}{{else}}null{{end}},"io.composenest.slot":{{if .Labels}}{{json (index .Labels "io.composenest.slot")}}{{else}}null{{end}},"io.composenest.allocation-operation":{{if .Labels}}{{json (index .Labels "io.composenest.allocation-operation")}}{{else}}null{{end}}}}"#;
 const LABEL_SCOPE: &str = "io.composenest.scope";
 const LABEL_INSTANCE: &str = "io.composenest.instance";
 const LABEL_SLOT: &str = "io.composenest.slot";
@@ -34,6 +34,45 @@ impl DockerNamedVolumes {
     #[must_use]
     pub fn new(docker: BoundDocker) -> Self {
         Self { docker }
+    }
+
+    /// Freshly observes an allocation without changing data, journal, or saved presence.
+    pub async fn observe_saved_volume(
+        &self,
+        entry: &StorageLedgerEntry,
+        journal: &impl OperationJournal,
+    ) -> Result<StoragePresence, NamedVolumeError> {
+        let id = crate::create_projection::parse_instance_id(&entry.instance_id)
+            .map_err(|_| NamedVolumeError::InvalidAllocation)?;
+        let slot = SlotId::parse(&entry.slot).map_err(|_| NamedVolumeError::InvalidAllocation)?;
+        let expected = validate_entry(entry, id, &slot)?;
+        let steps = allocation_steps(journal, entry)?;
+        Ok(match self.inspect_volume(entry, &expected).await {
+            VolumeCheck::Owned
+                if steps
+                    .iter()
+                    .any(|step| step.outcome == Some(StepOutcome::Succeeded)) =>
+            {
+                StoragePresence::Present
+            }
+            VolumeCheck::Owned | VolumeCheck::Foreign => StoragePresence::Unverified,
+            VolumeCheck::Absent
+                if entry.presence == StoragePresence::NotMaterialized && steps.is_empty() =>
+            {
+                StoragePresence::NotMaterialized
+            }
+            VolumeCheck::Absent
+                if entry.presence == StoragePresence::Present
+                    || entry.presence == StoragePresence::Missing
+                    || steps
+                        .iter()
+                        .any(|step| step.outcome == Some(StepOutcome::Succeeded)) =>
+            {
+                StoragePresence::Missing
+            }
+            VolumeCheck::Absent => StoragePresence::Unverified,
+            VolumeCheck::Unavailable => return Err(NamedVolumeError::Backend),
+        })
     }
 
     async fn ensure(
@@ -625,6 +664,116 @@ mod tests {
             instance_id,
             slot,
         }
+    }
+
+    #[tokio::test]
+    async fn saved_observation_distinguishes_absent_foreign_and_unavailable_volumes() {
+        for presence in [
+            StoragePresence::NotMaterialized,
+            StoragePresence::Present,
+            StoragePresence::Missing,
+            StoragePresence::Unverified,
+        ] {
+            let fixture = fixture();
+            fixture
+                .worker
+                .set_storage_presence(INSTANCE, "data", presence)
+                .unwrap();
+            let expected = if presence == StoragePresence::Present {
+                StoragePresence::Missing
+            } else {
+                presence
+            };
+            assert_saved_observation(&fixture, Ok(expected)).await;
+        }
+        let fixture = fixture();
+        fs::write(fixture.root.path().join("volume.json"), VOLUME_JSON).unwrap();
+        assert_saved_observation(&fixture, Ok(StoragePresence::Unverified)).await;
+        fs::write(fixture.root.path().join("volume.json"), EMPTY_VOLUME_JSON).unwrap();
+        assert_saved_observation(&fixture, Ok(StoragePresence::Unverified)).await;
+        fs::write(
+            fixture.root.path().join("docker-mock"),
+            "#!/bin/sh\nexit 1\n",
+        )
+        .unwrap();
+        assert_saved_observation(&fixture, Err(NamedVolumeError::Backend)).await;
+    }
+
+    #[tokio::test]
+    async fn saved_observation_requires_successful_birth_and_never_completes_pending_steps() {
+        for outcome in [
+            None,
+            Some(StepOutcome::Failed),
+            Some(StepOutcome::Unknown),
+            Some(StepOutcome::Succeeded),
+        ] {
+            let fixture = fixture();
+            fixture
+                .worker
+                .record_step(&StepIntent {
+                    operation_id: OPERATION.into(),
+                    sequence: 1,
+                    attempt: 1,
+                    command_kind: StepCommand::CreateVolume,
+                    resource_id: VOLUME.into(),
+                    expected_result: ExpectedResult::VolumeCreated,
+                })
+                .unwrap();
+            if let Some(outcome) = outcome {
+                fixture.worker.finish_step(OPERATION, 1, outcome).unwrap();
+            }
+            let succeeded = outcome == Some(StepOutcome::Succeeded);
+            fs::write(fixture.root.path().join("volume.json"), VOLUME_JSON).unwrap();
+            let present = if succeeded {
+                StoragePresence::Present
+            } else {
+                StoragePresence::Unverified
+            };
+            assert_saved_observation(&fixture, Ok(present)).await;
+            fs::write(fixture.root.path().join("volume.json"), EMPTY_VOLUME_JSON).unwrap();
+            assert_saved_observation(&fixture, Ok(StoragePresence::Unverified)).await;
+            fs::remove_file(fixture.root.path().join("volume.json")).unwrap();
+            let absent = if succeeded {
+                StoragePresence::Missing
+            } else {
+                StoragePresence::Unverified
+            };
+            assert_saved_observation(&fixture, Ok(absent)).await;
+        }
+    }
+
+    async fn assert_saved_observation(
+        fixture: &Fixture,
+        expected: Result<StoragePresence, NamedVolumeError>,
+    ) {
+        let entry = fixture
+            .worker
+            .storage_allocation(INSTANCE, "data")
+            .unwrap()
+            .unwrap();
+        let steps = fixture
+            .worker
+            .steps_for_resource(OPERATION, VOLUME)
+            .unwrap();
+        assert_eq!(
+            fixture
+                .storage
+                .observe_saved_volume(&entry, &fixture.worker)
+                .await,
+            expected
+        );
+        assert_eq!(
+            fixture.worker.storage_allocation(INSTANCE, "data").unwrap(),
+            Some(entry)
+        );
+        assert_eq!(
+            fixture
+                .worker
+                .steps_for_resource(OPERATION, VOLUME)
+                .unwrap(),
+            steps
+        );
+        assert!(!fixture.root.path().join("create-count").exists());
     }
 
     #[tokio::test]

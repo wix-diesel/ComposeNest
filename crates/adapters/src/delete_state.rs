@@ -123,6 +123,10 @@ impl DeleteState for DatabaseWorker {
                         storage_allocation::Column::Presence,
                         Expr::value(presence_name(check.presence)),
                     )
+                    .col_expr(
+                        storage_allocation::Column::ObservedAt,
+                        Expr::cust("CURRENT_TIMESTAMP"),
+                    )
                     .filter(storage_allocation::Column::InstanceId.eq(&owned.id))
                     .filter(storage_allocation::Column::Slot.eq(check.slot))
                     .exec(&tx)?;

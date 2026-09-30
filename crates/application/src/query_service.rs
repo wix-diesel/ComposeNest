@@ -97,7 +97,7 @@ pub struct InstanceView {
     pub name: String,
     /// Current optimistic-lock revision.
     pub revision: u64,
-    /// Managed or retiring lifecycle.
+    /// Managed, retiring, or retired lifecycle; active queries exclude retired records.
     pub lifecycle: String,
     /// Stable Compose project name.
     pub project_name: String,

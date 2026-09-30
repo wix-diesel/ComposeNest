@@ -17,7 +17,7 @@ use composenest_application::{
     state_store::{PortAllocation, StoreConflict},
 };
 use composenest_domain::instance::RuntimeStatus;
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 
 use crate::{
     artifact_store::{ArtifactInput, ArtifactStore},
@@ -154,6 +154,24 @@ async fn recover_locked(
         .project_container_id()
         .await
         .map_err(map_docker)?;
+    let recorded: Option<String> = database
+        .read(|db| {
+            Ok(db
+                .query_row(
+                    "SELECT container_id FROM runtime_observations WHERE instance_id = ?1",
+                    [&receipt.instance_id],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()?
+                .flatten())
+        })
+        .map_err(|_| PortEditError::Store(StoreConflict::Backend))?;
+    if let Some(recorded) = recorded.filter(|id| actual.as_ref() != Some(id)) {
+        let observed = docker.observe(&stages.ownership_only(&recorded)).await;
+        if observed.status != RuntimeStatus::Absent {
+            return Ok(PortRecoveryResult::Held);
+        }
+    }
     let mut matching_revision = None;
     let mut verified = None;
     let mut runtime = RuntimeStatus::Absent;

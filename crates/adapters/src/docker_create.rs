@@ -108,11 +108,37 @@ impl<'a> DockerCreate<'a> {
         check_change(&result)
     }
 
+    /// Replaces an already verified stopped or absent main container without starting it.
+    /// The caller must journal intent and verify ownership and storage before this call.
+    pub async fn recreate_stopped(&self) -> Result<(), CreateDockerError> {
+        self.validate_config().await?;
+        let mut args = self.compose_args()?;
+        args.extend([
+            "create".into(),
+            "--force-recreate".into(),
+            "--no-build".into(),
+            "--pull".into(),
+            "never".into(),
+            "main".into(),
+        ]);
+        let result = self
+            .docker
+            .change(&args, CREATE_DEADLINE)
+            .await
+            .map_err(|_| CreateDockerError::OutcomeUnknown)?;
+        check_change(&result)
+    }
+
     /// Locates exactly one full Docker ID after creation, without adopting a name.
     pub async fn created_container_id(&self) -> Result<String, CreateDockerError> {
         self.find_container()
             .await?
             .ok_or(CreateDockerError::OutcomeUnknown)
+    }
+
+    /// Reads the project's main container ID without assuming one exists.
+    pub async fn project_container_id(&self) -> Result<Option<String>, CreateDockerError> {
+        self.find_container().await
     }
 
     /// Verifies ownership, image, every mount and public setting while stopped.

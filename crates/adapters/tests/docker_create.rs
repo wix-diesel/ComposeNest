@@ -51,6 +51,7 @@ if [ "$1" = compose ]; then
   case "$*" in
     *' config --quiet') if [ -f config-fail ]; then exit 1; fi; exit 0 ;;
     *' create --no-build --pull never main') /usr/bin/touch created; exit 0 ;;
+    *' create --force-recreate --no-build --pull never main') /usr/bin/touch created; exit 0 ;;
   esac
 fi
 if [ "$1" = container ] && [ "$2" = ls ]; then
@@ -162,6 +163,22 @@ async fn config_failure_never_creates_or_starts() {
     );
     assert!(!root.path().join("created").exists());
     assert!(!root.path().join("started").exists());
+}
+
+#[tokio::test]
+async fn force_recreate_uses_stopped_compose_create_without_start() {
+    let (root, database, probe) = fixture();
+    publish(&root, &database);
+    fs::write(root.path().join("created"), "").unwrap();
+    let docker = probe.bind(target()).unwrap();
+    let artifacts = ArtifactStore::new(root.path(), &database);
+    let project = format!("cn-{ID}");
+    let create = DockerCreate::new(&docker, &artifacts, "artifact", &project, ID).unwrap();
+    create.recreate_stopped().await.unwrap();
+    create.verify_stopped(&expected()).await.unwrap();
+    let calls = fs::read_to_string(root.path().join("calls")).unwrap();
+    assert!(calls.contains("create --force-recreate --no-build --pull never main"));
+    assert!(!calls.contains("container start"));
 }
 
 #[tokio::test]

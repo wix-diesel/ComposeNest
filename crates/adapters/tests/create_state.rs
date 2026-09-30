@@ -5,7 +5,8 @@ use composenest_application::{
     create_state::CreateStateStore,
     lifecycle_operation::LifecycleState,
     operation_journal::{OperationKind, RequestReceipt},
-    state_store::{StorageAllocation, StoreConflict},
+    port_edit::{PortEditRequest, PortEditStore},
+    state_store::{PortAllocation, StorageAllocation, StoreConflict},
 };
 use composenest_domain::instance::RuntimeStatus;
 use tempfile::TempDir;
@@ -144,6 +145,102 @@ fn lifecycle_completion_preserves_spec_secret_storage_and_reservation() {
             "running".into()
         )
     );
+}
+
+#[test]
+fn edit_port_confirmed_create_accepts_held_and_committed_reservations() {
+    let root = tempfile::tempdir().unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    for dir in ["state", "locks"] {
+        std::fs::create_dir(root.path().join(dir)).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                root.path().join(dir),
+                std::fs::Permissions::from_mode(0o700),
+            )
+            .unwrap();
+        }
+    }
+    let db = DatabaseWorker::start(root.path()).unwrap();
+    db.write(|db| {
+        db.execute_batch("INSERT INTO management_scopes (id, owner_id, root_identity) VALUES ('scope', 'owner', 'root');
+            INSERT INTO runtime_targets (id, scope_id, endpoint, engine_id, platform) VALUES ('target', 'scope', 'local', 'engine', 'linux/amd64');
+            INSERT INTO instances (id, scope_id, target_id, display_name, normalized_name, project_name, revision, applied_spec_revision, lifecycle)
+                VALUES ('instance', 'scope', 'target', 'Test', 'Test', 'cn-instance', 1, 1, 'managed');
+            INSERT INTO instance_specs (instance_id, revision, selected_version, storage_method, inputs_json)
+                VALUES ('instance', 1, '1', 'bind', '{}');
+            INSERT INTO template_snapshots (id, instance_id, template_id, template_version, selected_version,
+                schema_version, normalization, semantic_hash, canonical_json)
+                VALUES ('snapshot', 'instance', 'template', '1', '1', 1, 'template-normalization-v1', 'hash', '{}');
+            INSERT INTO template_snapshot_files (snapshot_id, relative_path, contents, sha256)
+                VALUES ('snapshot', 'template.yaml', x'74657374', 'hash');
+            INSERT INTO port_bindings (instance_id, spec_revision, slot, host_ip, host_port, container_port)
+                VALUES ('instance', 1, 'db', '127.0.0.1', 15432, 5432),
+                       ('instance', 1, 'metrics', '127.0.0.1', 19000, 9000);
+            INSERT INTO port_reservations (id, scope_id, instance_id, host_ip, protocol, host_port, status)
+                VALUES ('old', 'scope', 'instance', '127.0.0.1', 'tcp', 15432, 'committed'),
+                       ('unchanged', 'scope', 'instance', '127.0.0.1', 'tcp', 19000, 'committed');
+            INSERT INTO runtime_observations (instance_id, container_id, runtime_state, freshness)
+                VALUES ('instance', NULL, 'absent', 'fresh');")?;
+        Ok(())
+    }).unwrap();
+    let request = PortEditRequest {
+        receipt: RequestReceipt {
+            scope_id: "scope".into(),
+            request_id: "edit-1".into(),
+            plan_id: None,
+            confirmed_revision: 1,
+            request_hash: "a".repeat(64),
+            instance_id: "instance".into(),
+            operation_id: "edit".into(),
+        },
+        expected_instance_revision: 1,
+        old_spec_revision: 1,
+        ports: vec![
+            PortAllocation {
+                slot: "db".into(),
+                host_ip: "127.0.0.1".into(),
+                host_port: 15433,
+                container_port: 5432,
+            },
+            PortAllocation {
+                slot: "metrics".into(),
+                host_ip: "127.0.0.1".into(),
+                host_port: 19000,
+                container_port: 9000,
+            },
+        ],
+    };
+    let receipt = db.begin_port_edit(&request).unwrap();
+    let state = db.confirmed_create(&receipt).unwrap();
+    assert_eq!(state.spec_revision, 2);
+    assert_eq!(
+        state
+            .ports
+            .iter()
+            .find(|port| port.slot == "db")
+            .unwrap()
+            .host_port,
+        15433
+    );
+    let statuses: Vec<String> = db
+        .read(|db| {
+            let mut stmt = db.prepare(
+                "SELECT status FROM port_reservations WHERE instance_id = 'instance' AND host_port IN (15432, 15433, 19000) ORDER BY host_port, status",
+            )?;
+            Ok(stmt
+                .query_map([], |row| row.get(0))?
+                .collect::<Result<Vec<_>, _>>()?)
+        })
+        .unwrap();
+    assert!(statuses.iter().any(|status| status == "held"));
+    assert!(statuses.iter().any(|status| status == "committed"));
 }
 
 #[test]

@@ -14,5 +14,11 @@ CREATE TABLE operation_steps (
     CHECK ((outcome IS NULL) = (observed_at IS NULL))
 );
 
-INSERT INTO operation_steps SELECT * FROM operation_steps_v8;
+INSERT INTO operation_steps (
+    operation_id, sequence, attempt, command_kind, resource_id,
+    expected_result, outcome, recorded_at, observed_at
+)
+SELECT operation_id, sequence, attempt, command_kind, resource_id,
+       expected_result, outcome, recorded_at, observed_at
+FROM operation_steps_v8;
 DROP TABLE operation_steps_v8;

@@ -384,6 +384,17 @@ async fn run_locked(
         .verify_stopped(&expected)
         .await
         .map_err(|error| fail(database, operation_id, "observe", map_docker(error)))?;
+    record(
+        database,
+        operation_id,
+        3,
+        StepCommand::Observe,
+        ExpectedResult::ContainerStopped,
+        &id,
+    )?;
+    database
+        .finish_step(operation_id, 3, StepOutcome::Succeeded)
+        .map_err(PortEditError::Store)?;
     database
         .complete_port_edit(operation_id, &id)
         .map_err(PortEditError::Store)?;

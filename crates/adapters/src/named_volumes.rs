@@ -667,6 +667,115 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn saved_observation_distinguishes_absent_foreign_and_unavailable_volumes() {
+        let fixture = fixture();
+        for presence in [
+            StoragePresence::NotMaterialized,
+            StoragePresence::Present,
+            StoragePresence::Missing,
+            StoragePresence::Unverified,
+        ] {
+            fixture
+                .worker
+                .set_storage_presence(INSTANCE, "data", presence)
+                .unwrap();
+            let expected = if presence == StoragePresence::Present {
+                StoragePresence::Missing
+            } else {
+                presence
+            };
+            assert_saved_observation(&fixture, Ok(expected)).await;
+        }
+        fs::write(fixture.root.path().join("volume.json"), VOLUME_JSON).unwrap();
+        assert_saved_observation(&fixture, Ok(StoragePresence::Unverified)).await;
+        fs::write(fixture.root.path().join("volume.json"), EMPTY_VOLUME_JSON).unwrap();
+        assert_saved_observation(&fixture, Ok(StoragePresence::Unverified)).await;
+        fs::write(
+            fixture.root.path().join("docker-mock"),
+            "#!/bin/sh\nexit 1\n",
+        )
+        .unwrap();
+        assert_saved_observation(&fixture, Err(NamedVolumeError::Backend)).await;
+    }
+
+    #[tokio::test]
+    async fn saved_observation_requires_successful_birth_and_never_completes_pending_steps() {
+        for outcome in [
+            None,
+            Some(StepOutcome::Failed),
+            Some(StepOutcome::Unknown),
+            Some(StepOutcome::Succeeded),
+        ] {
+            let fixture = fixture();
+            fixture
+                .worker
+                .record_step(&StepIntent {
+                    operation_id: OPERATION.into(),
+                    sequence: 1,
+                    attempt: 1,
+                    command_kind: StepCommand::CreateVolume,
+                    resource_id: VOLUME.into(),
+                    expected_result: ExpectedResult::VolumeCreated,
+                })
+                .unwrap();
+            if let Some(outcome) = outcome {
+                fixture.worker.finish_step(OPERATION, 1, outcome).unwrap();
+            }
+            let succeeded = outcome == Some(StepOutcome::Succeeded);
+            fs::write(fixture.root.path().join("volume.json"), VOLUME_JSON).unwrap();
+            let present = if succeeded {
+                StoragePresence::Present
+            } else {
+                StoragePresence::Unverified
+            };
+            assert_saved_observation(&fixture, Ok(present)).await;
+            fs::write(fixture.root.path().join("volume.json"), EMPTY_VOLUME_JSON).unwrap();
+            assert_saved_observation(&fixture, Ok(StoragePresence::Unverified)).await;
+            fs::remove_file(fixture.root.path().join("volume.json")).unwrap();
+            let absent = if succeeded {
+                StoragePresence::Missing
+            } else {
+                StoragePresence::Unverified
+            };
+            assert_saved_observation(&fixture, Ok(absent)).await;
+        }
+    }
+
+    async fn assert_saved_observation(
+        fixture: &Fixture,
+        expected: Result<StoragePresence, NamedVolumeError>,
+    ) {
+        let entry = fixture
+            .worker
+            .storage_allocation(INSTANCE, "data")
+            .unwrap()
+            .unwrap();
+        let steps = fixture
+            .worker
+            .steps_for_resource(OPERATION, VOLUME)
+            .unwrap();
+        assert_eq!(
+            fixture
+                .storage
+                .observe_saved_volume(&entry, &fixture.worker)
+                .await,
+            expected
+        );
+        assert_eq!(
+            fixture.worker.storage_allocation(INSTANCE, "data").unwrap(),
+            Some(entry)
+        );
+        assert_eq!(
+            fixture
+                .worker
+                .steps_for_resource(OPERATION, VOLUME)
+                .unwrap(),
+            steps
+        );
+        assert!(!fixture.root.path().join("create-count").exists());
+    }
+
+    #[tokio::test]
     async fn create_is_journaled_labeled_and_idempotently_verified() {
         let fixture = fixture();
         let first = fixture

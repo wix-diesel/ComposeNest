@@ -356,6 +356,21 @@ impl OperationJournal for DatabaseWorker {
             if current.revision != expected {
                 return Ok(Err(StoreConflict::StaleRevision));
             }
+            if intent.kind == OperationKind::Delete {
+                if confirmed != expected || old.is_some() || new.is_some() {
+                    return Ok(Err(StoreConflict::InvalidInput));
+                }
+                let retiring_revision =
+                    expected.checked_add(1).ok_or(DatabaseError::InvalidInput)?;
+                instance_entity::Entity::update_many()
+                    .col_expr(instance_entity::Column::Lifecycle, Expr::value("retiring"))
+                    .col_expr(
+                        instance_entity::Column::Revision,
+                        Expr::value(retiring_revision),
+                    )
+                    .filter(instance_entity::Column::Id.eq(&current.id))
+                    .exec(&transaction)?;
+            }
             operation_entity::Entity::insert(operation_entity::ActiveModel {
                 id: Set(intent.id),
                 instance_id: Set(intent.instance_id),

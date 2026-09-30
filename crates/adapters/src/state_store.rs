@@ -42,7 +42,7 @@ fn method_from_name(value: &str) -> Option<StorageMethod> {
     }
 }
 
-fn presence_name(presence: StoragePresence) -> &'static str {
+pub(crate) fn presence_name(presence: StoragePresence) -> &'static str {
     match presence {
         StoragePresence::NotMaterialized => "not_materialized",
         StoragePresence::Present => "present",

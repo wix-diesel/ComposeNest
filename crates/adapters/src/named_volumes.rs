@@ -668,13 +668,13 @@ mod tests {
 
     #[tokio::test]
     async fn saved_observation_distinguishes_absent_foreign_and_unavailable_volumes() {
-        let fixture = fixture();
         for presence in [
             StoragePresence::NotMaterialized,
             StoragePresence::Present,
             StoragePresence::Missing,
             StoragePresence::Unverified,
         ] {
+            let fixture = fixture();
             fixture
                 .worker
                 .set_storage_presence(INSTANCE, "data", presence)
@@ -686,6 +686,7 @@ mod tests {
             };
             assert_saved_observation(&fixture, Ok(expected)).await;
         }
+        let fixture = fixture();
         fs::write(fixture.root.path().join("volume.json"), VOLUME_JSON).unwrap();
         assert_saved_observation(&fixture, Ok(StoragePresence::Unverified)).await;
         fs::write(fixture.root.path().join("volume.json"), EMPTY_VOLUME_JSON).unwrap();

@@ -2,7 +2,13 @@
 
 mod support;
 
-use std::{collections::BTreeMap, fs, net::TcpListener, os::unix::fs::PermissionsExt};
+use std::{
+    collections::BTreeMap,
+    fs,
+    net::TcpListener,
+    os::unix::fs::PermissionsExt,
+    sync::atomic::{AtomicU16, Ordering},
+};
 
 use composenest_adapters::{
     artifact_store::{ArtifactInput, ArtifactStore},
@@ -31,6 +37,19 @@ use serde_json::json;
 
 const ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const CONTAINER: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+fn available_fixture_port() -> u16 {
+    // Avoid ephemeral ports reused by child processes, and leave room for each
+    // fixture's recovery proposals without overlapping parallel fixtures.
+    static NEXT_PORT: AtomicU16 = AtomicU16::new(20_000);
+    loop {
+        let port = NEXT_PORT.fetch_add(32, Ordering::Relaxed);
+        assert!(port < 40_000, "fixture port range exhausted");
+        if TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return port;
+        }
+    }
+}
 
 struct PriorCli(bool);
 impl RecoveryProbe for PriorCli {
@@ -75,11 +94,7 @@ impl Fixture {
         instance.id = ID.into();
         instance.project_name = format!("cn-{ID}");
         instance.storage = storage;
-        instance.ports[0].host_port = TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
+        instance.ports[0].host_port = available_fixture_port();
         db.commit_instance(&instance).unwrap();
         let receipt = RequestReceipt {
             scope_id: "scope".into(),
@@ -98,11 +113,7 @@ impl Fixture {
             })
             .unwrap();
             let mut ports = instance.ports.clone();
-            ports[0].host_port = TcpListener::bind("127.0.0.1:0")
-                .unwrap()
-                .local_addr()
-                .unwrap()
-                .port();
+            ports[0].host_port = available_fixture_port();
             db.begin_port_edit(&PortEditRequest {
                 receipt: receipt.clone(),
                 expected_instance_revision: 1,

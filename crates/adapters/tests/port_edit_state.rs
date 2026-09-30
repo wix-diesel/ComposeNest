@@ -126,13 +126,14 @@ fn reserves_only_changed_port_and_switches_after_verified_artifact() {
 #[test]
 fn rejects_duplicate_port_and_does_not_leave_pending_records() {
     let (_root, db, mut request) = fixture();
-    request.ports[0].host_port = 15432;
+    request.ports[0].host_port = 19000;
     assert_eq!(
         db.begin_port_edit(&request),
         Err(StoreConflict::InvalidInput)
     );
     assert_eq!(status(&db, 15432).as_deref(), Some("committed"));
     assert_eq!(status(&db, 15433), None);
+    assert_eq!(status(&db, 19000).as_deref(), Some("committed"));
     let count: i64 = db
         .read(|db| Ok(db.query_row("SELECT COUNT(*) FROM pending_changes", [], |row| row.get(0))?))
         .unwrap();

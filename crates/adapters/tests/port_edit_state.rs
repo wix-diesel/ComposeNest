@@ -3,7 +3,8 @@ use std::fs;
 use composenest_adapters::sqlite::DatabaseWorker;
 use composenest_application::{
     operation_journal::RequestReceipt,
-    port_edit::{PortEditRequest, PortEditStore},
+    operation_journal::{OperationJournal, OperationStatus},
+    port_edit::{PortEditRequest, PortEditStore, PortRecoveryRequest, PortRecoveryStore},
     state_store::{PortAllocation, StoreConflict},
 };
 
@@ -105,6 +106,7 @@ fn reserves_only_changed_port_and_switches_after_verified_artifact() {
         db.execute_batch("INSERT INTO artifacts (id, instance_id, spec_revision, generator_version, manifest_hash, placement, publication_operation_id)
             VALUES ('instance-r2', 'instance', 2, 'v1', 'hash', 'published', 'edit');
             UPDATE operations SET status = 'Executing' WHERE id = 'edit';")?;
+        db.execute("INSERT INTO operation_steps (operation_id, sequence, attempt, command_kind, resource_id, expected_result, outcome, observed_at) VALUES ('edit', 1, 1, 'observe', ?1, 'container_stopped', 'succeeded', CURRENT_TIMESTAMP)", ["a".repeat(64)])?;
         Ok(())
     }).unwrap();
     db.complete_port_edit("edit", &id).unwrap();
@@ -150,4 +152,104 @@ fn rejects_privileged_host_port_before_recording_intent() {
     );
     assert_eq!(status(&db, 15432).as_deref(), Some("committed"));
     assert_eq!(status(&db, 80), None);
+}
+
+fn publish_and_observe(db: &DatabaseWorker, revision: u64, ready: bool) {
+    db.write(move |db| {
+        db.execute("INSERT INTO artifacts (id, instance_id, spec_revision, generator_version, manifest_hash, placement, publication_operation_id) VALUES (?1, 'instance', ?2, 'v1', 'hash', 'published', 'edit')", rusqlite::params![format!("instance-r{revision}"), revision])?;
+        db.execute("INSERT INTO operation_steps (operation_id, sequence, attempt, command_kind, resource_id, expected_result, outcome, observed_at) VALUES ('edit', 1, 1, 'observe', ?1, ?2, 'succeeded', CURRENT_TIMESTAMP)", rusqlite::params!["a".repeat(64), if ready { "container_running" } else { "container_stopped" }])?;
+        Ok(())
+    }).unwrap();
+}
+
+#[test]
+fn uncertain_change_keeps_both_ports_until_stopped_evidence_completes_it() {
+    let (_root, db, request) = fixture();
+    db.begin_port_edit(&request).unwrap();
+    db.set_status("edit", OperationStatus::OutcomeUnknown, "recreate")
+        .unwrap();
+    assert_eq!(db.port_change_revisions("edit").unwrap(), (1, 2));
+    assert_eq!(
+        db.complete_port_edit("edit", &"a".repeat(64)),
+        Err(StoreConflict::InvalidInput)
+    );
+    assert_eq!(status(&db, 15432).as_deref(), Some("committed"));
+    assert_eq!(status(&db, 15433).as_deref(), Some("held"));
+    publish_and_observe(&db, 2, false);
+    db.complete_port_edit("edit", &"a".repeat(64)).unwrap();
+    assert_eq!(status(&db, 15432).as_deref(), Some("released"));
+    assert_eq!(status(&db, 15433).as_deref(), Some("committed"));
+}
+
+#[test]
+fn explicit_restore_releases_candidates_only_after_old_stopped_evidence() {
+    let (_root, db, request) = fixture();
+    db.begin_port_edit(&request).unwrap();
+    db.set_status("edit", OperationStatus::Failed, "restore")
+        .unwrap();
+    publish_and_observe(&db, 1, false);
+    db.complete_port_restore("edit", &"a".repeat(64)).unwrap();
+    assert_eq!(status(&db, 15432).as_deref(), Some("committed"));
+    assert_eq!(status(&db, 15433).as_deref(), Some("released"));
+    let result: (i64, String) = db.read(|db| Ok(db.query_row("SELECT i.applied_spec_revision, o.status FROM instances i JOIN operations o ON o.instance_id = i.id", [], |row| Ok((row.get(0)?, row.get(1)?)))?)).unwrap();
+    assert_eq!(result, (1, "Abandoned".into()));
+}
+
+#[test]
+fn create_and_clone_reproposal_keep_all_candidates_and_require_ready() {
+    for kind in ["create", "clone"] {
+        let (_root, db, request) = fixture();
+        db.begin_port_edit(&request).unwrap();
+        let kind = kind.to_owned();
+        db.write(move |db| {
+            db.execute("UPDATE operations SET kind = ?1, status = 'AwaitingDecision' WHERE id = 'edit'", [kind])?;
+            db.execute_batch("UPDATE instances SET applied_spec_revision = NULL; UPDATE instance_specs SET inputs_json = '{\"password\":\"stable-secret\"}' WHERE revision = 1;
+                INSERT INTO storage_allocations (instance_id, slot, method, resource_identity, ownership_evidence, ownership, presence, initialization) VALUES ('instance', 'data', 'bind', 'same-storage', 'evidence', 'assigned', 'present', 'may_have_initialized');")?;
+            Ok(())
+        }).unwrap();
+        let mut recovery = PortRecoveryRequest {
+            receipt: request.receipt,
+            expected_candidate_revision: 2,
+            ports: request.ports,
+        };
+        recovery.ports[0].host_port = 15434;
+        assert_eq!(db.confirm_port_recovery(&recovery), Ok(3));
+        assert_eq!(
+            db.confirm_port_recovery(&recovery),
+            Err(StoreConflict::InvalidInput)
+        );
+        assert_eq!(status(&db, 15433).as_deref(), Some("held"));
+        recovery.expected_candidate_revision = 3;
+        recovery.ports[0].host_port = 15435;
+        assert_eq!(db.confirm_port_recovery(&recovery), Ok(4));
+        assert_eq!(db.port_change_revisions("edit").unwrap(), (1, 4));
+        publish_and_observe(&db, 4, false);
+        assert_eq!(
+            db.complete_port_edit("edit", &"a".repeat(64)),
+            Err(StoreConflict::InvalidInput)
+        );
+        db.write(|db| {
+            db.execute(
+                "UPDATE operation_steps SET expected_result = 'container_running'",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        db.complete_port_edit("edit", &"a".repeat(64)).unwrap();
+        for port in [15432, 15433, 15434] {
+            assert_eq!(status(&db, port).as_deref(), Some("released"));
+        }
+        assert_eq!(status(&db, 15435).as_deref(), Some("committed"));
+        let saved: (String, String, String, String) = db.read(|db| Ok(db.query_row("SELECT s.inputs_json, a.resource_identity, a.initialization, o.phase FROM instance_specs s JOIN storage_allocations a ON a.instance_id = s.instance_id JOIN operations o ON o.instance_id = s.instance_id WHERE s.revision = 4", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))?)).unwrap();
+        assert_eq!(
+            saved,
+            (
+                "{\"password\":\"stable-secret\"}".into(),
+                "same-storage".into(),
+                "ready_observed".into(),
+                "ready".into()
+            )
+        );
+    }
 }

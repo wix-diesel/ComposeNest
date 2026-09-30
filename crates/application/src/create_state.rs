@@ -34,7 +34,7 @@ pub struct ConfirmedCreate {
 
 /// Persists creation milestones without releasing confirmed allocations on failure.
 pub trait CreateStateStore: Send + Sync {
-    /// Reads confirmed records for an accepted create, clone, or lifecycle request.
+    /// Reads confirmed records for accepted requests and unresolved port recovery.
     fn confirmed_create(&self, receipt: &RequestReceipt) -> Result<ConfirmedCreate, StoreConflict>;
 
     /// Records proof from an exclusively created bind directory before it can be mounted.

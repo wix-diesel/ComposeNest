@@ -5,7 +5,7 @@ use composenest_application::{
     create_state::CreateStateStore,
     lifecycle_operation::LifecycleState,
     operation_journal::{OperationKind, RequestReceipt},
-    port_edit::{PortEditRequest, PortEditStore},
+    port_edit::{PortEditRequest, PortEditStore, PortRecoveryRequest, PortRecoveryStore},
     state_store::{PortAllocation, StorageAllocation, StoreConflict},
 };
 use composenest_domain::instance::RuntimeStatus;
@@ -78,6 +78,38 @@ fn create_and_clone_load_the_same_confirmed_records() {
         assert_eq!(state.inputs_json, r#"{"password":"secret"}"#);
         assert_eq!(state.ports[0].host_port, 15432);
         assert_eq!(state.storage.len(), 1);
+    }
+}
+
+#[test]
+fn recovery_loads_new_ports_with_original_secrets_storage_and_receipt() {
+    for kind in ["create", "clone"] {
+        let (_root, db, receipt) = fixture(kind);
+        db.write(|db| {
+            db.execute("UPDATE operations SET status = 'Failed'", [])?;
+            Ok(())
+        })
+        .unwrap();
+        let ports = vec![PortAllocation {
+            slot: "tcp".into(),
+            host_ip: "127.0.0.1".into(),
+            host_port: 15433,
+            container_port: 5432,
+        }];
+        db.confirm_port_recovery(&PortRecoveryRequest {
+            receipt: receipt.clone(),
+            expected_candidate_revision: 1,
+            ports,
+        })
+        .unwrap();
+        let saved = db.confirmed_create(&receipt).unwrap();
+        assert_eq!(saved.spec_revision, 2);
+        assert_eq!(saved.ports[0].host_port, 15433);
+        assert_eq!(saved.inputs_json, r#"{"password":"secret"}"#);
+        assert_eq!(
+            saved.storage[0].allocation.resource_identity,
+            "data/instance/data"
+        );
     }
 }
 
@@ -246,7 +278,7 @@ fn edit_port_confirmed_create_accepts_held_and_committed_reservations() {
 #[test]
 fn confirmed_create_rejects_inconsistent_committed_records() {
     for sql in [
-        "UPDATE operations SET status='Failed' WHERE id='operation'",
+        "UPDATE operations SET status='Succeeded', completed_at=CURRENT_TIMESTAMP WHERE id='operation'",
         "UPDATE operations SET expected_instance_revision=2 WHERE id='operation'",
         "UPDATE template_snapshots SET selected_version='2' WHERE id='snapshot'",
         "UPDATE port_reservations SET status='released' WHERE id='reservation'",

@@ -25,6 +25,15 @@ fn create_operation(kind: &str) -> bool {
 
 impl CreateStateStore for DatabaseWorker {
     fn confirmed_create(&self, receipt: &RequestReceipt) -> Result<ConfirmedCreate, StoreConflict> {
+        let pending = self
+            .read(|db| {
+                Ok(db.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM pending_changes WHERE operation_id = ?1)",
+                    [&receipt.operation_id],
+                    |row| row.get::<_, bool>(0),
+                )?)
+            })
+            .map_err(map_error)?;
         let receipt = receipt.clone();
         self.orm_read(move |db| {
             let saved = request_receipt::Entity::find_by_id((
@@ -54,15 +63,21 @@ impl CreateStateStore for DatabaseWorker {
                 || op.instance_id != owned.id
                 || owned.scope_id != receipt.scope_id
                 || owned.lifecycle != "managed"
-                || op.status != "Accepted"
+                || !(op.status == "Accepted"
+                    || ((pending || create_operation(&op.kind))
+                        && matches!(
+                            op.status.as_str(),
+                            "Executing" | "Failed" | "AwaitingDecision" | "OutcomeUnknown"
+                        )))
                 || (lifecycle
                     && (op.old_spec_revision != owned.applied_spec_revision
                         || op.new_spec_revision.is_some()))
                 || (edit
                     && (op.old_spec_revision != owned.applied_spec_revision
-                        || op.new_spec_revision
-                            != op.old_spec_revision.and_then(|old| old.checked_add(1))))
-                || (create_operation(&op.kind) && op.new_spec_revision != Some(1))
+                        || (!pending
+                            && op.new_spec_revision
+                                != op.old_spec_revision.and_then(|old| old.checked_add(1)))))
+                || (create_operation(&op.kind) && !pending && op.new_spec_revision != Some(1))
                 || op.expected_instance_revision != owned.revision
             {
                 return Err(DatabaseError::InvalidInput);
@@ -121,13 +136,13 @@ impl CreateStateStore for DatabaseWorker {
                 .collect::<Result<Vec<_>, DatabaseError>>()?;
             let reservations = port_reservation::Entity::find()
                 .filter(port_reservation::Column::InstanceId.eq(&owned.id))
-                .filter(port_reservation::Column::Status.is_in(if edit {
+                .filter(port_reservation::Column::Status.is_in(if edit || pending {
                     vec!["committed", "held"]
                 } else {
                     vec!["committed"]
                 }))
                 .all(db)?;
-            if (!edit && ports.len() != reservations.len())
+            if (!edit && !pending && ports.len() != reservations.len())
                 || ports.iter().any(|port| {
                     !reservations.iter().any(|reserved| {
                         reserved.scope_id == owned.scope_id

@@ -103,7 +103,7 @@ async fn stopped_before_edit(
     }
 }
 
-fn map_docker(error: CreateDockerError) -> PortEditError {
+pub(crate) fn map_docker(error: CreateDockerError) -> PortEditError {
     match error {
         CreateDockerError::Unavailable | CreateDockerError::OutcomeUnknown => {
             PortEditError::OutcomeUnknown
@@ -112,14 +112,14 @@ fn map_docker(error: CreateDockerError) -> PortEditError {
     }
 }
 
-fn map_effect(error: LifecycleEffectError) -> PortEditError {
+pub(crate) fn map_effect(error: LifecycleEffectError) -> PortEditError {
     match error {
         LifecycleEffectError::Rejected => PortEditError::Rejected,
         LifecycleEffectError::OutcomeUnknown => PortEditError::OutcomeUnknown,
     }
 }
 
-fn fail(
+pub(crate) fn fail(
     database: &DatabaseWorker,
     operation_id: &str,
     phase: &str,
@@ -127,6 +127,8 @@ fn fail(
 ) -> PortEditError {
     let status = if error == PortEditError::OutcomeUnknown {
         OperationStatus::OutcomeUnknown
+    } else if matches!(error, PortEditError::Port(_)) {
+        OperationStatus::AwaitingDecision
     } else {
         OperationStatus::Failed
     };
@@ -227,6 +229,15 @@ async fn run_locked(
     let confirmed = database
         .confirmed_create(&receipt)
         .map_err(PortEditError::Store)?;
+    let artifact_id = format!("{}-r{}", receipt.instance_id, confirmed.spec_revision);
+    let create = DockerCreate::new(
+        &docker,
+        &artifacts,
+        &artifact_id,
+        &context.project,
+        &receipt.instance_id,
+    )
+    .map_err(map_docker)?;
     let expected_ports: BTreeMap<_, _> = request
         .ports
         .iter()
@@ -384,6 +395,17 @@ async fn run_locked(
         .verify_stopped(&expected)
         .await
         .map_err(|error| fail(database, operation_id, "observe", map_docker(error)))?;
+    record(
+        database,
+        operation_id,
+        3,
+        StepCommand::Observe,
+        ExpectedResult::ContainerStopped,
+        &id,
+    )?;
+    database
+        .finish_step(operation_id, 3, StepOutcome::Succeeded)
+        .map_err(PortEditError::Store)?;
     database
         .complete_port_edit(operation_id, &id)
         .map_err(PortEditError::Store)?;

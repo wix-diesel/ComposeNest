@@ -320,7 +320,7 @@ impl<'a> ArtifactStore<'a> {
     }
 }
 
-fn validate_id(id: &str) -> Result<(), ArtifactError> {
+pub(crate) fn validate_id(id: &str) -> Result<(), ArtifactError> {
     if id.is_empty()
         || id.len() > 128
         || !id

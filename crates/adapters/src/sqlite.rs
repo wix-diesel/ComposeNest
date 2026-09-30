@@ -21,6 +21,8 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../../migrations/0006_applied_spec.sql"),
     include_str!("../../../migrations/0007_bind_steps.sql"),
     include_str!("../../../migrations/0008_restart_steps.sql"),
+    include_str!("../../../migrations/0009_delete_steps.sql"),
+    include_str!("../../../migrations/0010_storage_observation.sql"),
 ];
 const DATABASE_FILE: &str = "composenest.sqlite";
 
@@ -66,6 +68,7 @@ pub struct DatabaseWorker {
     sender: Option<Sender<Job>>,
     thread: Option<JoinHandle<()>>,
     database_path: PathBuf,
+    management_root: PathBuf,
 }
 
 impl DatabaseWorker {
@@ -104,7 +107,13 @@ impl DatabaseWorker {
             sender: Some(sender),
             thread: Some(thread),
             database_path,
+            management_root: management_root.to_path_buf(),
         })
+    }
+
+    /// Returns the protected root used to open this database.
+    pub fn management_root(&self) -> &Path {
+        &self.management_root
     }
 
     /// Runs a short write operation on the dedicated database thread.

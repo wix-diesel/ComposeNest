@@ -102,6 +102,14 @@ fn each_snapshot_version_uses_its_own_storage_target_and_preserves_values() {
         );
         assert_eq!(main["healthcheck"]["test"][0].as_str(), Some("CMD"));
         assert_eq!(main["volumes"][0]["target"].as_str(), Some(target));
+        assert_eq!(
+            doc["networks"]["default"]["labels"]["io.composenest.scope"].as_str(),
+            Some("scope-a")
+        );
+        assert_eq!(
+            doc["networks"]["default"]["labels"]["io.composenest.instance"].as_str(),
+            Some("0000000000000000000000000000002a")
+        );
         assert!(main["container_name"].is_badvalue());
     }
 }

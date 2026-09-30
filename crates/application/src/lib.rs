@@ -17,6 +17,7 @@ pub mod operation_recovery;
 pub mod operation_runner;
 pub mod port_edit;
 pub mod query_service;
+pub mod retained_storage;
 pub mod state_store;
 pub mod storage;
 pub mod template_catalog;

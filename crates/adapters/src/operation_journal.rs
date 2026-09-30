@@ -232,6 +232,7 @@ fn step_command(value: &str) -> Option<StepCommand> {
         "compose_stop" => StepCommand::ComposeStop,
         "compose_restart" => StepCommand::ComposeRestart,
         "remove_container" => StepCommand::RemoveContainer,
+        "remove_network" => StepCommand::RemoveNetwork,
         "observe" => StepCommand::Observe,
         _ => return None,
     })

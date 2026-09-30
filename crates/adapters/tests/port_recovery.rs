@@ -251,17 +251,24 @@ exit 1
         .unwrap();
     }
     async fn run(&self, action: PortRecoveryAction) -> PortRecoveryResult {
+        self.try_run(true, action).await.unwrap()
+    }
+
+    async fn try_run(
+        &self,
+        exited: bool,
+        action: PortRecoveryAction,
+    ) -> Result<PortRecoveryResult, composenest_adapters::port_edit_stages::PortEditError> {
         recover_port_change(
             &self.db,
             &self.probe,
             self.root.path(),
             &OperationRunner::new(),
             &self.receipt,
-            &PriorCli(true),
+            &PriorCli(exited),
             action,
         )
         .await
-        .unwrap()
     }
 
     fn active_reservations(&self) -> i64 {
@@ -313,17 +320,10 @@ async fn interrupted_application_completes_without_another_create_or_start() {
         .db
         .set_status("operation", OperationStatus::OutcomeUnknown, "recreate")
         .unwrap();
-    let held = recover_port_change(
-        &fixture.db,
-        &fixture.probe,
-        fixture.root.path(),
-        &OperationRunner::new(),
-        &fixture.receipt,
-        &PriorCli(false),
-        PortRecoveryAction::Retry,
-    )
-    .await
-    .unwrap();
+    let held = fixture
+        .try_run(false, PortRecoveryAction::Retry)
+        .await
+        .unwrap();
     assert!(matches!(held, PortRecoveryResult::Held));
     assert!(matches!(
         fixture.run(PortRecoveryAction::Reconcile).await,
@@ -335,7 +335,7 @@ async fn interrupted_application_completes_without_another_create_or_start() {
 
 #[tokio::test]
 async fn ambiguous_ownership_artifact_and_storage_never_release_reservations() {
-    for failure in ["owner", "artifact", "storage", "engine"] {
+    for failure in ["owner", "artifact", "storage", "engine", "old-container"] {
         let fixture = Fixture::new(OperationKind::EditPort).await;
         fixture.current(2);
         match failure {
@@ -369,18 +369,21 @@ async fn ambiguous_ownership_artifact_and_storage_never_release_reservations() {
                     .replace("\"ID\":\"engine\"", "\"ID\":\"foreign\"");
                 fs::write(&fixture.probe.executable, script).unwrap();
             }
+            "old-container" => {
+                fixture
+                    .db
+                    .write(|db| {
+                        db.execute(
+                            "INSERT INTO runtime_observations (instance_id, container_id, runtime_state, freshness) VALUES (?1, ?2, 'stopped', 'fresh') ON CONFLICT(instance_id) DO UPDATE SET container_id = excluded.container_id",
+                            rusqlite::params![ID, "c".repeat(64)],
+                        )?;
+                        Ok(())
+                    })
+                    .unwrap();
+            }
             _ => unreachable!(),
         }
-        let result = recover_port_change(
-            &fixture.db,
-            &fixture.probe,
-            fixture.root.path(),
-            &OperationRunner::new(),
-            &fixture.receipt,
-            &PriorCli(true),
-            PortRecoveryAction::Retry,
-        )
-        .await;
+        let result = fixture.try_run(true, PortRecoveryAction::Retry).await;
         assert!(!matches!(result, Ok(PortRecoveryResult::Completed(_))));
         assert_eq!(fixture.active_reservations(), 2);
         let calls = fs::read_to_string(fixture.root.path().join("calls")).unwrap();
@@ -405,20 +408,16 @@ async fn newly_applied_candidate_conflict_requires_confirmation_again() {
     fixture.prepare_confirmed_runtime(ports.clone()).await;
     fs::write(fixture.root.path().join("start-fail"), "").unwrap();
     assert!(
-        recover_port_change(
-            &fixture.db,
-            &fixture.probe,
-            fixture.root.path(),
-            &OperationRunner::new(),
-            &fixture.receipt,
-            &PriorCli(true),
-            PortRecoveryAction::Confirm {
-                candidate_revision: 1,
-                ports
-            }
-        )
-        .await
-        .is_err()
+        fixture
+            .try_run(
+                true,
+                PortRecoveryAction::Confirm {
+                    candidate_revision: 1,
+                    ports
+                }
+            )
+            .await
+            .is_err()
     );
     let competitor = TcpListener::bind(("127.0.0.1", first["db"])).unwrap();
     let PortRecoveryResult::Proposal(PortPlan::Complete(next)) = fixture
@@ -525,20 +524,16 @@ async fn creation_conflict_proposes_without_changes_and_rechecks_confirmation() 
         let mut ports = old.ports;
         ports[0].host_port = proposal["db"];
         assert!(
-            recover_port_change(
-                &fixture.db,
-                &fixture.probe,
-                fixture.root.path(),
-                &OperationRunner::new(),
-                &fixture.receipt,
-                &PriorCli(true),
-                PortRecoveryAction::Confirm {
-                    candidate_revision: 1,
-                    ports
-                }
-            )
-            .await
-            .is_err()
+            fixture
+                .try_run(
+                    true,
+                    PortRecoveryAction::Confirm {
+                        candidate_revision: 1,
+                        ports
+                    }
+                )
+                .await
+                .is_err()
         );
         let PortRecoveryResult::Proposal(PortPlan::Complete(next)) = fixture
             .run(PortRecoveryAction::Propose(PortCursor::default()))

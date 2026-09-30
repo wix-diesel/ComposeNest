@@ -7,6 +7,7 @@ pub mod clone_plan;
 pub mod create_operation;
 pub mod create_plan;
 pub mod create_state;
+pub mod delete_operation;
 pub mod host_ports;
 pub mod image_resolution;
 pub mod lifecycle_operation;

@@ -263,6 +263,18 @@ exit 1
         .await
         .unwrap()
     }
+
+    fn active_reservations(&self) -> i64 {
+        self.db
+            .read(|db| {
+                Ok(db.query_row(
+                    "SELECT COUNT(*) FROM port_reservations WHERE status IN ('held', 'committed')",
+                    [],
+                    |row| row.get(0),
+                )?)
+            })
+            .unwrap()
+    }
 }
 
 fn inspection(expected: &ExpectedContainer, ready: bool) -> Vec<u8> {
@@ -370,17 +382,7 @@ async fn ambiguous_ownership_artifact_and_storage_never_release_reservations() {
         )
         .await;
         assert!(!matches!(result, Ok(PortRecoveryResult::Completed(_))));
-        let active: i64 = fixture
-            .db
-            .read(|db| {
-                Ok(db.query_row(
-                    "SELECT COUNT(*) FROM port_reservations WHERE status IN ('held', 'committed')",
-                    [],
-                    |row| row.get(0),
-                )?)
-            })
-            .unwrap();
-        assert_eq!(active, 2);
+        assert_eq!(fixture.active_reservations(), 2);
         let calls = fs::read_to_string(fixture.root.path().join("calls")).unwrap();
         assert!(!calls.contains(" create ") && !calls.contains("container start"));
     }
@@ -430,17 +432,7 @@ async fn newly_applied_candidate_conflict_requires_confirmation_again() {
         fixture.db.pending_ports("operation").unwrap()[0].host_port,
         first["db"]
     );
-    let active: i64 = fixture
-        .db
-        .read(|db| {
-            Ok(db.query_row(
-                "SELECT COUNT(*) FROM port_reservations WHERE status IN ('held', 'committed')",
-                [],
-                |row| row.get(0),
-            )?)
-        })
-        .unwrap();
-    assert_eq!(active, 2);
+    assert_eq!(fixture.active_reservations(), 2);
     fs::remove_file(fixture.root.path().join("start-fail")).unwrap();
     let mut ports = fixture.db.confirmed_create(&fixture.receipt).unwrap().ports;
     ports[0].host_port = next["db"];
@@ -454,17 +446,7 @@ async fn newly_applied_candidate_conflict_requires_confirmation_again() {
             .await,
         PortRecoveryResult::Completed(_)
     ));
-    let active: i64 = fixture
-        .db
-        .read(|db| {
-            Ok(db.query_row(
-                "SELECT COUNT(*) FROM port_reservations WHERE status IN ('held', 'committed')",
-                [],
-                |row| row.get(0),
-            )?)
-        })
-        .unwrap();
-    assert_eq!(active, 1);
+    assert_eq!(fixture.active_reservations(), 1);
     drop((occupied, competitor));
 }
 
@@ -500,6 +482,26 @@ async fn retry_and_restore_apply_the_selected_artifact_without_starting() {
             })
             .unwrap();
         assert_eq!(applied, target);
+        if restore {
+            let mut receipt = fixture.receipt.clone();
+            receipt.request_id = "next-edit".into();
+            receipt.operation_id = "next-operation".into();
+            receipt.confirmed_revision = 2;
+            let ports = fixture.db.read(|db| Ok(vec![db.query_row("SELECT slot, host_ip, host_port, container_port FROM port_bindings WHERE spec_revision = 2", [], |row| Ok(composenest_application::state_store::PortAllocation { slot: row.get(0)?, host_ip: row.get(1)?, host_port: row.get(2)?, container_port: row.get(3)? }))?])).unwrap();
+            fixture
+                .db
+                .begin_port_edit(&PortEditRequest {
+                    receipt: receipt.clone(),
+                    expected_instance_revision: 2,
+                    old_spec_revision: 1,
+                    ports,
+                })
+                .unwrap();
+            assert_eq!(
+                fixture.db.confirmed_create(&receipt).unwrap().spec_revision,
+                3
+            );
+        }
         let calls = fs::read_to_string(fixture.root.path().join("calls")).unwrap();
         assert!(!calls.contains("container start"));
     }

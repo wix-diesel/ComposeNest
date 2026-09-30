@@ -38,6 +38,7 @@ pub mod artifact_store;
 pub mod create_projection;
 pub mod create_stages;
 pub mod create_state;
+pub mod delete_stages;
 pub mod delete_state;
 pub mod docker_cli;
 pub mod docker_create;

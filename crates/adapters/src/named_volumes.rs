@@ -17,7 +17,7 @@ use serde_json::Value;
 
 use crate::docker_target::BoundDocker;
 
-const INSPECT_FORMAT: &str = r#"{"Name":{{json .Name}},"Driver":{{json .Driver}},"Labels":{"io.composenest.scope":{{if .Labels}}{{json (index .Labels "io.composenest.scope")}}{{else}}null{{end}},"io.composenest.instance":{{if .Labels}}{{json (index .Labels "io.composenest.instance")}}{{else}}null{{end}},"io.composenest.slot":{{if .Labels}}{{json (index .Labels "io.composenest.slot")}}{{else}}null{{end}},"io.composenest.allocation-operation":{{if .Labels}}{{json (index .Labels "io.composenest.allocation-operation")}}{{else}}null{{end}}}}}"#;
+const INSPECT_FORMAT: &str = r#"{"Name":{{json .Name}},"Driver":{{json .Driver}},"Labels":{"io.composenest.scope":{{if .Labels}}{{json (index .Labels "io.composenest.scope")}}{{else}}null{{end}},"io.composenest.instance":{{if .Labels}}{{json (index .Labels "io.composenest.instance")}}{{else}}null{{end}},"io.composenest.slot":{{if .Labels}}{{json (index .Labels "io.composenest.slot")}}{{else}}null{{end}},"io.composenest.allocation-operation":{{if .Labels}}{{json (index .Labels "io.composenest.allocation-operation")}}{{else}}null{{end}}}}"#;
 const LABEL_SCOPE: &str = "io.composenest.scope";
 const LABEL_INSTANCE: &str = "io.composenest.instance";
 const LABEL_SLOT: &str = "io.composenest.slot";

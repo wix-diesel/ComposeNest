@@ -67,6 +67,17 @@ impl PortSnapshot {
         docker: &DockerCli,
         scope: &str,
     ) -> Result<Self, PortReason> {
+        Self::observe_recovery(db, docker, scope, None).await
+    }
+
+    /// Observes ports while excluding exactly one fully verified stopped container.
+    /// Reservations, including this instance's earlier candidates, remain active.
+    pub(crate) async fn observe_recovery(
+        db: &DatabaseWorker,
+        docker: &DockerCli,
+        scope: &str,
+        stopped_container: Option<&str>,
+    ) -> Result<Self, PortReason> {
         let reserved = db
             .orm_read(|connection| {
                 if management_scope::Entity::find_by_id(scope)
@@ -89,13 +100,24 @@ impl PortSnapshot {
                     .collect::<Result<BTreeSet<_>, _>>()
             })
             .map_err(|_| PortReason::Unavailable)?;
-        let published = tokio::time::timeout(Duration::from_secs(2), published_ports(docker))
-            .await
-            .map_err(|_| PortReason::Unavailable)??;
+        let published = tokio::time::timeout(
+            Duration::from_secs(2),
+            published_ports(docker, stopped_container),
+        )
+        .await
+        .map_err(|_| PortReason::Unavailable)??;
         Ok(Self {
             reserved,
             published,
         })
+    }
+
+    pub(crate) fn inspect_reserved_candidate(&self, port: u16) -> Result<(), PortReason> {
+        if self.published.contains(&port) {
+            Err(PortReason::Docker)
+        } else {
+            probe_loopback(port)
+        }
     }
 }
 
@@ -115,7 +137,10 @@ impl PortInspector for PortSnapshot {
     }
 }
 
-async fn published_ports(docker: &DockerCli) -> Result<BTreeSet<u16>, PortReason> {
+async fn published_ports(
+    docker: &DockerCli,
+    stopped_container: Option<&str>,
+) -> Result<BTreeSet<u16>, PortReason> {
     let list = docker
         .run(
             CommandKind::Read,
@@ -139,6 +164,9 @@ async fn published_ports(docker: &DockerCli) -> Result<BTreeSet<u16>, PortReason
     for id in ids.lines() {
         if id.len() != 64 || !id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err(PortReason::Unavailable);
+        }
+        if stopped_container == Some(id) {
+            continue;
         }
         args.push(id.into());
     }

@@ -221,7 +221,7 @@ impl PortRecoveryStore for DatabaseWorker {
 
     fn port_change_revisions(&self, operation_id: &str) -> Result<(u64, u64), StoreConflict> {
         self.read(|db| {
-            db.query_row("SELECT p.old_spec_revision, p.new_spec_revision FROM pending_changes p JOIN operations o ON o.id = p.operation_id WHERE p.operation_id = ?1 AND o.status NOT IN ('Succeeded', 'Abandoned')", [operation_id], |row| Ok((row.get(0)?, row.get(1)?))).map_err(Into::into)
+            db.query_row("SELECT p.old_spec_revision, p.new_spec_revision FROM pending_changes p JOIN operations o ON o.id = p.operation_id WHERE p.operation_id = ?1 AND o.status NOT IN ('Succeeded', 'Abandoned')", [operation_id], |row| Ok((row.get(0)?, row.get(1)?))).optional()?.ok_or(DatabaseError::Missing)
         }).map_err(map_error)
     }
 
@@ -247,14 +247,14 @@ fn finish_change(
     let container_id = container_id.to_owned();
     database.write(move |db| {
             let tx = db.transaction()?;
-            let pending: (String, i64, i64, String, String, i64, Option<i64>, String, i64) = tx.query_row(
-                "SELECT p.instance_id, p.old_spec_revision, p.new_spec_revision, o.status, i.lifecycle, i.revision, i.applied_spec_revision, o.kind, o.attempt FROM pending_changes p JOIN operations o ON o.id = p.operation_id JOIN instances i ON i.id = p.instance_id WHERE p.operation_id = ?1 AND o.kind IN ('edit_port', 'create', 'clone') AND i.revision = o.expected_instance_revision",
-                [&operation_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?)),
+            let pending: (String, i64, i64, String, String, i64, Option<i64>, String, i64, String) = tx.query_row(
+                "SELECT p.instance_id, p.old_spec_revision, p.new_spec_revision, o.status, i.lifecycle, i.revision, i.applied_spec_revision, o.kind, o.attempt, o.phase FROM pending_changes p JOIN operations o ON o.id = p.operation_id JOIN instances i ON i.id = p.instance_id WHERE p.operation_id = ?1 AND o.kind IN ('edit_port', 'create', 'clone') AND i.revision = o.expected_instance_revision",
+                [&operation_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?)),
             )?;
-            let (instance, old, candidate, status, lifecycle, revision, applied, kind, attempt) = pending;
+            let (instance, old, candidate, status, lifecycle, revision, applied, kind, attempt, phase) = pending;
             let ready = kind != "edit_port";
             let new = if restore { old } else { candidate };
-            if !matches!(status.as_str(), "Executing" | "OutcomeUnknown" | "Failed" | "AwaitingDecision") || lifecycle != "managed" || (!ready && applied != Some(old)) || (ready && (restore || applied.is_some())) { return Err(DatabaseError::InvalidInput); }
+            if !matches!(status.as_str(), "Executing" | "OutcomeUnknown" | "Failed" | "AwaitingDecision") || restore != (phase == "restore") || lifecycle != "managed" || (!ready && applied != Some(old)) || (ready && (restore || applied.is_some())) { return Err(DatabaseError::InvalidInput); }
             let expected = if ready { "container_running" } else { "container_stopped" };
             let observed: Option<(String, String, Option<String>, i64, String)> = tx.query_row("SELECT resource_id, expected_result, outcome, attempt, command_kind FROM operation_steps WHERE operation_id = ?1 ORDER BY sequence DESC LIMIT 1", [&operation_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))).optional()?;
             if observed != Some((container_id.clone(), expected.into(), Some("succeeded".into()), attempt, "observe".into())) { return Err(DatabaseError::InvalidInput); }

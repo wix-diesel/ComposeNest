@@ -103,7 +103,7 @@ async fn stopped_before_edit(
     }
 }
 
-fn map_docker(error: CreateDockerError) -> PortEditError {
+pub(crate) fn map_docker(error: CreateDockerError) -> PortEditError {
     match error {
         CreateDockerError::Unavailable | CreateDockerError::OutcomeUnknown => {
             PortEditError::OutcomeUnknown
@@ -112,14 +112,14 @@ fn map_docker(error: CreateDockerError) -> PortEditError {
     }
 }
 
-fn map_effect(error: LifecycleEffectError) -> PortEditError {
+pub(crate) fn map_effect(error: LifecycleEffectError) -> PortEditError {
     match error {
         LifecycleEffectError::Rejected => PortEditError::Rejected,
         LifecycleEffectError::OutcomeUnknown => PortEditError::OutcomeUnknown,
     }
 }
 
-fn fail(
+pub(crate) fn fail(
     database: &DatabaseWorker,
     operation_id: &str,
     phase: &str,
@@ -127,6 +127,8 @@ fn fail(
 ) -> PortEditError {
     let status = if error == PortEditError::OutcomeUnknown {
         OperationStatus::OutcomeUnknown
+    } else if matches!(error, PortEditError::Port(_)) {
+        OperationStatus::AwaitingDecision
     } else {
         OperationStatus::Failed
     };

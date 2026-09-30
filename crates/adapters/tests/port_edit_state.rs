@@ -185,7 +185,7 @@ fn uncertain_change_keeps_both_ports_until_stopped_evidence_completes_it() {
 fn explicit_restore_releases_candidates_only_after_old_stopped_evidence() {
     let (_root, db, request) = fixture();
     db.begin_port_edit(&request).unwrap();
-    db.set_status("edit", OperationStatus::Failed, "recreate")
+    db.set_status("edit", OperationStatus::Failed, "restore")
         .unwrap();
     publish_and_observe(&db, 1, false);
     db.complete_port_restore("edit", &"a".repeat(64)).unwrap();

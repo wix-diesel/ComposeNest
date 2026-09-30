@@ -160,7 +160,11 @@ fn edit_port_confirmed_create_accepts_held_and_committed_reservations() {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(root.path().join(dir), std::fs::Permissions::from_mode(0o700)).unwrap();
+            std::fs::set_permissions(
+                root.path().join(dir),
+                std::fs::Permissions::from_mode(0o700),
+            )
+            .unwrap();
         }
     }
     let db = DatabaseWorker::start(root.path()).unwrap();
@@ -216,7 +220,15 @@ fn edit_port_confirmed_create_accepts_held_and_committed_reservations() {
     let receipt = db.begin_port_edit(&request).unwrap();
     let state = db.confirmed_create(&receipt).unwrap();
     assert_eq!(state.spec_revision, 2);
-    assert_eq!(state.ports.iter().find(|port| port.slot == "db").unwrap().host_port, 15433);
+    assert_eq!(
+        state
+            .ports
+            .iter()
+            .find(|port| port.slot == "db")
+            .unwrap()
+            .host_port,
+        15433
+    );
     let statuses: Vec<String> = db
         .read(|db| {
             let mut stmt = db.prepare(

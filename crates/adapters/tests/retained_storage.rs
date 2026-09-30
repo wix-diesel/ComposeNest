@@ -1,5 +1,6 @@
 mod support;
 use composenest_adapters::{
+    delete_stages::refresh_retained_storage, docker_target::DockerProbe,
     retained_storage::inspect_saved_bind, sqlite::DatabaseWorker, storage::BindStorage,
 };
 use composenest_application::{
@@ -119,8 +120,8 @@ fn retained_views_are_scoped_masked_and_include_original_settings_and_artifact_l
     );
 }
 
-#[test]
-fn fresh_checks_never_create_data_and_distinguish_never_materialized_from_unverified() {
+#[tokio::test]
+async fn fresh_checks_never_create_data_and_distinguish_never_materialized_from_unverified() {
     let (root, db) = fixture();
     let entry = db.storage_allocation(ID, "data").unwrap().unwrap();
     assert_eq!(
@@ -128,6 +129,16 @@ fn fresh_checks_never_create_data_and_distinguish_never_materialized_from_unveri
         StoragePresence::NotMaterialized
     );
     assert!(!root.path().join("data").exists());
+    let offline = DockerProbe {
+        executable: root.path().join("missing-docker.exe"),
+        directory: root.path().into(),
+        config_directory: root.path().into(),
+    };
+    let refreshed = refresh_retained_storage(&db, &offline, "scope", ID)
+        .await
+        .unwrap();
+    assert_eq!(refreshed.locations[0].storage.presence, "not_materialized");
+    assert_eq!(refreshed.instance.runtime_status, "absent");
     std::fs::create_dir_all(root.path().join(format!("data/{ID}/data"))).unwrap();
     assert_eq!(
         inspect_saved_bind(root.path(), &entry),

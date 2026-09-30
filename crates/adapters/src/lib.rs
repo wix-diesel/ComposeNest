@@ -56,6 +56,7 @@ pub mod port_edit_stages;
 pub mod port_edit_state;
 pub mod port_recovery;
 pub mod query_service;
+pub mod retained_storage;
 pub mod sqlite;
 pub mod state_store;
 pub mod storage;

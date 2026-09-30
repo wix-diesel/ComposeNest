@@ -46,7 +46,11 @@ impl QueryStore for DatabaseWorker {
     }
 }
 
-fn read_instance(db: &Connection, scope: &str, id: &str) -> Result<InstanceView, DatabaseError> {
+pub(crate) fn read_instance(
+    db: &Connection,
+    scope: &str,
+    id: &str,
+) -> Result<InstanceView, DatabaseError> {
     let (name, revision, lifecycle, project, applied): (String, i64, String, String, Option<i64>) = db.query_row(
         "SELECT display_name, revision, lifecycle, project_name, applied_spec_revision FROM instances WHERE id=?1 AND scope_id=?2",
         params![id, scope], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)))?;

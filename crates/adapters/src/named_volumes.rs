@@ -36,6 +36,45 @@ impl DockerNamedVolumes {
         Self { docker }
     }
 
+    /// Freshly observes an allocation without changing data, journal, or saved presence.
+    pub async fn observe_saved_volume(
+        &self,
+        entry: &StorageLedgerEntry,
+        journal: &impl OperationJournal,
+    ) -> Result<StoragePresence, NamedVolumeError> {
+        let id = crate::create_projection::parse_instance_id(&entry.instance_id)
+            .map_err(|_| NamedVolumeError::InvalidAllocation)?;
+        let slot = SlotId::parse(&entry.slot).map_err(|_| NamedVolumeError::InvalidAllocation)?;
+        let expected = validate_entry(entry, id, &slot)?;
+        let steps = allocation_steps(journal, entry)?;
+        Ok(match self.inspect_volume(entry, &expected).await {
+            VolumeCheck::Owned
+                if steps
+                    .iter()
+                    .any(|step| step.outcome == Some(StepOutcome::Succeeded)) =>
+            {
+                StoragePresence::Present
+            }
+            VolumeCheck::Owned | VolumeCheck::Foreign => StoragePresence::Unverified,
+            VolumeCheck::Absent
+                if entry.presence == StoragePresence::NotMaterialized && steps.is_empty() =>
+            {
+                StoragePresence::NotMaterialized
+            }
+            VolumeCheck::Absent
+                if entry.presence == StoragePresence::Present
+                    || entry.presence == StoragePresence::Missing
+                    || steps
+                        .iter()
+                        .any(|step| step.outcome == Some(StepOutcome::Succeeded)) =>
+            {
+                StoragePresence::Missing
+            }
+            VolumeCheck::Absent => StoragePresence::Unverified,
+            VolumeCheck::Unavailable => return Err(NamedVolumeError::Backend),
+        })
+    }
+
     async fn ensure(
         &self,
         state: &dyn StateStore,

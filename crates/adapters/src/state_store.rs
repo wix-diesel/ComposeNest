@@ -356,6 +356,7 @@ pub(crate) fn insert_instance(
             ownership: Set("assigned".into()),
             presence: Set("not_materialized".into()),
             initialization: Set("not_attempted".into()),
+            observed_at: Set(None),
         })
         .exec(transaction)?;
     }

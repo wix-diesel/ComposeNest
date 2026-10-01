@@ -57,14 +57,15 @@ impl CreateStateStore for DatabaseWorker {
             let owned = instance::Entity::find_by_id(&receipt.instance_id)
                 .one(db)?
                 .ok_or(DatabaseError::Missing)?;
-            let lifecycle = matches!(op.kind.as_str(), "start" | "stop" | "restart");
+            let recover = op.kind == "recover";
+            let lifecycle = matches!(op.kind.as_str(), "start" | "stop" | "restart") || recover;
             let edit = op.kind == "edit_port";
             if !create_operation(&op.kind) && !lifecycle && !edit
                 || op.instance_id != owned.id
                 || owned.scope_id != receipt.scope_id
                 || owned.lifecycle != "managed"
                 || !(op.status == "Accepted"
-                    || ((pending || create_operation(&op.kind))
+                    || ((pending || recover || create_operation(&op.kind))
                         && matches!(
                             op.status.as_str(),
                             "Executing" | "Failed" | "AwaitingDecision" | "OutcomeUnknown"

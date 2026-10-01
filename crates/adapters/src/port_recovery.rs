@@ -142,7 +142,9 @@ async fn recover_locked(
         volumes: &volumes,
         binds: &binds,
         artifacts: &artifacts,
-        artifact_id: format!("{}-r{candidate}", confirmed.instance_id),
+        artifact_id: database
+            .selected_artifact(&confirmed.instance_id, candidate)
+            .map_err(PortEditError::Store)?,
         confirmed: confirmed.clone(),
         image: Some(image.clone()),
         kind: operation.kind,
@@ -342,7 +344,9 @@ fn select_revision(
         statement.query_map(params![stages.confirmed.instance_id, revision], |row| Ok(PortAllocation { slot: row.get(0)?, host_ip: row.get(1)?, host_port: row.get(2)?, container_port: row.get(3)? }))?.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }).map_err(|_| PortEditError::Rejected)?;
     stages.confirmed.spec_revision = revision;
-    stages.artifact_id = format!("{}-r{revision}", stages.confirmed.instance_id);
+    stages.artifact_id = database
+        .selected_artifact(&stages.confirmed.instance_id, revision)
+        .map_err(PortEditError::Store)?;
     Ok(())
 }
 

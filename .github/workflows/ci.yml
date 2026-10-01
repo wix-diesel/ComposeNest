@@ -66,6 +66,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.98.1
       - run: docker compose version
       - run: cargo test -p composenest-domain --test compose docker_config_and_container_preserve_actual_values -- --ignored
+      - name: Test external artifact recovery on Docker Engine
+        run: |
+          docker version --format 'Engine {{.Server.Version}} ({{.Server.Os}}/{{.Server.Arch}})'
+          docker pull alpine:latest
+          mkdir -p "$HOME/.docker"
+          COMPOSENEST_TEST_DOCKER="$(command -v docker)" \
+          COMPOSENEST_TEST_DOCKER_CONFIG="${DOCKER_CONFIG:-$HOME/.docker}" \
+          cargo test -p composenest-adapters --test external_recovery actual_docker_restores_owned_drift_and_keeps_data_and_secrets -- --ignored
 
   rust-test:
     name: Rust tests

@@ -188,7 +188,11 @@ fn protect_tree(path: &Path) -> Result<(), ArtifactError> {
         }
         sync_dir(path)?;
     } else if metadata.is_file() {
-        OpenOptions::new().read(true).write(true).open(path)?.sync_all()?;
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)?
+            .sync_all()?;
     } else {
         return Err(ArtifactError::UnsafePath(path.into()));
     }

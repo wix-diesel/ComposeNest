@@ -276,9 +276,13 @@ async fn matching_runtime_is_preserved_and_saved_secrets_are_regenerated() {
             .exists()
     );
     f.db.write(|db| {
-        db.execute("UPDATE runtime_observations SET operation_id = 'create'", [])?;
+        db.execute(
+            "UPDATE runtime_observations SET operation_id = 'create'",
+            [],
+        )?;
         Ok(())
-    }).unwrap();
+    })
+    .unwrap();
     assert_eq!(f.run(true).await.unwrap(), CONTAINER);
 }
 

@@ -120,7 +120,7 @@ if [ "$1" = container ] && [ "$2" = ls ]; then
   exit 0
 fi
 if [ "$1" = container ] && [ "$2" = inspect ]; then
-  if [ "$3" = '{CONTAINER}' ] && [ -f recreated ]; then exit 1; fi
+  case "$*" in *'{CONTAINER}'*) if [ -f recreated ]; then exit 1; fi ;; esac
   /bin/cat current.json; exit 0
 fi
 if [ "$1" = container ] && [ "$2" = stop ]; then /bin/cp stopped.json current.json; exit 0; fi
@@ -275,6 +275,10 @@ async fn matching_runtime_is_preserved_and_saved_secrets_are_regenerated() {
             .join(format!("recovery/restore/{ID}-r1/compose.yaml"))
             .exists()
     );
+    f.db.write(|db| {
+        db.execute("UPDATE runtime_observations SET operation_id = 'create'", [])?;
+        Ok(())
+    }).unwrap();
     assert_eq!(f.run(true).await.unwrap(), CONTAINER);
 }
 
@@ -376,26 +380,61 @@ async fn interrupted_archive_and_unknown_recreate_resume_the_original_operation(
     }
 }
 
-struct RealDocker { probe: DockerProbe, endpoint: String, project: String, armed: bool }
+struct RealDocker {
+    probe: DockerProbe,
+    endpoint: String,
+    project: String,
+    armed: bool,
+}
 impl RealDocker {
     fn call(&self, args: &[&str]) -> String {
         let output = std::process::Command::new(&self.probe.executable)
-            .args(["--host", &self.endpoint]).args(args)
-            .env("DOCKER_CONFIG", &self.probe.config_directory).output().unwrap();
-        assert!(output.status.success(), "test Docker command failed: {}", args[0]);
+            .args(["--host", &self.endpoint])
+            .args(args)
+            .env("DOCKER_CONFIG", &self.probe.config_directory)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "test Docker command failed: {}",
+            args[0]
+        );
         String::from_utf8(output.stdout).unwrap().trim().into()
     }
 }
 impl Drop for RealDocker {
     fn drop(&mut self) {
-        if !self.armed { return; }
+        if !self.armed {
+            return;
+        }
         // The test first proves this project absent; remove only its exact scope-labelled IDs.
-        let ids = self.call(&["container", "ls", "--all", "--quiet", "--no-trunc", "--filter",
-            &format!("label=com.docker.compose.project={}", self.project), "--filter", "label=io.composenest.scope=scope"]);
-        for id in ids.lines() { self.call(&["container", "rm", "--force", id]); }
+        let ids = self.call(&[
+            "container",
+            "ls",
+            "--all",
+            "--quiet",
+            "--no-trunc",
+            "--filter",
+            &format!("label=com.docker.compose.project={}", self.project),
+            "--filter",
+            "label=io.composenest.scope=scope",
+        ]);
+        for id in ids.lines() {
+            self.call(&["container", "rm", "--force", id]);
+        }
         let network = format!("{}_default", self.project);
-        let ids = self.call(&["network", "ls", "--quiet", "--filter", &format!("name=^{network}$")]);
-        for id in ids.lines() { self.call(&["network", "rm", id]); }
+        let ids = self.call(&[
+            "network",
+            "ls",
+            "--quiet",
+            "--filter",
+            &format!("name=^{network}$"),
+            "--filter",
+            "label=io.composenest.scope=scope",
+        ]);
+        for id in ids.lines() {
+            self.call(&["network", "rm", id]);
+        }
     }
 }
 
@@ -403,21 +442,53 @@ impl Drop for RealDocker {
 #[ignore = "requires a local Docker Engine, cached alpine:latest, COMPOSENEST_TEST_DOCKER and COMPOSENEST_TEST_DOCKER_CONFIG"]
 async fn actual_docker_restores_owned_drift_and_keeps_data_and_secrets() {
     let f = Fixture::new().await;
-    let probe = DockerProbe { executable: std::env::var_os("COMPOSENEST_TEST_DOCKER").unwrap().into(),
-        directory: f.root.path().into(), config_directory: std::env::var_os("COMPOSENEST_TEST_DOCKER_CONFIG").unwrap().into() };
+    let probe = DockerProbe {
+        executable: std::env::var_os("COMPOSENEST_TEST_DOCKER").unwrap().into(),
+        directory: f.root.path().into(),
+        config_directory: std::env::var_os("COMPOSENEST_TEST_DOCKER_CONFIG")
+            .unwrap()
+            .into(),
+    };
     let report = probe.diagnose(None).await;
     let endpoint = report.resolved_endpoint.unwrap();
     let project = format!("cn-{ID}");
-    let mut real = RealDocker { probe, endpoint: endpoint.clone(), project: project.clone(), armed: false };
-    assert!(real.call(&["container", "ls", "--all", "--quiet", "--filter", &format!("label=com.docker.compose.project={project}")]).is_empty());
-    assert!(real.call(&["network", "ls", "--quiet", "--filter", &format!("name=^{project}_default$")]).is_empty());
+    let mut real = RealDocker {
+        probe,
+        endpoint: endpoint.clone(),
+        project: project.clone(),
+        armed: false,
+    };
+    assert!(
+        real.call(&[
+            "container",
+            "ls",
+            "--all",
+            "--quiet",
+            "--filter",
+            &format!("label=com.docker.compose.project={project}")
+        ])
+        .is_empty()
+    );
+    assert!(
+        real.call(&[
+            "network",
+            "ls",
+            "--quiet",
+            "--filter",
+            &format!("name=^{project}_default$")
+        ])
+        .is_empty()
+    );
     real.armed = true;
-    let image: serde_json::Value = serde_json::from_str(&real.call(&["image", "inspect", "alpine:latest"])).unwrap();
+    let image: serde_json::Value =
+        serde_json::from_str(&real.call(&["image", "inspect", "alpine:latest"])).unwrap();
     let digest = image[0]["RepoDigests"][0].as_str().unwrap().to_owned();
     let image_id = image[0]["Id"].as_str().unwrap().to_owned();
     let engine = report.engine_id.unwrap();
     let platform = report.observed_platform.unwrap();
-    let contents = support::V1.replace("example:1", "alpine:latest").into_bytes();
+    let contents = support::V1
+        .replace("example:1", "alpine:latest")
+        .into_bytes();
     f.db.write(move |db| {
         db.execute("UPDATE runtime_targets SET endpoint = ?1, engine_id = ?2, platform = ?3", rusqlite::params![endpoint, engine, platform])?;
         db.execute("UPDATE image_resolutions SET image_ref = 'alpine:latest', digest = ?1, image_id = ?2, platform = ?3", rusqlite::params![digest, image_id, platform])?;
@@ -425,17 +496,60 @@ async fn actual_docker_restores_owned_drift_and_keeps_data_and_secrets() {
         db.execute("UPDATE template_snapshot_files SET contents = ?1 WHERE relative_path = 'versions/1.yaml'", [contents])?;
         Ok(())
     }).unwrap();
-    let old = real.call(&["run", "--detach", "--label", &format!("com.docker.compose.project={project}"),
-        "--label", "com.docker.compose.service=main", "--label", "com.docker.compose.container-number=1",
-        "--label", "com.docker.compose.oneoff=False", "--label", "io.composenest.scope=scope",
-        "--label", &format!("io.composenest.instance={ID}"), "alpine:latest", "sleep", "600"]);
-    f.db.write(move |db| { db.execute("UPDATE runtime_observations SET container_id = ?1", [old])?; Ok(()) }).unwrap();
+    let old = real.call(&[
+        "run",
+        "--detach",
+        "--label",
+        &format!("com.docker.compose.project={project}"),
+        "--label",
+        "com.docker.compose.service=main",
+        "--label",
+        "com.docker.compose.container-number=1",
+        "--label",
+        "com.docker.compose.oneoff=False",
+        "--label",
+        "io.composenest.scope=scope",
+        "--label",
+        &format!("io.composenest.instance={ID}"),
+        "alpine:latest",
+        "sleep",
+        "600",
+    ]);
+    f.db.write(move |db| {
+        db.execute("UPDATE runtime_observations SET container_id = ?1", [old])?;
+        Ok(())
+    })
+    .unwrap();
     let data = f.root.path().join(format!("data/{ID}/data/retained"));
     fs::write(&data, "preserved-data").unwrap();
-    let id = restore_external_artifact(&f.db, &real.probe, f.root.path(), &OperationRunner::new(), &f.request, &PriorCli(true)).await.unwrap();
-    let observed: serde_json::Value = serde_json::from_str(&real.call(&["container", "inspect", &id])).unwrap();
+    let id = restore_external_artifact(
+        &f.db,
+        &real.probe,
+        f.root.path(),
+        &OperationRunner::new(),
+        &f.request,
+        &PriorCli(true),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("{error:?}; journal: {:?}", f.db.recoverable("restore")));
+    let observed: serde_json::Value =
+        serde_json::from_str(&real.call(&["container", "inspect", &id])).unwrap();
     assert!(!observed[0]["State"]["Running"].as_bool().unwrap());
-    assert!(observed[0]["Config"]["Env"].as_array().unwrap().iter().any(|v| v.as_str() == Some(&format!("PASSWORD={}", "p".repeat(32)))));
+    assert!(
+        observed[0]["Config"]["Env"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v.as_str() == Some(&format!("PASSWORD={}", "p".repeat(32))))
+    );
     assert_eq!(fs::read_to_string(data).unwrap(), "preserved-data");
-    assert_eq!(fs::read_to_string(f.root.path().join(format!("recovery/restore/{ID}-r1/compose.yaml"))).unwrap(), "external-secret-and-arbitrary-command");
+    assert_eq!(
+        fs::read_to_string(
+            f.root
+                .path()
+                .join(format!("recovery/restore/{ID}-r1/compose.yaml"))
+        )
+        .unwrap(),
+        "external-secret-and-arbitrary-command"
+    );
 }

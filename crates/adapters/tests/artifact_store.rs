@@ -268,6 +268,11 @@ fn archives_confirmed_bytes_and_reconciles_move_before_database_update() {
     let target = store
         .archive_external("operation", "artifact", &changed.confirmation_hash)
         .unwrap();
+    assert_eq!(
+        target,
+        root.path().join("instances/instance/recovery/operation")
+    );
+    assert!(!root.path().join("recovery").exists());
     assert!(!source.exists());
     assert_eq!(
         fs::read(target.join("compose.yaml")).unwrap(),

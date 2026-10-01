@@ -272,7 +272,7 @@ async fn matching_runtime_is_preserved_and_saved_secrets_are_regenerated() {
     assert!(
         f.root
             .path()
-            .join(format!("recovery/restore/{ID}-r1/compose.yaml"))
+            .join(format!("instances/{ID}/recovery/restore/compose.yaml"))
             .exists()
     );
     f.db.write(|db| {
@@ -573,7 +573,7 @@ async fn actual_docker_restores_owned_drift_and_keeps_data_and_secrets() {
         fs::read_to_string(
             f.root
                 .path()
-                .join(format!("recovery/restore/{ID}-r1/compose.yaml"))
+                .join(format!("instances/{ID}/recovery/restore/compose.yaml"))
         )
         .unwrap(),
         "external-secret-and-arbitrary-command"

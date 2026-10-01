@@ -14,6 +14,9 @@ use crate::{
     sqlite::{DatabaseError, DatabaseWorker},
 };
 
+mod external;
+pub use external::{ArtifactDifference, ExternalArtifact};
+
 /// A failure that leaves an artifact unavailable for execution.
 #[derive(Debug, thiserror::Error)]
 pub enum ArtifactError {

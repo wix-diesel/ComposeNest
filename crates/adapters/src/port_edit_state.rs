@@ -259,7 +259,7 @@ fn finish_change(
             let expected = if ready { "container_running" } else { "container_stopped" };
             let observed: Option<(String, String, Option<String>, i64, String)> = tx.query_row("SELECT resource_id, expected_result, outcome, attempt, command_kind FROM operation_steps WHERE operation_id = ?1 ORDER BY sequence DESC LIMIT 1", [&operation_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))).optional()?;
             if observed != Some((container_id.clone(), expected.into(), Some("succeeded".into()), attempt, "observe".into())) { return Err(DatabaseError::InvalidInput); }
-            let artifact_id = format!("{instance}-r{new}");
+            let artifact_id: String = tx.query_row("SELECT artifact_id FROM artifact_selections WHERE instance_id = ?1 AND spec_revision = ?2", params![instance, new], |row| row.get(0)).optional()?.unwrap_or_else(|| format!("{instance}-r{new}"));
             let artifact: Option<String> = tx.query_row("SELECT placement FROM artifacts WHERE id = ?1 AND instance_id = ?2 AND spec_revision = ?3", params![artifact_id, instance, new], |row| row.get(0)).optional()?;
             if artifact.as_deref() != Some("published") { return Err(DatabaseError::InvalidInput); }
             let old_ports = bindings(&tx, &instance, old)?;
@@ -291,3 +291,4 @@ fn finish_change(
             Ok(())
         }).map_err(map_error)
 }
+

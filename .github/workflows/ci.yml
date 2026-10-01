@@ -68,6 +68,7 @@ jobs:
       - run: cargo test -p composenest-domain --test compose docker_config_and_container_preserve_actual_values -- --ignored
       - name: Test external artifact recovery on Docker Engine
         run: |
+          docker version --format 'Engine {{.Server.Version}} ({{.Server.Os}}/{{.Server.Arch}})'
           docker pull alpine:latest
           mkdir -p "$HOME/.docker"
           COMPOSENEST_TEST_DOCKER="$(command -v docker)" \
@@ -157,4 +158,3 @@ jobs:
         run: pnpm run check:contracts
       - name: Frontend build
         run: pnpm run build
-

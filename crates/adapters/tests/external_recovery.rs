@@ -537,7 +537,27 @@ async fn actual_docker_restores_owned_drift_and_keeps_data_and_secrets() {
         &PriorCli(true),
     )
     .await
-    .unwrap_or_else(|error| panic!("{error:?}; journal: {:?}", f.db.recoverable("restore")));
+    .unwrap_or_else(|error| {
+        let ids = real.call(&[
+            "container",
+            "ls",
+            "--all",
+            "--quiet",
+            "--filter",
+            &format!("label=com.docker.compose.project={project}"),
+        ]);
+        let health = real.call(&[
+            "container",
+            "inspect",
+            "--format",
+            "{{json (index .Config.Healthcheck \"StartInterval\")}}",
+            ids.trim(),
+        ]);
+        panic!(
+            "{error:?}; health start interval: {health}; journal: {:?}",
+            f.db.recoverable("restore")
+        )
+    });
     let observed: serde_json::Value =
         serde_json::from_str(&real.call(&["container", "inspect", &id])).unwrap();
     assert!(!observed[0]["State"]["Running"].as_bool().unwrap());

@@ -316,7 +316,8 @@ async fn verify_runtime_identity(
                 return Err(PortEditError::Rejected);
             }
             if let Some(original) = &record.original_container_id
-                && stages.docker
+                && stages
+                    .docker
                     .observe(&stages.ownership_only(original))
                     .await
                     .status
@@ -333,7 +334,8 @@ async fn verify_runtime_identity(
             }
         }
     } else if let Some(original) = &record.original_container_id
-        && stages.docker
+        && stages
+            .docker
             .observe(&stages.ownership_only(original))
             .await
             .status
@@ -352,7 +354,8 @@ async fn reconcile_steps(
 ) -> Result<(), PortEditError> {
     // Recheck archived bytes before resuming any journaled generation.
     if operation.status != OperationStatus::Accepted {
-        stages.database
+        stages
+            .database
             .set_status(&operation.id, OperationStatus::OutcomeUnknown, "reconcile")
             .map_err(PortEditError::Store)?;
     }
@@ -363,7 +366,8 @@ async fn reconcile_steps(
     {
         let outcome = match step.command_kind {
             StepCommand::GenerateArtifact => {
-                stages.artifacts
+                stages
+                    .artifacts
                     .archive_external(
                         &operation.id,
                         &record.source_artifact_id,
@@ -380,7 +384,8 @@ async fn reconcile_steps(
                 if actual.as_ref() != Some(&step.resource_id) {
                     return Err(PortEditError::OutcomeUnknown);
                 }
-                if stages.docker
+                if stages
+                    .docker
                     .observe(&stages.ownership_only(&step.resource_id))
                     .await
                     .status
@@ -407,7 +412,8 @@ async fn reconcile_steps(
             }
             _ => return Err(PortEditError::Rejected),
         };
-        stages.database
+        stages
+            .database
             .reconcile_step(&operation.id, step.sequence, outcome)
             .map_err(PortEditError::Store)?;
     }

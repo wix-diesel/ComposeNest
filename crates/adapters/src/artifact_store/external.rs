@@ -158,6 +158,21 @@ fn protect_tree(path: &Path) -> Result<(), ArtifactError> {
     }
     #[cfg(windows)]
     {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+        };
+        if metadata.is_file() {
+            let file = File::open(path)?;
+            // SAFETY: the output structure is plain data and the file handle is live.
+            let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+            if unsafe { GetFileInformationByHandle(file.as_raw_handle().cast(), &mut info) } == 0 {
+                return Err(ArtifactError::Io(io::Error::last_os_error()));
+            }
+            if info.nNumberOfLinks != 1 {
+                return Err(ArtifactError::UnsafePath(path.into()));
+            }
+        }
         // Reset explicit grants to the protected management parent's inherited ACL.
         let system = std::env::var_os("SystemRoot").ok_or(ArtifactError::InvalidInput)?;
         let status = std::process::Command::new(PathBuf::from(system).join("System32/icacls.exe"))

@@ -46,6 +46,8 @@ pub mod docker_delete;
 pub mod docker_observation;
 pub mod docker_target;
 mod entities;
+pub mod external_recovery;
+pub mod external_recovery_state;
 pub mod host_ports;
 pub mod image_resolution;
 pub mod image_store;

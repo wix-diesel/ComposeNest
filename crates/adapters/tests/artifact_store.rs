@@ -221,3 +221,128 @@ fn regenerates_partial_staging_for_the_same_operation() {
         b"services: {}\n"
     );
 }
+
+fn recovery(database: &DatabaseWorker) {
+    database
+        .write(|db| {
+            db.execute(
+                "UPDATE operations SET kind = 'recover' WHERE id = 'operation'",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn confirmation_covers_added_removed_files_and_never_returns_secrets() {
+    let (root, database) = fixture();
+    let store = ArtifactStore::new(root.path(), &database);
+    let path = store.publish("operation", input()).unwrap();
+    let original = store.inspect_external("artifact").unwrap();
+    assert!(original.differences.is_empty());
+    fs::write(path.join("compose.yaml"), b"PASSWORD: secret-value").unwrap();
+    fs::remove_file(path.join("manifest.json")).unwrap();
+    fs::write(path.join("extra"), b"other-secret").unwrap();
+    let changed = store.inspect_external("artifact").unwrap();
+    assert_eq!(changed.differences.len(), 3);
+    assert_ne!(changed.confirmation_hash, original.confirmation_hash);
+    assert!(!format!("{changed:?}").contains("secret-value"));
+    recovery(&database);
+    fs::write(path.join("extra"), b"edited-again").unwrap();
+    assert!(matches!(
+        store.archive_external("operation", "artifact", &changed.confirmation_hash),
+        Err(ArtifactError::Modified)
+    ));
+    assert!(path.join("compose.yaml").exists());
+}
+
+#[test]
+fn archives_confirmed_bytes_and_reconciles_move_before_database_update() {
+    let (root, database) = fixture();
+    let store = ArtifactStore::new(root.path(), &database);
+    let source = store.publish("operation", input()).unwrap();
+    fs::write(source.join("compose.yaml"), b"external-secret").unwrap();
+    let changed = store.inspect_external("artifact").unwrap();
+    recovery(&database);
+    let target = store
+        .archive_external("operation", "artifact", &changed.confirmation_hash)
+        .unwrap();
+    assert_eq!(
+        target,
+        root.path().join("instances/instance/recovery/operation")
+    );
+    assert!(!root.path().join("recovery").exists());
+    assert!(!source.exists());
+    assert_eq!(
+        fs::read(target.join("compose.yaml")).unwrap(),
+        b"external-secret"
+    );
+    assert!(store.verified_compose_path("artifact").is_err());
+    database
+        .write(|db| {
+            db.execute(
+                "UPDATE artifacts SET placement = 'published' WHERE id = 'artifact'",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        store
+            .archive_external("operation", "artifact", &changed.confirmation_hash)
+            .unwrap(),
+        target
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(target.join("compose.yaml"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+    fs::write(target.join("compose.yaml"), b"archive-edited").unwrap();
+    assert!(matches!(
+        store.archive_external("operation", "artifact", &changed.confirmation_hash),
+        Err(ArtifactError::Modified)
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn archive_rejects_links_and_never_changes_another_hardlink_owner() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let (root, database) = fixture();
+    let store = ArtifactStore::new(root.path(), &database);
+    let source = store.publish("operation", input()).unwrap();
+    recovery(&database);
+    let outside = root.path().join("outside");
+    fs::write(&outside, b"shared").unwrap();
+    fs::set_permissions(&outside, fs::Permissions::from_mode(0o644)).unwrap();
+    fs::remove_file(source.join("compose.yaml")).unwrap();
+    fs::hard_link(&outside, source.join("compose.yaml")).unwrap();
+    let changed = store.inspect_external("artifact").unwrap();
+    assert!(matches!(
+        store.archive_external("operation", "artifact", &changed.confirmation_hash),
+        Err(ArtifactError::UnsafePath(_))
+    ));
+    assert_eq!(
+        fs::metadata(&outside).unwrap().permissions().mode() & 0o777,
+        0o644
+    );
+    fs::remove_file(source.join("compose.yaml")).unwrap();
+    symlink(&outside, source.join("compose.yaml")).unwrap();
+    assert!(matches!(
+        store.inspect_external("artifact"),
+        Err(ArtifactError::UnsafePath(_))
+    ));
+}

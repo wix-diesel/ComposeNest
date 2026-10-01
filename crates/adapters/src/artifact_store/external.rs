@@ -73,11 +73,14 @@ impl ArtifactStore<'_> {
         if !allowed {
             return Err(ArtifactError::InvalidInput);
         }
-        let recovery = self.root.join("recovery");
+        let instance_dir = source
+            .parent()
+            .and_then(Path::parent)
+            .ok_or(ArtifactError::InvalidInput)?;
+        let recovery = instance_dir.join("recovery");
         create_or_check_dir(&recovery)?;
-        let operation_dir = recovery.join(operation_id);
-        create_or_check_dir(&operation_dir)?;
-        let target = operation_dir.join(id);
+        sync_dir(instance_dir)?;
+        let target = recovery.join(operation_id);
         if exists(&target)? {
             // Two copies are ambiguous; never discard either as a guessed duplicate.
             if exists(&source)? {
@@ -91,7 +94,7 @@ impl ArtifactStore<'_> {
             require_confirmation(id, &source, confirmed_hash)?;
             publish_directory(&source, &target)?;
             sync_dir(source.parent().ok_or(ArtifactError::InvalidInput)?)?;
-            sync_dir(&operation_dir)?;
+            sync_dir(&recovery)?;
             require_confirmation(id, &target, confirmed_hash)?;
         }
         let id = id.to_owned();

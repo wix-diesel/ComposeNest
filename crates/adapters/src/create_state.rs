@@ -395,4 +395,3 @@ impl CreateStateStore for DatabaseWorker {
         .map_err(map_error)
     }
 }
-

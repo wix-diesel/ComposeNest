@@ -1,9 +1,6 @@
 //! Durable, hash-bound recovery decisions without changing saved spec values.
 
-use composenest_application::{
-    operation_journal::RequestReceipt,
-    state_store::StoreConflict,
-};
+use composenest_application::{operation_journal::RequestReceipt, state_store::StoreConflict};
 use composenest_domain::instance::RuntimeStatus;
 use rusqlite::{OptionalExtension, params};
 use sha2::{Digest, Sha256};
@@ -32,9 +29,12 @@ impl ExternalRecoveryRequest {
     pub fn request_hash(&self) -> String {
         let mut hash = Sha256::new();
         for value in [
-            &self.receipt.scope_id, &self.receipt.instance_id,
-            &self.receipt.confirmed_revision.to_string(), &self.spec_revision.to_string(),
-            &self.source_artifact_id, &self.confirmation_hash,
+            &self.receipt.scope_id,
+            &self.receipt.instance_id,
+            &self.receipt.confirmed_revision.to_string(),
+            &self.spec_revision.to_string(),
+            &self.source_artifact_id,
+            &self.confirmation_hash,
         ] {
             hash.update((value.len() as u64).to_le_bytes());
             hash.update(value.as_bytes());
@@ -58,7 +58,11 @@ pub struct ExternalRecoveryRecord {
 
 impl DatabaseWorker {
     /// Returns a recovered artifact selection, or the original deterministic artifact ID.
-    pub fn selected_artifact(&self, instance: &str, revision: u64) -> Result<String, StoreConflict> {
+    pub fn selected_artifact(
+        &self,
+        instance: &str,
+        revision: u64,
+    ) -> Result<String, StoreConflict> {
         self.read(|db| {
             Ok(db.query_row("SELECT artifact_id FROM artifact_selections WHERE instance_id = ?1 AND spec_revision = ?2", params![instance, revision], |row| row.get(0)).optional()?
                 .unwrap_or_else(|| format!("{instance}-r{revision}")))
@@ -66,16 +70,30 @@ impl DatabaseWorker {
     }
 
     /// Atomically accepts a hash-bound Recover operation and captures its original container.
-    pub fn begin_external_recovery(&self, request: &ExternalRecoveryRequest) -> Result<RequestReceipt, StoreConflict> {
+    pub fn begin_external_recovery(
+        &self,
+        request: &ExternalRecoveryRequest,
+    ) -> Result<RequestReceipt, StoreConflict> {
         let receipt = &request.receipt;
-        if receipt.plan_id.is_some() || receipt.request_id.is_empty()
+        if receipt.plan_id.is_some()
+            || receipt.request_id.is_empty()
             || receipt.request_hash != request.request_hash()
-            || receipt.confirmed_revision == 0 || request.spec_revision == 0
+            || receipt.confirmed_revision == 0
+            || request.spec_revision == 0
             || receipt.operation_id.len() > 100
             || request.confirmation_hash.len() != 64
-            || !request.confirmation_hash.bytes().all(|b| b.is_ascii_hexdigit())
-        { return Err(StoreConflict::InvalidInput); }
-        for id in [&receipt.operation_id, &receipt.instance_id, &request.source_artifact_id] {
+            || !request
+                .confirmation_hash
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit())
+        {
+            return Err(StoreConflict::InvalidInput);
+        }
+        for id in [
+            &receipt.operation_id,
+            &receipt.instance_id,
+            &request.source_artifact_id,
+        ] {
             validate_id(id).map_err(|_| StoreConflict::InvalidInput)?;
         }
         let request = request.clone();
@@ -104,7 +122,10 @@ impl DatabaseWorker {
     }
 
     /// Loads the exact accepted confirmation and stable replacement identity.
-    pub fn external_recovery(&self, operation: &str) -> Result<ExternalRecoveryRecord, StoreConflict> {
+    pub fn external_recovery(
+        &self,
+        operation: &str,
+    ) -> Result<ExternalRecoveryRecord, StoreConflict> {
         self.read(|db| {
             db.query_row("SELECT source_artifact_id, replacement_artifact_id, confirmation_hash, original_container_id FROM external_recoveries WHERE operation_id = ?1", [operation], |row| Ok(ExternalRecoveryRecord {
                 source_artifact_id: row.get(0)?, replacement_artifact_id: row.get(1)?,
@@ -115,7 +136,12 @@ impl DatabaseWorker {
 
     /// Selects the verified replacement and commits the runtime observation in one transaction.
     /// The caller must freshly verify file hashes, storage, ownership and configuration.
-    pub fn complete_external_recovery(&self, operation: &str, container: &str, status: RuntimeStatus) -> Result<(), StoreConflict> {
+    pub fn complete_external_recovery(
+        &self,
+        operation: &str,
+        container: &str,
+        status: RuntimeStatus,
+    ) -> Result<(), StoreConflict> {
         if container.len() != 64 || !container.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(StoreConflict::InvalidInput);
         }

@@ -74,7 +74,8 @@ pub async fn run_confirmed_lifecycle(
         volumes: &volumes,
         binds: &binds,
         artifacts: &artifacts,
-        artifact_id: database.selected_artifact(&confirmed.instance_id, confirmed.spec_revision)
+        artifact_id: database
+            .selected_artifact(&confirmed.instance_id, confirmed.spec_revision)
             .map_err(LifecycleOperationError::Store)?,
         confirmed,
         image,
@@ -364,4 +365,3 @@ exit 1
         );
     }
 }
-

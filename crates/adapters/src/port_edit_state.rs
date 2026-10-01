@@ -291,4 +291,3 @@ fn finish_change(
             Ok(())
         }).map_err(map_error)
 }
-

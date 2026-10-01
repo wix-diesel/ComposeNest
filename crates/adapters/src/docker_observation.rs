@@ -525,4 +525,3 @@ mod tests {
         assert!(!observation.can_change(111, 10));
     }
 }
-

@@ -512,6 +512,8 @@ async fn actual_docker_restores_owned_drift_and_keeps_data_and_secrets() {
         "--label",
         "com.docker.compose.oneoff=False",
         "--label",
+        "com.docker.compose.config-hash=external-drift",
+        "--label",
         "io.composenest.scope=scope",
         "--label",
         &format!("io.composenest.instance={ID}"),

@@ -12,7 +12,7 @@ use serde_json::Value;
 use crate::docker_target::BoundDocker;
 
 // Docker formats each selected field as JSON; health logs and unrelated inspect data stay out.
-const INSPECT_FORMAT: &str = r#"{"Id":{{json .Id}},"Image":{{json .Image}},"Config":{"Labels":{"com.docker.compose.project":{{json (index .Config.Labels "com.docker.compose.project")}},"com.docker.compose.service":{{json (index .Config.Labels "com.docker.compose.service")}},"io.composenest.scope":{{json (index .Config.Labels "io.composenest.scope")}},"io.composenest.instance":{{json (index .Config.Labels "io.composenest.instance")}},"io.composenest.spec-revision":{{json (index .Config.Labels "io.composenest.spec-revision")}}},"Cmd":{{json .Config.Cmd}},"Env":{{json .Config.Env}},"Healthcheck":{{json .Config.Healthcheck}}},"HostConfig":{"PortBindings":{{json .HostConfig.PortBindings}}},"Mounts":{{json .Mounts}},"NetworkSettings":{"Networks":{{json .NetworkSettings.Networks}}},"State":{"Status":{{json .State.Status}},"Health":{"Status":{{if .State.Health}}{{json .State.Health.Status}}{{else}}null{{end}}}}}"#;
+const INSPECT_FORMAT: &str = r#"{"Id":{{json .Id}},"Image":{{json .Image}},"Config":{"Labels":{"com.docker.compose.project":{{json (index .Config.Labels "com.docker.compose.project")}},"com.docker.compose.service":{{json (index .Config.Labels "com.docker.compose.service")}},"io.composenest.scope":{{json (index .Config.Labels "io.composenest.scope")}},"io.composenest.instance":{{json (index .Config.Labels "io.composenest.instance")}},"io.composenest.spec-revision":{{json (index .Config.Labels "io.composenest.spec-revision")}}},"Cmd":{{json .Config.Cmd}},"Env":{{json .Config.Env}},"Healthcheck":{{json (index .Config "Healthcheck")}}},"HostConfig":{"PortBindings":{{json .HostConfig.PortBindings}}},"Mounts":{{json .Mounts}},"NetworkSettings":{"Networks":{{json .NetworkSettings.Networks}}},"State":{"Status":{{json .State.Status}},"Health":{"Status":{{with (index .State "Health")}}{{json .Status}}{{else}}null{{end}}}}}"#;
 
 /// Expected Docker state built from the confirmed spec and recorded allocations.
 /// Environment and command values may contain secrets; keep this input private.
@@ -307,7 +307,10 @@ fn configuration_matches(value: &Value, expected: &ExpectedContainer) -> bool {
                 && zero_if_omitted(actual, "Timeout") == Some(expected.timeout)
                 && zero_if_omitted(actual, "Retries") == Some(expected.retries)
                 && zero_if_omitted(actual, "StartPeriod") == Some(expected.start_period)
-                && zero_if_omitted(actual, "StartInterval") == Some(expected.start_interval)
+                // Engine stores an omitted start interval as zero; its effective default is 5s.
+                && zero_if_omitted(actual, "StartInterval")
+                    .map(|value| if value == 0 { 5_000_000_000 } else { value })
+                    == Some(expected.start_interval)
         }
         _ => false,
     };
@@ -428,6 +431,15 @@ mod tests {
             .remove("StartPeriod");
         actual["HostConfig"]["PortBindings"]["8080/tcp"][0]["HostIp"] = json!("");
         assert!(configuration_matches(&actual, &expected));
+        actual["Config"]["Healthcheck"]
+            .as_object_mut()
+            .unwrap()
+            .remove("StartInterval");
+        assert!(configuration_matches(&actual, &expected));
+        actual["Config"]["Healthcheck"]["StartInterval"] = json!(0);
+        assert!(configuration_matches(&actual, &expected));
+        actual["Config"]["Healthcheck"]["StartInterval"] = json!(1_000_000_000);
+        assert!(!configuration_matches(&actual, &expected));
     }
 
     #[test]

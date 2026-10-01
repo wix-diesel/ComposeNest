@@ -32,13 +32,18 @@ impl ArtifactStore<'_> {
         let mut names: Vec<_> = expected.keys().chain(found.keys()).cloned().collect();
         names.sort();
         names.dedup();
-        let differences = names.into_iter().filter_map(|path| {
-            let recorded_hash = expected.get(&path).cloned();
-            let observed_hash = found.get(&path).cloned();
-            (recorded_hash != observed_hash).then_some(ArtifactDifference {
-                path, recorded_hash, observed_hash,
+        let differences = names
+            .into_iter()
+            .filter_map(|path| {
+                let recorded_hash = expected.get(&path).cloned();
+                let observed_hash = found.get(&path).cloned();
+                (recorded_hash != observed_hash).then_some(ArtifactDifference {
+                    path,
+                    recorded_hash,
+                    observed_hash,
+                })
             })
-        }).collect();
+            .collect();
         Ok(ExternalArtifact {
             artifact_id: id.into(),
             confirmation_hash: confirmation(id, &found)?,
@@ -60,11 +65,14 @@ impl ArtifactStore<'_> {
             let saved = artifact::Entity::find_by_id(id).one(db)?;
             let op = operation::Entity::find_by_id(operation_id).one(db)?;
             Ok(saved.zip(op).is_some_and(|(saved, op)| {
-                saved.instance_id == op.instance_id && op.kind == "recover"
+                saved.instance_id == op.instance_id
+                    && op.kind == "recover"
                     && !matches!(op.status.as_str(), "Succeeded" | "Abandoned")
             }))
         })?;
-        if !allowed { return Err(ArtifactError::InvalidInput); }
+        if !allowed {
+            return Err(ArtifactError::InvalidInput);
+        }
         let recovery = self.root.join("recovery");
         create_or_check_dir(&recovery)?;
         let operation_dir = recovery.join(operation_id);
@@ -72,7 +80,9 @@ impl ArtifactStore<'_> {
         let target = operation_dir.join(id);
         if exists(&target)? {
             // Two copies are ambiguous; never discard either as a guessed duplicate.
-            if exists(&source)? { return Err(ArtifactError::Conflict); }
+            if exists(&source)? {
+                return Err(ArtifactError::Conflict);
+            }
             require_confirmation(id, &target, confirmed_hash)?;
             protect_tree(&target)?;
         } else {
@@ -86,20 +96,30 @@ impl ArtifactStore<'_> {
         }
         let id = id.to_owned();
         self.database.orm_write(move |db| {
-            artifact::ActiveModel { id: Set(id), placement: Set("retained".into()),
-                ..Default::default() }.update(db)?;
+            artifact::ActiveModel {
+                id: Set(id),
+                placement: Set("retained".into()),
+                ..Default::default()
+            }
+            .update(db)?;
             Ok(())
         })?;
         Ok(target)
     }
 
-    fn external_record(&self, id: &str) -> Result<(PathBuf, BTreeMap<String, String>), ArtifactError> {
+    fn external_record(
+        &self,
+        id: &str,
+    ) -> Result<(PathBuf, BTreeMap<String, String>), ArtifactError> {
         validate_id(id)?;
         let record = self.database.orm_read(|db| {
             let saved = artifact::Entity::find_by_id(id).one(db)?;
             let files = artifact_file::Entity::find()
-                .filter(artifact_file::Column::ArtifactId.eq(id)).all(db)?
-                .into_iter().map(|f| (f.relative_path, f.sha256)).collect();
+                .filter(artifact_file::Column::ArtifactId.eq(id))
+                .all(db)?
+                .into_iter()
+                .map(|f| (f.relative_path, f.sha256))
+                .collect();
             Ok((saved, files))
         })?;
         let saved = record.0.ok_or(ArtifactError::Unavailable)?;
@@ -125,21 +145,30 @@ fn confirmation(id: &str, hashes: &BTreeMap<String, String>) -> Result<String, A
 }
 
 fn require_confirmation(id: &str, path: &Path, hash: &str) -> Result<(), ArtifactError> {
-    if confirmation(id, &scan(path)?)? != hash { return Err(ArtifactError::Modified); }
+    if confirmation(id, &scan(path)?)? != hash {
+        return Err(ArtifactError::Modified);
+    }
     Ok(())
 }
 
 fn protect_tree(path: &Path) -> Result<(), ArtifactError> {
     let metadata = fs::symlink_metadata(path)?;
-    if is_link(&metadata) { return Err(ArtifactError::UnsafePath(path.into())); }
+    if is_link(&metadata) {
+        return Err(ArtifactError::UnsafePath(path.into()));
+    }
     #[cfg(windows)]
     {
         // Reset explicit grants to the protected management parent's inherited ACL.
         let system = std::env::var_os("SystemRoot").ok_or(ArtifactError::InvalidInput)?;
         let status = std::process::Command::new(PathBuf::from(system).join("System32/icacls.exe"))
-            .arg(path).args(["/reset", "/Q"])
-            .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status()?;
-        if !status.success() { return Err(ArtifactError::UnsafePath(path.into())); }
+            .arg(path)
+            .args(["/reset", "/Q"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()?;
+        if !status.success() {
+            return Err(ArtifactError::UnsafePath(path.into()));
+        }
     }
     #[cfg(unix)]
     {
@@ -148,13 +177,20 @@ fn protect_tree(path: &Path) -> Result<(), ArtifactError> {
         if metadata.is_file() && metadata.nlink() != 1 {
             return Err(ArtifactError::UnsafePath(path.into()));
         }
-        fs::set_permissions(path, fs::Permissions::from_mode(if metadata.is_dir() { 0o700 } else { 0o600 }))?;
+        fs::set_permissions(
+            path,
+            fs::Permissions::from_mode(if metadata.is_dir() { 0o700 } else { 0o600 }),
+        )?;
     }
     if metadata.is_dir() {
-        for entry in fs::read_dir(path)? { protect_tree(&entry?.path())?; }
+        for entry in fs::read_dir(path)? {
+            protect_tree(&entry?.path())?;
+        }
         sync_dir(path)?;
     } else if metadata.is_file() {
-        File::open(path)?.sync_all()?;
-    } else { return Err(ArtifactError::UnsafePath(path.into())); }
+        OpenOptions::new().read(true).write(true).open(path)?.sync_all()?;
+    } else {
+        return Err(ArtifactError::UnsafePath(path.into()));
+    }
     Ok(())
 }

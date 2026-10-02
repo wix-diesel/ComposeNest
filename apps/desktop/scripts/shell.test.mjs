@@ -82,7 +82,7 @@ try {
   await page.addInitScript(() => { window.failBootstrap = true; });
   await page.reload();
   await page.getByRole("alert").waitFor();
-  assert.equal(await page.getByText("Docker 接続済み", { exact: true }).count(), 0);
+  assert.equal(await page.getByText("アプリに接続済み", { exact: true }).count(), 0);
   await page.evaluate(() => { window.failBootstrap = false; });
   await page.getByRole("button", { name: "再確認", exact: true }).click();
   await page.getByText("アプリに接続済み", { exact: true }).waitFor();

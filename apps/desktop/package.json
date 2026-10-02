@@ -6,7 +6,8 @@
   "packageManager": "pnpm@11.19.0",
   "scripts": {
     "build": "tsc --noEmit && vite build",
-    "check:contracts": "node scripts/check-contracts.mjs",
+    "check:contracts": "node scripts/check-contracts.mjs && node scripts/generate-form-contract.mjs --check",
+    "generate:forms": "node scripts/generate-form-contract.mjs",
     "dev": "vite",
     "test:navigation": "node --experimental-strip-types --test scripts/navigation.test.mjs",
     "test:shell": "node scripts/shell.test.mjs"

@@ -80,6 +80,8 @@ pub struct CreatePlanView {
     pub versions: Vec<String>,
     /// Complete selected Version definition without candidate values.
     pub form: Value,
+    /// Ordered common form metadata without private candidates or host paths.
+    pub template_form: crate::template_form::TemplateForm,
     /// Storage method selected for all active slots.
     pub storage_method: StorageMethod,
     /// Form fields in Template display order.
@@ -750,6 +752,7 @@ fn preview(id: &str, plan: &mut Plan, inspector: &impl PortInspector) -> CreateP
                     .collect()
             }),
         form: definition.clone(),
+        template_form: crate::template_form::project_form(&plan.template, definition),
         storage_method: plan.storage_method,
         inputs,
         ports,

@@ -72,7 +72,7 @@ try {
   assert.equal(await page.locator("#input-count").count(), 0);
   assert.equal(await page.locator("#input-password").getAttribute("type"), "password");
   assert.equal(await page.locator("#input-added").inputValue(), "green", "new create input uses Core initialization");
-  await page.locator('[data-field-path="inputs.retained"]').getByText("minLength: 6").waitFor();
+  await page.locator('[data-field-path="inputs.retained"]').getByText("最小文字数: 6").waitFor();
   await page.locator("#input-added").selectOption("blue");
   await page.evaluate(() => { window.formDelay = 100; });
   const before = await page.evaluate(() => window.formRequests.length);

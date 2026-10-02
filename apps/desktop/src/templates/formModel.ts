@@ -49,7 +49,7 @@ export function concernMessage(code: string): string {
     STORAGE_NEEDS_ANSWER: "保存方式を選択してください。",
     SECRET_REUSE_NEEDS_CONFIRMATION: "秘密の引継ぎ確認が必要です。",
     PORT_NEEDS_INPUT: "接続ポートを入力してください。",
-    PORT_UNAVAILABLE: "接続ポートを確認できません。",
+    PORT_CHECK_UNAVAILABLE: "接続ポートを確認できません。",
     PORT_CHECK_INCOMPLETE: "接続ポートの確認が完了していません。",
     PORT_CONFLICT: "接続ポートが競合しています。",
     PORT_INVALID: "接続ポートを確認してください。",

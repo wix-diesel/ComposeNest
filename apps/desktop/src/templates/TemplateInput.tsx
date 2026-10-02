@@ -13,6 +13,7 @@ export function TemplateInput({ input, value, hasSecret, needsAnswer, error, onC
     "aria-describedby": `${id}-help${error ? ` ${id}-error` : ""}` };
   const secret = input.inputType === "secret";
   const validation = input.validation !== null && typeof input.validation === "object" && !Array.isArray(input.validation) ? input.validation : {};
+  const constraintLabels: Record<string, string> = { min: "最小値", max: "最大値", minLength: "最小文字数", maxLength: "最大文字数", pattern: "入力形式" };
   return <div className="field" data-field-path={`inputs.${input.key}`}>
     <label htmlFor={id}>{input.label}{input.required && <span className="required">必須</span>}</label>
     <div className="input-action">
@@ -34,7 +35,7 @@ export function TemplateInput({ input, value, hasSecret, needsAnswer, error, onC
     </div>
     <small id={`${id}-help`}>{input.description}{needsAnswer && " 入力待ち。"}
       {value === null ? secret && hasSecret ? " 設定済み（値は非表示）。" : " 未設定。" : value === "" ? " 空文字を設定。" : ""}
-      {Object.entries(validation).map(([key, item]) => <span key={key} className="constraint">{key}: {String(item)}</span>)}
+      {Object.entries(validation).map(([key, item]) => <span key={key} className="constraint">{constraintLabels[key] ?? key}: {String(item)}</span>)}
     </small>
     {error && <p id={`${id}-error`} className="error-text">{error}</p>}
   </div>;

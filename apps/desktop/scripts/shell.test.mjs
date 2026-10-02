@@ -7,14 +7,18 @@ import { mkdir } from "node:fs/promises";
 const server = spawn(process.execPath, ["node_modules/vite/bin/vite.js", "--host", "127.0.0.1", "--port", "4173", "--strictPort"], { stdio: "pipe" });
 let browser;
 try {
-  await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("Vite startup timed out")), 20000);
-    server.once("exit", (code) => { clearTimeout(timeout); reject(new Error(`Vite exited: ${code}`)); });
-    server.stderr.on("data", (data) => process.stderr.write(data));
-    server.stdout.on("data", (data) => {
-      if (data.toString().includes("http://127.0.0.1:4173")) { clearTimeout(timeout); resolve(); }
-    });
-  });
+  let output = "";
+  for (const stream of [server.stdout, server.stderr])
+    stream.on("data", (data) => { output = (output + data).slice(-4000); });
+  const deadline = Date.now() + 20000;
+  while (true) {
+    if (server.exitCode !== null) throw new Error(`Vite exited: ${output}`);
+    try {
+      if ((await fetch("http://127.0.0.1:4173", { signal: AbortSignal.timeout(1000) })).ok) break;
+    } catch { /* Connection refusal is expected until the local server is ready. */ }
+    if (Date.now() > deadline) throw new Error(`Vite startup timed out: ${output}`);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
   browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   const errors = [];
@@ -73,7 +77,7 @@ try {
     assert.equal(Math.round((await page.locator(".sidebar").boundingBox()).width), width > 800 ? 224 : 70);
     await page.screenshot({ path: `test-results/shell-${width}.png`, fullPage: true });
   }
-  await page.evaluate(() => { window.failBootstrap = true; });
+  await page.addInitScript(() => { window.failBootstrap = true; });
   await page.reload();
   await page.getByRole("alert").waitFor();
   assert.equal(await page.getByText("Docker 接続済み", { exact: true }).count(), 0);

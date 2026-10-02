@@ -1,5 +1,7 @@
 /** Generated from Rust plan/form DTOs by scripts/generate-form-contract.mjs. */
 
+import type { RequestContext } from "./ipc";
+
 export type JsonValue = null | boolean | number | string | Array<JsonValue> | { [key: string]: JsonValue };
 
 export interface FormInput {
@@ -41,6 +43,37 @@ export interface TemplateForm {
   connections: Array<FormConnection>;
 }
 
+export interface PrepareCreateRequest {
+  context: RequestContext;
+  templateRevisionId: string;
+}
+
+export interface CreatePlanRequest {
+  context: RequestContext;
+  planId: string;
+}
+
+export interface UpdateCreateRequest {
+  context: RequestContext;
+  planId: string;
+  edit: PlanEdit;
+}
+
+export interface ConfirmCreateRequest {
+  context: RequestContext;
+  planId: string;
+  revision: number;
+  confirmedPorts: Record<string, number>;
+  acceptPlaintext: boolean;
+}
+
+export interface CreateReceipt {
+  planId: string;
+  confirmedRevision: number;
+  operationId: string;
+  instanceId: string;
+}
+
 export interface InputView {
   key: string;
   definition: JsonValue;
@@ -58,6 +91,7 @@ export interface CreatePlanView {
   planRevision: number;
   displayName: string;
   templateRevisionId: string;
+  templateOrigin: string;
   version: string;
   versions: Array<string>;
   form: JsonValue;

@@ -4,6 +4,7 @@ import { readFile, writeFile } from "node:fs/promises";
 // Fail closed on an unfamiliar Rust field type or Serde attribute.
 const sources = {
   template_form: ["FormInput", "FormOption", "FormSlot", "FormConnection", "TemplateForm"],
+  create_session: ["PrepareCreateRequest", "CreatePlanRequest", "UpdateCreateRequest", "ConfirmCreateRequest", "CreateReceipt"],
   create_plan: ["InputView", "PlanConcern", "CreatePlanView", "PlanEdit"],
   clone_plan: ["InputDiff", "ClonePlanView", "CloneEdit"],
 };
@@ -11,6 +12,7 @@ const primitives = { String: "string", "&'static str": "string", bool: "boolean"
 const camel = (name) => name.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
 function typeOf(rust) {
   if (rust === "crate::template_form::TemplateForm") return "TemplateForm";
+  if (rust === "RequestContext") return "RequestContext";
   if (primitives[rust]) return primitives[rust];
   if (/^Option<(.+)>$/.test(rust)) return `${typeOf(rust.slice(7, -1))} | null`;
   if (/^Vec<(.+)>$/.test(rust)) return `Array<${typeOf(rust.slice(4, -1))}>`;
@@ -20,6 +22,7 @@ function typeOf(rust) {
   throw new Error(`Unsupported DTO type: ${rust}`);
 }
 let output = "/** Generated from Rust plan/form DTOs by scripts/generate-form-contract.mjs. */\n\n";
+output += 'import type { RequestContext } from "./ipc";\n\n';
 output += "export type JsonValue = null | boolean | number | string | Array<JsonValue> | { [key: string]: JsonValue };\n\n";
 for (const [file, names] of Object.entries(sources)) {
   const source = await readFile(new URL(`../../../crates/application/src/${file}.rs`, import.meta.url), "utf8");

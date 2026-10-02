@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 pub mod clone_plan;
 pub mod create_operation;
 pub mod create_plan;
+pub mod create_session;
 pub mod create_state;
 pub mod delete_operation;
 pub mod host_ports;

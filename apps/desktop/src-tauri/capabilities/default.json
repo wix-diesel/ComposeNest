@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Default capabilities for the ComposeNest main window.",
   "windows": ["main"],
-  "permissions": []
+  "permissions": ["allow-get-bootstrap", "allow-prepare-create", "allow-update-create-plan", "allow-view-create-plan", "allow-get-create-receipt", "allow-discard-create-plan", "allow-confirm-create"]
 }

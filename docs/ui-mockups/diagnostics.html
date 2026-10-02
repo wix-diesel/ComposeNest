@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Docker診断 | ComposeNest</title>
+<script src="assets/appearance.js"></script>
+<link rel="stylesheet" href="assets/styles.css">
+<link rel="stylesheet" href="assets/appearance.css">
+<script src="assets/mock.js" defer>
+</script>
+</head>
+<body data-page="diagnostics">
+<div class="app">
+<aside class="sidebar">
+<div class="brand">
+<span class="brand-mark">
+<svg aria-hidden="true" data-icon="nest" viewBox="0 0 24 24">
+</svg>
+</span>
+<span class="brand-text">ComposeNest</span>
+</div>
+<div class="nav-label">ワークスペース</div>
+<nav aria-label="メインメニュー">
+<button class="nav " data-notice="環境一覧の画面遷移は省略しています。対応するHTMLを直接開いてください。" >
+<svg aria-hidden="true" data-icon="grid" viewBox="0 0 24 24">
+</svg>
+<span class="nav-text">環境一覧</span>
+<span class=count>6</span>
+</button>
+<button class="nav " data-notice="テンプレートの画面遷移は省略しています。対応するHTMLを直接開いてください。" >
+<svg aria-hidden="true" data-icon="layers" viewBox="0 0 24 24">
+</svg>
+<span class="nav-text">テンプレート</span>
+</button>
+<button class="nav " data-notice="保持データの画面遷移は省略しています。対応するHTMLを直接開いてください。" >
+<svg aria-hidden="true" data-icon="archive" viewBox="0 0 24 24">
+</svg>
+<span class="nav-text">保持データ</span>
+</button>
+<button class="nav active" data-notice="Docker診断の画面遷移は省略しています。対応するHTMLを直接開いてください。" aria-current=page>
+<svg aria-hidden="true" data-icon="activity" viewBox="0 0 24 24">
+</svg>
+<span class="nav-text">Docker診断</span>
+</button>
+</nav>
+<div class="sidebar-bottom">
+<button class="nav " data-notice="設定の画面遷移は省略しています。settings.htmlを直接開いてください。">
+<svg aria-hidden="true" data-icon="settings" viewBox="0 0 24 24">
+</svg>
+<span class="nav-text">設定</span>
+</button>
+<div class="engine-card">
+<span class="dot">
+</span>Docker 接続済み<small>ローカル環境 · Linux</small>
+</div>
+<div class="user">
+<span class="avatar">L</span>
+<div style="font-size:11px">ローカルワークスペース<br>
+<small>このコンピューター</small>
+</div>
+</div>
+</div>
+</aside>
+<main class="main">
+<header class="topbar">
+<div class="crumb">
+<svg aria-hidden="true" data-icon="home" viewBox="0 0 24 24">
+</svg>
+<span>/</span>
+<strong>Docker診断</strong>
+</div>
+<div class="topbar-right">
+<span>
+<span class="dot">
+</span>ローカル接続</span>
+<span class="mock-label">UI モック</span>
+</div>
+</header>
+<div class="workspace">
+<div class="page-heading">
+<div>
+<div class="eyebrow">ワークスペース</div>
+<h1>Docker診断</h1>
+<p class="subtitle">環境の作成・起動に必要な準備状況を確認します。</p>
+</div>
+<div class="actions">
+<button type="button" class="btn primary" data-action="diagnose" >
+<svg aria-hidden="true" data-icon="refresh" viewBox="0 0 24 24">
+</svg>再確認</button>
+</div>
+</div>
+<div id="diagnosis-notice">
+<div class="notice ">
+<svg aria-hidden="true" data-icon="info" viewBox="0 0 24 24">
+</svg>
+<div>
+<strong>Dockerを利用できます</strong>
+<p>ローカルの接続先を固定して操作します。表示内容はモックの診断結果です。</p>
+</div>
+</div>
+</div>
+<div class="two-column">
+<div>
+<section class="panel">
+<div class="panel-title">
+<h2>実行環境のチェック</h2>
+<small id="observed-at">最終確認 14:32:08</small>
+</div>
+<div id="diagnostic-checks">
+<div class="diagnostic-row">
+<span class="check-icon">✓</span>
+<div>
+<h3>Docker CLI</h3>
+<p>29.8.1 · 実行ファイルを検出</p>
+</div>
+<span class="badge ready">確認済み</span>
+</div>
+<div class="diagnostic-row">
+<span class="check-icon">✓</span>
+<div>
+<h3>Docker Compose</h3>
+<p>5.5.1 · Composeコマンドを実行可能</p>
+</div>
+<span class="badge ready">確認済み</span>
+</div>
+<div class="diagnostic-row">
+<span class="check-icon">✓</span>
+<div>
+<h3>Docker Engine</h3>
+<p>ローカルEngineに接続可能</p>
+</div>
+<span class="badge ready">確認済み</span>
+</div>
+<div class="diagnostic-row">
+<span class="check-icon">✓</span>
+<div>
+<h3>Linuxコンテナ</h3>
+<p>linux / amd64 · 対応する実行モード</p>
+</div>
+<span class="badge ready">確認済み</span>
+</div>
+<div class="diagnostic-row">
+<span class="check-icon">✓</span>
+<div>
+<h3>管理データの保存先</h3>
+<p>管理ルートへの読書きが可能</p>
+</div>
+<span class="badge ready">確認済み</span>
+</div>
+</div>
+</section>
+<div class="actions">
+<button type="button" class="btn " data-action="offline" >接続不能の表示例</button>
+</div>
+</div>
+<aside>
+<section class="panel">
+<div class="panel-title">
+<h2>接続先</h2>
+</div>
+<dl class="summary-list">
+<div>
+<dt>接続方式</dt>
+<dd>ローカル</dd>
+</div>
+<div>
+<dt>Context</dt>
+<dd>desktop-linux</dd>
+</div>
+<div>
+<dt>OS</dt>
+<dd>Linux</dd>
+</div>
+<div>
+<dt>アーキテクチャ</dt>
+<dd>amd64</dd>
+</div>
+</dl>
+</section>
+<div class="notice ">
+<svg aria-hidden="true" data-icon="info" viewBox="0 0 24 24">
+</svg>
+<div>
+<strong>アプリを閉じても環境は停止しません</strong>
+<p>起動済みコンテナは動き続けます。停止したい場合は、各環境から停止してください。</p>
+</div>
+</div>
+</aside>
+</div>
+<footer class="page-footer">
+<span>ComposeNest <span class="muted"> / </span> ローカル開発を、もっと身近に。</span>
+<span>v1 デザインモック · サンプルデータ</span>
+</footer>
+</div>
+</main>
+</div>
+<div class="toast" role="status" hidden>
+</div>
+<dialog class="dialog" aria-labelledby="dialog-title">
+<h2 id="dialog-title">
+</h2>
+<p id="dialog-body">
+</p>
+<div class="actions">
+<button class="btn" data-action="close-dialog">閉じる</button>
+<button class="btn primary" id="dialog-confirm" hidden>確認</button>
+</div>
+</dialog>
+</body>
+</html>

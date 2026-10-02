@@ -11,9 +11,11 @@ const storage = {
 };
 
 /** Shared create/clone input surface. Remount with a new plan ID when opening another plan. */
-export function TemplateForm({ initialPlan, onUpdate }: {
+export function TemplateForm({ initialPlan, onUpdate, onReview, locked = false }: {
   initialPlan: FormPlan;
   onUpdate: (plan: FormPlan, edit: PlanEdit | CloneEdit) => Promise<FormPlan>;
+  onReview?: (plan: FormPlan) => Promise<FormPlan>;
+  locked?: boolean;
 }) {
   const [plan, setPlan] = useState(initialPlan);
   const [draft, setDraft] = useState(emptyDraft);
@@ -42,7 +44,7 @@ export function TemplateForm({ initialPlan, onUpdate }: {
     ?? form.ports.find((slot) => path === `ports.${slot.key}`)?.label
     ?? ({ displayName: "環境名", version: "バージョン", storageMethod: "保存方式", ports: "接続ポート" } as Record<string, string>)[path] ?? "設定";
 
-  async function apply(action: FormAction = {}) {
+  async function apply(action: FormAction = {}, review = false) {
     if (inFlight.current) return;
     inFlight.current = true; setBusy(true); setFailure(null);
     let next = plan;
@@ -55,6 +57,11 @@ export function TemplateForm({ initialPlan, onUpdate }: {
       // Flush edits against their original Version before requesting a switch.
       if (dirty) await update(planEdit(next, draft));
       if (action.version !== undefined || action.generate !== undefined) await update(planEdit(next, emptyDraft(), action));
+      if (review && onReview) {
+        const refreshed = await onReview(next);
+        if (refreshed.kind !== next.kind || refreshed.view.planId !== next.view.planId || refreshed.view.planRevision < next.view.planRevision) throw new Error("invalid_plan_response");
+        setPlan(refreshed);
+      }
     } catch (caught) {
       const safe = caught !== null && typeof caught === "object" && "code" in caught && "reason" in caught && typeof caught.reason === "string";
       setFailure(safe ? { reason: caught.reason as string, fieldPath: "fieldPath" in caught && typeof caught.fieldPath === "string" ? caught.fieldPath : null }
@@ -63,7 +70,7 @@ export function TemplateForm({ initialPlan, onUpdate }: {
   }
   return <form className="template-form" noValidate onSubmit={(event) => { event.preventDefault(); void apply(); }}>
     {failure && <p role="alert" className="notice error-text">{failure.reason}</p>}
-    <fieldset disabled={busy} aria-busy={busy}><div className="two-column"><div>
+    <fieldset disabled={busy || locked} aria-busy={busy}><div className="two-column"><div>
       <section className="panel"><h2>基本設定</h2>
         <div className="field"><label htmlFor="display-name">環境名<span className="required">必須</span></label>
           <input id="display-name" value={draft.displayName ?? view.displayName} aria-required="true" aria-invalid={!!error("displayName")}
@@ -95,7 +102,10 @@ export function TemplateForm({ initialPlan, onUpdate }: {
         {form.storage.map((slot) => <p key={slot.key}>{slot.label}: <code>{String(slot.container)}</code></p>)}
         {form.storage.length === 0 && <p>このバージョンに保存領域はありません。</p>}
       </section>
-      <div className="form-footer"><small>{busy ? "設定を確認しています…" : "確定前にポートと設定を再確認します。"}</small><button className="btn primary" type="submit" disabled={!dirty}>入力を反映</button></div>
+      <div className="form-footer"><small>{busy ? "設定を確認しています…" : "確定前にポートと設定を再確認します。"}</small><div className="actions">
+        <button className="btn" type="submit" disabled={!dirty}>入力を反映</button>
+        {onReview && <button className="btn primary" type="button" onClick={() => { void apply({}, true); }}>作成内容を確認</button>}
+      </div></div>
     </div><aside><section className="panel"><h2>設定する環境</h2><strong className="summary-title">{form.name}</strong><p>{form.description}</p>
       <dl className="summary-list"><div><dt>テンプレート</dt><dd>{form.templateVersion}</dd></div><div><dt>環境名</dt><dd>{draft.displayName ?? view.displayName}</dd></div>
         <div><dt>バージョン</dt><dd>{view.version}</dd></div><div><dt>保存方式</dt><dd>{storage[method].label}</dd></div></dl>

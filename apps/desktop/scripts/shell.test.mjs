@@ -19,7 +19,7 @@ try {
     if (Date.now() > deadline) throw new Error(`Vite startup timed out: ${output}`);
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({ headless: true, ...(process.env.COMPOSENEST_TEST_BROWSER ? { executablePath: process.env.COMPOSENEST_TEST_BROWSER } : {}) });
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));

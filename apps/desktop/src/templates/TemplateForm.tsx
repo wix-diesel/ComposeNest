@@ -27,6 +27,17 @@ export function TemplateForm({ initialPlan, onUpdate }: {
   const error = (path: string) => failure?.fieldPath === path ? failure.reason : view.concerns.filter((item) => item.fieldPath === path).map((item) => concernMessage(item.code)).join(" ");
   const value = (key: string): JsonValue => Object.hasOwn(draft.inputs, key) ? draft.inputs[key] : candidate(plan, key).value;
   const secretSet = (key: string) => Object.hasOwn(draft.inputs, key) ? draft.inputs[key] !== null : candidate(plan, key).hasSecret;
+  function summaryValue(key: string): string {
+    const input = form.inputs.find((item) => item.key === key);
+    if (input?.inputType === "secret") {
+      if (secretSet(key)) return "••••••••（設定済み）";
+      return "未設定";
+    }
+    const currentValue = value(key);
+    if (currentValue === null) return "未設定";
+    if (currentValue === "") return "空文字";
+    return String(currentValue);
+  }
   const fieldLabel = (path: string) => form.inputs.find((input) => path === `inputs.${input.key}`)?.label
     ?? form.ports.find((slot) => path === `ports.${slot.key}`)?.label
     ?? ({ displayName: "環境名", version: "バージョン", storageMethod: "保存方式", ports: "接続ポート" } as Record<string, string>)[path] ?? "設定";
@@ -90,7 +101,10 @@ export function TemplateForm({ initialPlan, onUpdate }: {
         <div><dt>バージョン</dt><dd>{view.version}</dd></div><div><dt>保存方式</dt><dd>{storage[method].label}</dd></div></dl>
       {form.connections.map((connection) => <div key={connection.key} className="connection-summary"><strong>{connection.label}</strong>
         <p>{view.ports[connection.port] === undefined ? "ポート未確定" : `127.0.0.1:${view.ports[connection.port]}（候補）`}</p>
-        {connection.inputs.map((key) => { const input = form.inputs.find((item) => item.key === key); return input && <p key={key}>{input.label}: {input.inputType === "secret" ? secretSet(key) ? "••••••••（設定済み）" : "未設定" : value(key) === null ? "未設定" : value(key) === "" ? "空文字" : String(value(key))}</p>; })}
+        {connection.inputs.map((key) => {
+          const input = form.inputs.find((item) => item.key === key);
+          return input && <p key={key}>{input.label}: {summaryValue(key)}</p>;
+        })}
       </div>)}
       {view.concerns.length > 0 && <div className="notice" role="status">{view.concerns.map((item) => <p key={`${item.fieldPath}-${item.code}`}>{fieldLabel(item.fieldPath)}: {concernMessage(item.code)}</p>)}</div>}
     </section></aside></div></fieldset>

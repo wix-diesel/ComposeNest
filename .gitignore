@@ -24,3 +24,6 @@ target
 /apps/desktop/node_modules/
 /apps/desktop/tsconfig.tsbuildinfo
 /apps/desktop/src-tauri/gen/
+
+# Browser test screenshots
+apps/desktop/test-results/

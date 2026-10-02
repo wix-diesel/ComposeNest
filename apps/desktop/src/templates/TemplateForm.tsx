@@ -27,6 +27,9 @@ export function TemplateForm({ initialPlan, onUpdate }: {
   const error = (path: string) => failure?.fieldPath === path ? failure.reason : view.concerns.filter((item) => item.fieldPath === path).map((item) => concernMessage(item.code)).join(" ");
   const value = (key: string): JsonValue => Object.hasOwn(draft.inputs, key) ? draft.inputs[key] : candidate(plan, key).value;
   const secretSet = (key: string) => Object.hasOwn(draft.inputs, key) ? draft.inputs[key] !== null : candidate(plan, key).hasSecret;
+  const fieldLabel = (path: string) => form.inputs.find((input) => path === `inputs.${input.key}`)?.label
+    ?? form.ports.find((slot) => path === `ports.${slot.key}`)?.label
+    ?? ({ displayName: "環境名", version: "バージョン", storageMethod: "保存方式", ports: "接続ポート" } as Record<string, string>)[path] ?? "設定";
 
   async function apply(action: FormAction = {}) {
     if (inFlight.current) return;
@@ -81,7 +84,7 @@ export function TemplateForm({ initialPlan, onUpdate }: {
         {form.storage.map((slot) => <p key={slot.key}>{slot.label}: <code>{String(slot.container)}</code></p>)}
         {form.storage.length === 0 && <p>このバージョンに保存領域はありません。</p>}
       </section>
-      <div className="form-footer"><small>{busy ? "Coreで設定を確認しています…" : "入力の検証はCoreで行います。"}</small><button className="btn primary" type="submit" disabled={!dirty}>入力を反映</button></div>
+      <div className="form-footer"><small>{busy ? "設定を確認しています…" : "確定前にポートと設定を再確認します。"}</small><button className="btn primary" type="submit" disabled={!dirty}>入力を反映</button></div>
     </div><aside><section className="panel"><h2>設定する環境</h2><strong className="summary-title">{form.name}</strong><p>{form.description}</p>
       <dl className="summary-list"><div><dt>テンプレート</dt><dd>{form.templateVersion}</dd></div><div><dt>環境名</dt><dd>{draft.displayName ?? view.displayName}</dd></div>
         <div><dt>バージョン</dt><dd>{view.version}</dd></div><div><dt>保存方式</dt><dd>{storage[method].label}</dd></div></dl>
@@ -89,7 +92,7 @@ export function TemplateForm({ initialPlan, onUpdate }: {
         <p>{view.ports[connection.port] === undefined ? "ポート未確定" : `127.0.0.1:${view.ports[connection.port]}（候補）`}</p>
         {connection.inputs.map((key) => { const input = form.inputs.find((item) => item.key === key); return input && <p key={key}>{input.label}: {input.inputType === "secret" ? secretSet(key) ? "••••••••（設定済み）" : "未設定" : value(key) === null ? "未設定" : value(key) === "" ? "空文字" : String(value(key))}</p>; })}
       </div>)}
-      {view.concerns.length > 0 && <div className="notice" role="status">{view.concerns.map((item) => <p key={`${item.fieldPath}-${item.code}`}>{item.fieldPath}: {concernMessage(item.code)}</p>)}</div>}
+      {view.concerns.length > 0 && <div className="notice" role="status">{view.concerns.map((item) => <p key={`${item.fieldPath}-${item.code}`}>{fieldLabel(item.fieldPath)}: {concernMessage(item.code)}</p>)}</div>}
     </section></aside></div></fieldset>
   </form>;
 }

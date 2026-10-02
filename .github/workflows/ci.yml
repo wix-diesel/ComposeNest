@@ -158,11 +158,19 @@ jobs:
         run: pnpm run check:contracts
       - name: Frontend build
         run: pnpm run build
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: Swatinem/rust-cache@v2
+      - name: Generate shared form fixtures from Core
+        working-directory: .
+        run: |
+          mkdir -p apps/desktop/test-results
+          cargo run -q -p composenest-adapters --example template_form_fixture > apps/desktop/test-results/template-form-plans.json
       - name: Test navigation and common shell
         run: |
           pnpm run test:navigation
           pnpm exec playwright install --with-deps chromium
           pnpm run test:shell
+          pnpm run test:forms
       - uses: actions/upload-artifact@v4
         if: always()
         with:

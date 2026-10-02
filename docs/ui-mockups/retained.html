@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>保持データ | ComposeNest</title>
+<script src="assets/appearance.js"></script>
+<link rel="stylesheet" href="assets/styles.css">
+<link rel="stylesheet" href="assets/appearance.css">
+<script src="assets/mock.js" defer>
+</script>
+</head>
+<body data-page="retained">
+<div class="app">
+<aside class="sidebar">
+<div class="brand">
+<span class="brand-mark">
+<svg aria-hidden="true" data-icon="nest" viewBox="0 0 24 24">
+</svg>
+</span>
+<span class="brand-text">ComposeNest</span>
+</div>
+<div class="nav-label">ワークスペース</div>
+<nav aria-label="メインメニュー">
+<button class="nav " data-notice="環境一覧の画面遷移は省略しています。対応するHTMLを直接開いてください。" >
+<svg aria-hidden="true" data-icon="grid" viewBox="0 0 24 24">
+</svg>
+<span class="nav-text">環境一覧</span>
+<span class=count>6</span>
+</button>
+<button class="nav " data-notice="テンプレートの画面遷移は省略しています。対応するHTMLを直接開いてください。" >
+<svg aria-hidden="true" data-icon="layers" viewBox="0 0 24 24">
+</svg>
+<span class="nav-text">テンプレート</span>
+</button>
+<button class="nav active" data-notice="保持データの画面遷移は省略しています。対応するHTMLを直接開いてください。" aria-current=page>
+<svg aria-hidden="true" data-icon="archive" viewBox="0 0 24 24">
+</svg>
+<span class="nav-text">保持データ</span>
+</button>
+<button class="nav " data-notice="Docker診断の画面遷移は省略しています。対応するHTMLを直接開いてください。" >
+<svg aria-hidden="true" data-icon="activity" viewBox="0 0 24 24">
+</svg>
+<span class="nav-text">Docker診断</span>
+</button>
+</nav>
+<div class="sidebar-bottom">
+<button class="nav " data-notice="設定の画面遷移は省略しています。settings.htmlを直接開いてください。">
+<svg aria-hidden="true" data-icon="settings" viewBox="0 0 24 24">
+</svg>
+<span class="nav-text">設定</span>
+</button>
+<div class="engine-card">
+<span class="dot">
+</span>Docker 接続済み<small>ローカル環境 · Linux</small>
+</div>
+<div class="user">
+<span class="avatar">L</span>
+<div style="font-size:11px">ローカルワークスペース<br>
+<small>このコンピューター</small>
+</div>
+</div>
+</div>
+</aside>
+<main class="main">
+<header class="topbar">
+<div class="crumb">
+<svg aria-hidden="true" data-icon="home" viewBox="0 0 24 24">
+</svg>
+<span>/</span>
+<strong>保持データ</strong>
+</div>
+<div class="topbar-right">
+<span>
+<span class="dot">
+</span>ローカル接続</span>
+<span class="mock-label">UI モック</span>
+</div>
+</header>
+<div class="workspace">
+<div class="page-heading">
+<div>
+<div class="eyebrow">ワークスペース</div>
+<h1>保持データ</h1>
+<p class="subtitle">削除した環境のデータと、元の設定の所在を確認できます。</p>
+</div>
+<div class="actions">
+<button type="button" class="btn " data-action="refresh" >
+<svg aria-hidden="true" data-icon="refresh" viewBox="0 0 24 24">
+</svg>状態を確認</button>
+</div>
+</div>
+<div class="notice ">
+<svg aria-hidden="true" data-icon="info" viewBox="0 0 24 24">
+</svg>
+<div>
+<strong>環境を削除しても、データは残ります</strong>
+<p>ここに表示される領域は新しい環境で自動的に再利用されません。v1では復元やデータの完全削除は提供しません。</p>
+</div>
+</div>
+<section class="panel">
+<div class="panel-title">
+<h2>削除した環境の保存領域</h2>
+<small>2 件</small>
+</div>
+<div class="table-wrap">
+<table>
+<thead>
+<tr>
+<th>元の環境</th>
+<th>保存方式</th>
+<th>保存先・識別名</th>
+<th>環境の削除日</th>
+<th>状態</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<strong>旧検証用DB</strong>
+<small>PostgreSQL 17</small>
+</td>
+<td>
+<span class="badge ">bind mount</span>
+</td>
+<td>
+<code>C:\ProgramData\ComposeNest\instances\cn-1c9e\data</code>
+<small>ホストの専用フォルダー</small>
+</td>
+<td>2026/09/20</td>
+<td>
+<span class="badge ready">保持済み</span>
+</td>
+</tr>
+<tr>
+<td>
+<strong>キャッシュ検証</strong>
+<small>Redis 8.2</small>
+</td>
+<td>
+<span class="badge ">named volume</span>
+</td>
+<td>
+<code>cn_4d82_data</code>
+<small>Dockerが管理する保存領域</small>
+</td>
+<td>2026/09/18</td>
+<td>
+<span class="badge ready">保持済み</span>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<div class="two-equal">
+<section class="panel">
+<div class="panel-title">
+<h2>元の設定・Compose</h2>
+</div>
+<p style="font-size:12px">復旧に必要な設定と生成物は、各環境IDの管理フォルダーに残しています。</p>
+<div class="path mono">C:\ProgramData\ComposeNest\instances\&lt;環境ID&gt;</div>
+</section>
+<section class="panel">
+<div class="panel-title">
+<h2>Docker管理のデータ</h2>
+</div>
+<p style="font-size:12px">named volumeはDocker側で管理されています。通常のホストフォルダーとして開くことはできません。</p>
+</section>
+</div>
+<footer class="page-footer">
+<span>ComposeNest <span class="muted"> / </span> ローカル開発を、もっと身近に。</span>
+<span>v1 デザインモック · サンプルデータ</span>
+</footer>
+</div>
+</main>
+</div>
+<div class="toast" role="status" hidden>
+</div>
+<dialog class="dialog" aria-labelledby="dialog-title">
+<h2 id="dialog-title">
+</h2>
+<p id="dialog-body">
+</p>
+<div class="actions">
+<button class="btn" data-action="close-dialog">閉じる</button>
+<button class="btn primary" id="dialog-confirm" hidden>確認</button>
+</div>
+</dialog>
+</body>
+</html>

@@ -44,7 +44,7 @@ try {
   await page.goBack();
   await page.waitForFunction(() => document.querySelector("h1")?.textContent === "設定");
   for (const [path, parameter, value, heading, expected] of [
-    ["instance-create", "templateId", "template", "環境を作成", "テンプレート"],
+    ["instance-create", "templateId", "template", "環境を作成", "環境一覧"],
     ["instance-detail", "instanceId", "target", "環境の詳細", "環境一覧"],
     ["instance-clone", "instanceId", "target", "設定を複製", "環境の詳細"],
     ["instance-edit", "instanceId", "target", "環境を編集", "環境の詳細"],
@@ -62,6 +62,8 @@ try {
   await dialog.waitFor();
   assert.equal(await page.evaluate(() => document.activeElement?.textContent), "閉じる");
   await page.keyboard.press("Tab");
+  assert.equal(await page.evaluate(() => !!document.activeElement?.closest("dialog")), true);
+  await page.keyboard.press("Shift+Tab");
   assert.equal(await page.evaluate(() => !!document.activeElement?.closest("dialog")), true);
   await page.keyboard.press("Escape");
   await dialog.waitFor({ state: "detached" });

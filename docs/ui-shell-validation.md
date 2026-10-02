@@ -6,7 +6,7 @@ PR #70の元資料を復元するPR #158が依存元。各画面内容・テー�
 - 通常幅224px／800px以下70pxのsidebar。アイコンのみでも日本語アクセシブル名を維持。
 - `ApplicationClient.navigate(AppRoute)`で10画面へ移動。hashchange購読で戻る／進むにも追従。
 - 詳細／複製／編集は`instanceId`、作成は`templateId`、処理画面は`operationId`と任意の`instanceId`を渡す。URLに秘密・Plan・業務設定を保存しない。
-- 処理／複製／編集の戻り先は同じ対象の詳細。詳細は一覧、作成はテンプレートに戻る。直接リンクでも同じ階層になる。
+- 処理／複製／編集の戻り先は同じ対象の詳細。詳細は一覧に戻る。作成はモック同様に一覧を選択し、一覧へ戻る。テンプレートから来る場合は`returnTo: "templates"`で選択ナビと戻り先を一緒に変更できる。直接リンクでも同じ階層になる。
 - 読込み中・初期取得失敗／再確認、Docker未確認を表示。タイマーやクリックだけでDocker接続・業務操作成功を表示しない。
 - 文言は`messages.ts`の日本語キー。通常の通知は共通Toast、確認はConfirmDialogを利用。
 - native dialogの初期フォーカスは閉じる／キャンセル。Escape、Tabのフォーカス制限、閉じた後の起点復帰を扱う。
@@ -15,7 +15,7 @@ PR #70の元資料を復元するPR #158が依存元。各画面内容・テー�
 
 ```ts
 client.navigate({ page: "instance-detail", instanceId });
-client.navigate({ page: "instance-create", templateId });
+client.navigate({ page: "instance-create", templateId, returnTo: "templates" });
 client.navigate({ page: "operation", operationId, instanceId });
 ```
 

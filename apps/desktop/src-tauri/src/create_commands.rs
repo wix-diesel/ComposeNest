@@ -144,6 +144,7 @@ fn envelope<T>(context: RequestContext, result: Result<T, PlanError>) -> Respons
     }
 }
 
+/// Prepares candidates from a registered revision without allocating resources.
 #[tauri::command]
 pub async fn prepare_create(
     request: PrepareCreateRequest,
@@ -168,6 +169,7 @@ pub async fn prepare_create(
     Ok(envelope(request.context, result))
 }
 
+/// Applies edits against the caller-reviewed plan revision.
 #[tauri::command]
 pub async fn update_create_plan(
     request: UpdateCreateRequest,
@@ -192,6 +194,7 @@ pub async fn update_create_plan(
     Ok(envelope(request.context, result))
 }
 
+/// Refreshes candidates on the same scoped plan.
 #[tauri::command]
 pub async fn view_create_plan(
     request: CreatePlanRequest,
@@ -211,6 +214,7 @@ pub async fn view_create_plan(
     Ok(envelope(request.context, result))
 }
 
+/// Reconciles acceptance from durable state without contacting Docker.
 #[tauri::command]
 pub async fn get_create_receipt(
     request: CreatePlanRequest,
@@ -231,6 +235,7 @@ pub async fn get_create_receipt(
     ))
 }
 
+/// Discards only an unconfirmed in-memory plan.
 #[tauri::command]
 pub async fn discard_create_plan(
     request: CreatePlanRequest,
@@ -286,6 +291,7 @@ fn execute(state: Arc<CreateBackend>, receipt: RequestReceipt, app: tauri::AppHa
     });
 }
 
+/// Accepts explicit confirmation and starts each fresh operation once.
 #[tauri::command]
 pub async fn confirm_create(
     request: ConfirmCreateRequest,

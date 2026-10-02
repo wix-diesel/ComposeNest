@@ -7,7 +7,9 @@
   "scripts": {
     "build": "tsc --noEmit && vite build",
     "check:contracts": "node scripts/check-contracts.mjs",
-    "dev": "vite"
+    "dev": "vite",
+    "test:navigation": "node --experimental-strip-types --test scripts/navigation.test.mjs",
+    "test:shell": "node scripts/shell.test.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "2.6.0",
@@ -18,6 +20,7 @@
     "@types/react": "19.2.7",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "5.2.0",
+    "playwright": "1.62.1",
     "typescript": "6.0.3",
     "vite": "8.3.0"
   }

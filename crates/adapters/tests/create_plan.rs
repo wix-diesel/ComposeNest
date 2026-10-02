@@ -23,6 +23,9 @@ fn version_switch_preserves_candidates_and_revalidates_only_active_definition() 
     assert_eq!(first.storage_method, StorageMethod::Bind);
     assert_eq!(first.ports["db"], 5432);
     assert_eq!(first.storage_slots, ["data"]);
+    assert_eq!(first.template_form.name, "Test");
+    assert_eq!(first.template_form.template_version, "1.0.0");
+    assert_eq!(first.template_form.ports[0].label, "DB");
     assert!(first.concerns.is_empty());
     assert!(
         first
@@ -59,6 +62,19 @@ fn version_switch_preserves_candidates_and_revalidates_only_active_definition() 
         .unwrap();
     assert!(random.0 > generated_count);
     assert_eq!(next.plan_revision, 3);
+    assert_eq!(
+        next.template_form
+            .inputs
+            .iter()
+            .map(|input| input.key.as_str())
+            .collect::<Vec<_>>(),
+        ["retained", "fresh", "password", "added"]
+    );
+    assert_eq!(next.template_form.inputs[0].validation["minLength"], 6);
+    assert!(!next.template_form.inputs[2].can_generate);
+    assert_eq!(next.template_form.inputs[3].options[0].value, "green");
+    assert_eq!(next.template_form.ports[0].key, "api");
+    assert_eq!(next.template_form.storage[0].container, "/cache");
     assert_eq!(
         next.inputs
             .iter()

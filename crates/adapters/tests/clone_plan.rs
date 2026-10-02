@@ -79,6 +79,22 @@ fn clone_version_switch_uses_snapshot_and_shows_removed_fields_and_slots() {
         &mut random,
     );
     assert_eq!(next.added_ports, ["api"]);
+    assert_eq!(
+        next.template_form
+            .inputs
+            .iter()
+            .map(|input| input.key.as_str())
+            .collect::<Vec<_>>(),
+        ["retained", "fresh", "password", "added"]
+    );
+    assert_eq!(next.template_form.ports[0].key, "api");
+    assert_eq!(next.template_form.storage[0].key, "cache");
+    assert_eq!(next.template_form.name, "Test");
+    assert!(
+        !serde_json::to_string(&next.template_form)
+            .unwrap()
+            .contains("source-secret")
+    );
     assert_eq!(next.removed_ports, ["db"]);
     assert_eq!(next.added_storage, ["cache"]);
     assert_eq!(next.removed_storage, ["data"]);

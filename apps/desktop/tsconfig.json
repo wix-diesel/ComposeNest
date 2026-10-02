@@ -9,5 +9,5 @@
     "jsx": "react-jsx",
     "types": ["vite/client"]
   },
-  "include": ["src"]
+  "include": ["src", "scripts/template-form-fixture.tsx"]
 }

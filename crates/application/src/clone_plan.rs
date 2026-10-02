@@ -156,6 +156,8 @@ pub struct ClonePlanView {
     pub storage_method: StorageMethod,
     /// Committed source storage method.
     pub source_storage_method: StorageMethod,
+    /// Ordered active form metadata from the private Snapshot only.
+    pub template_form: crate::template_form::TemplateForm,
     /// All input differences, including removed keys.
     pub inputs: Vec<InputDiff>,
     /// Proposed host ports.

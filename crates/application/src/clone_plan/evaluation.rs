@@ -401,6 +401,7 @@ pub(super) fn preview(
             }),
         storage_method: plan.storage_method,
         source_storage_method: plan.source.storage_method,
+        template_form: crate::template_form::project_form(&plan.template, definition),
         inputs,
         ports,
         source_ports: plan

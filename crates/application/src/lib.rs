@@ -21,6 +21,7 @@ pub mod retained_storage;
 pub mod state_store;
 pub mod storage;
 pub mod template_catalog;
+pub mod template_form;
 
 /// The first version of the desktop IPC contract.
 pub const API_VERSION: u16 = 1;

@@ -20,10 +20,16 @@ createRoot(root).render(<div className="workspace"><TemplateForm initialPlan={wi
   window.formRequests.push(edit);
   await new Promise((resolve) => setTimeout(resolve, window.formDelay));
   if (window.formFailure) throw { code: "INPUT_INVALID", reason: "テスト用の入力エラー", fieldPath: "inputs.retained" };
-  const next = structuredClone(edit.version ? window.formFixture.next : plan);
+  const next = structuredClone(edit.version && edit.version !== plan.view.version ? window.formFixture.next : plan);
   next.view.planRevision = plan.view.planRevision + 1;
   if (edit.displayName !== null) next.view.displayName = edit.displayName;
   if (edit.storageMethod !== null) next.view.storageMethod = edit.storageMethod;
+  next.view.concerns = next.view.concerns.filter((item) => !(edit.version !== null && item.code === "VERSION_NEEDS_ANSWER") && !(edit.storageMethod !== null && item.code === "STORAGE_NEEDS_ANSWER"));
+  if (next.kind === "clone" && "confirmSecrets" in edit) for (const key of edit.confirmSecrets) {
+    const input = next.view.inputs.find((item) => item.key === key);
+    if (input) input.needsSecretConfirmation = false;
+    next.view.concerns = next.view.concerns.filter((item) => !(item.fieldPath === `inputs.${key}` && item.code === "SECRET_REUSE_NEEDS_CONFIRMATION"));
+  }
   for (const input of next.view.inputs) {
     const answer = edit.inputs[input.key];
     if (answer === undefined) continue;

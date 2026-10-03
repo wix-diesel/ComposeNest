@@ -6,6 +6,7 @@ const sources = {
   template_form: ["FormInput", "FormOption", "FormSlot", "FormConnection", "TemplateForm"],
   create_session: ["PrepareCreateRequest", "CreatePlanRequest", "UpdateCreateRequest", "ConfirmCreateRequest", "CreateReceipt"],
   create_plan: ["InputView", "PlanConcern", "CreatePlanView", "PlanEdit"],
+  clone_session: ["PrepareCloneRequest", "UpdateCloneRequest", "ConfirmCloneRequest"],
   clone_plan: ["InputDiff", "ClonePlanView", "CloneEdit"],
 };
 const primitives = { String: "string", "&'static str": "string", bool: "boolean", u16: "number", u64: "number", Value: "JsonValue" };

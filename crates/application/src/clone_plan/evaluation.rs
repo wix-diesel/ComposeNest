@@ -29,6 +29,9 @@ pub(super) fn evaluate_fields(
         let kind = input["type"].as_str().unwrap_or("").to_owned();
         if let Some(state) = previous.get(key).filter(|state| state.kind == kind) {
             let mut retained = state.clone();
+            if kind == "secret" {
+                retained.secret_confirmed = false;
+            }
             if policy(input) == "ask"
                 && (state.policy != "ask" || state.options != input.get("options").cloned())
             {
@@ -42,6 +45,9 @@ pub(super) fn evaluate_fields(
         let source = source_values
             .get(key)
             .filter(|_| source_types.get(key) == Some(&input["type"]));
+        let type_changed = source_types
+            .get(key)
+            .is_some_and(|old| old != &input["type"]);
         let chosen = policy(input);
         let (value, origin, answered) = match chosen {
             "copy" => (
@@ -95,7 +101,7 @@ pub(super) fn evaluate_fields(
                 options: input.get("options").cloned(),
                 value,
                 origin,
-                answered,
+                answered: answered && !type_changed,
                 secret_confirmed: false,
             },
         );
@@ -232,10 +238,11 @@ pub(super) fn preview(
         let state = &plan.fields[key];
         let secret = input["type"] == "secret";
         let type_changed = source_input.is_some_and(|old| old["type"] != input["type"]);
+        let type_needs_answer = type_changed && !state.answered;
         let invalid = !valid_input(input, state.value.as_ref());
-        if type_changed || invalid || !state.answered {
+        if type_needs_answer || invalid || !state.answered {
             concerns.push(PlanConcern {
-                code: if type_changed {
+                code: if type_needs_answer {
                     "INPUT_TYPE_CHANGED"
                 } else {
                     "INPUT_REQUIRED_OR_INVALID"
@@ -256,7 +263,17 @@ pub(super) fn preview(
         inputs.push(InputDiff {
             key: key.clone(),
             definition: Some(input.clone()),
-            source: if secret { None } else { source.cloned() },
+            source: if secret || source_input.is_some_and(|old| old["type"] == "secret") {
+                None
+            } else {
+                source.cloned()
+            },
+            source_has_secret: source_input.is_some_and(|old| old["type"] == "secret")
+                && source.is_some(),
+            source_label: source_input
+                .and_then(|old| old["label"].as_str())
+                .unwrap_or(key)
+                .into(),
             candidate: if secret { None } else { state.value.clone() },
             policy: policy(input).into(),
             origin: state.origin,
@@ -281,6 +298,8 @@ pub(super) fn preview(
             } else {
                 plan.source_values.get(key).cloned()
             },
+            source_has_secret: secret && plan.source_values.contains_key(key),
+            source_label: old["label"].as_str().unwrap_or(key).into(),
             candidate: None,
             policy: policy(old).into(),
             origin: ValueOrigin::Unset,
@@ -385,6 +404,8 @@ pub(super) fn preview(
         plan_id: id.into(),
         plan_revision: plan.revision,
         source_id: plan.source.id.clone(),
+        source_name: plan.source.name.clone(),
+        source_revision: plan.source.revision,
         instance_id: plan.instance_id.clone(),
         project_name: format!("cn-{}", plan.instance_id),
         display_name: plan.display_name.clone(),
@@ -410,6 +431,7 @@ pub(super) fn preview(
             .iter()
             .map(|port| (port.slot.clone(), port.host_port))
             .collect(),
+        explicit_ports: plan.explicit_ports.keys().cloned().collect(),
         added_ports,
         removed_ports,
         storage_slots,

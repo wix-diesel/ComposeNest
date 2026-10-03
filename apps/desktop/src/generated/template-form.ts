@@ -113,10 +113,32 @@ export interface PlanEdit {
   ports: Record<string, string | null>;
 }
 
+export interface PrepareCloneRequest {
+  context: RequestContext;
+  sourceId: string;
+}
+
+export interface UpdateCloneRequest {
+  context: RequestContext;
+  planId: string;
+  edit: CloneEdit;
+}
+
+export interface ConfirmCloneRequest {
+  context: RequestContext;
+  planId: string;
+  revision: number;
+  confirmedPorts: Record<string, number>;
+  acceptPlaintext: boolean;
+  acceptConfigurationOnly: boolean;
+}
+
 export interface InputDiff {
   key: string;
   definition: JsonValue | null;
   source: JsonValue | null;
+  sourceHasSecret: boolean;
+  sourceLabel: string;
   candidate: JsonValue | null;
   policy: string;
   origin: ValueOrigin;
@@ -132,6 +154,8 @@ export interface ClonePlanView {
   planId: string;
   planRevision: number;
   sourceId: string;
+  sourceName: string;
+  sourceRevision: number;
   instanceId: string;
   projectName: string;
   displayName: string;
@@ -144,6 +168,7 @@ export interface ClonePlanView {
   inputs: Array<InputDiff>;
   ports: Record<string, number>;
   sourcePorts: Record<string, number>;
+  explicitPorts: Array<string>;
   addedPorts: Array<string>;
   removedPorts: Array<string>;
   storageSlots: Array<string>;

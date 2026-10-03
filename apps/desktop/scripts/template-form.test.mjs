@@ -23,7 +23,13 @@ try {
     page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     page.on("pageerror", (error) => errors.push(error.message));
     const initial = structuredClone(fixtures[kind]);
-    if (extra) {
+    if (extra === true && kind === "clone") {
+      const input = initial.inputs.find((item) => item.key === "password");
+      input.policy = "ask"; input.origin = "inherited"; input.changed = false; input.needsSecretConfirmation = true;
+      initial.concerns.push({ code: "SECRET_REUSE_NEEDS_CONFIRMATION", fieldPath: "inputs.password" });
+    }
+    if (extra === "ask") initial.concerns.push({ code: "VERSION_NEEDS_ANSWER", fieldPath: "version" }, { code: "STORAGE_NEEDS_ANSWER", fieldPath: "storageMethod" });
+    if (extra && kind === "create") {
       initial.templateForm.inputs.push({ key: "count", label: "件数", inputType: "integer", required: false, description: "整数テスト", validation: { min: -10, max: 10 }, options: [], canGenerate: false });
       initial.inputs.push({ key: "count", definition: {}, value: 0, hasSecret: false });
       initial.inputs.find((input) => input.key === "removed").value = false;
@@ -31,7 +37,7 @@ try {
     }
     await page.addInitScript((fixture) => { window.formFixture = fixture; }, { initial: { kind, view: initial }, next: { kind, view: fixtures[`${kind}Next`] } });
     await page.goto("http://127.0.0.1:4174/scripts/template-form.html");
-    await page.getByRole("heading", { name: "基本設定", exact: true }).waitFor();
+    await page.getByRole("heading", { name: kind === "clone" ? "変更内容の確認" : "基本設定", exact: true }).waitFor();
   }
   await open("create", true);
   assert.deepEqual(await page.locator('[data-field-path^="inputs."]').evaluateAll((items) => items.map((item) => item.dataset.fieldPath)), ["inputs.retained", "inputs.removed", "inputs.password", "inputs.count"]);
@@ -85,15 +91,46 @@ try {
   await page.getByRole("alert").waitFor();
   assert.equal(await page.locator("#input-retained").inputValue(), "retry");
   assert.equal(await page.locator("#input-retained").getAttribute("aria-invalid"), "true");
+  await open("clone", true);
+  assert.deepEqual(await page.locator("#service-version option").allTextContents(), ["1", "2"]);
+  await page.getByRole("heading", { name: "複製元の環境" }).waitFor();
+  assert.equal(await page.getByRole("radio", { name: /ホストフォルダー/ }).isChecked(), true);
+  assert.match(await page.locator('[data-diff-path="ports.db"]').textContent(), /5432/);
+  assert.match(await page.locator('[data-diff-path="inputs.password"]').textContent(), /非表示/);
+  await page.getByRole("button", { name: "秘密の引継ぎを確認", exact: true }).click();
+  await page.waitForFunction(() => window.formRequests.length === 1 && !document.querySelector("fieldset").disabled);
+  assert.deepEqual(await page.evaluate(() => window.formRequests[0].confirmSecrets), ["password"]);
+  assert.deepEqual(await page.evaluate(() => window.formRequests[0].inputs), {});
+  await open("clone", "ask");
+  await page.getByRole("button", { name: "バージョン選択を確認", exact: true }).click();
+  await page.waitForFunction(() => window.formRequests.length === 1 && !document.querySelector("fieldset").disabled);
+  assert.equal(await page.locator("#service-version").inputValue(), "1");
+  assert.equal(await page.evaluate(() => window.formRequests[0].version), "1");
+  await page.getByRole("button", { name: "現在の保存方式を確認", exact: true }).click();
+  await page.getByRole("button", { name: "入力を反映", exact: true }).click();
+  await page.waitForFunction(() => window.formRequests.length === 2 && !document.querySelector("fieldset").disabled);
+  assert.equal(await page.evaluate(() => window.formRequests[1].storageMethod), "bind");
+  assert.deepEqual(await page.evaluate(() => window.formRequests[1].confirmSecrets), []);
   await open("clone");
   await page.locator("#service-version").selectOption("2");
   await page.locator("#input-added").waitFor();
+  for (const path of ["inputs.removed", "ports.db", "storage.data"]) {
+    const row = page.locator(`[data-diff-path="${path}"]`);
+    assert.match(await row.textContent(), /削除/);
+    assert.equal(await row.locator("input, select, button").count(), 0);
+  }
+  for (const path of ["inputs.added", "ports.api", "storage.cache"]) assert.match(await page.locator(`[data-diff-path="${path}"]`).textContent(), /追加/);
+  assert.match(await page.locator('[data-diff-path="inputs.password"]').textContent(), /入力待ち/);
   assert.equal(await page.locator("#input-added").inputValue(), "", "missing Clone copy must stay unset despite a Template default");
   await page.locator('[data-field-path="inputs.added"]').getByText(/入力待ち/).waitFor();
   await page.locator("#input-added").selectOption("blue");
   await page.getByRole("button", { name: "入力を反映" }).click();
   await page.waitForFunction(() => window.formRequests.length === 2 && !document.querySelector("fieldset").disabled);
   assert.deepEqual(await page.evaluate(() => window.formRequests[1].inputs), { added: { action: "input", value: "blue" } });
+  assert.equal(await page.getByRole("button", { name: "Passwordを再生成", exact: true }).count(), 0, "incompatible generator requires manual input");
+  await page.getByRole("button", { name: "Freshを再生成", exact: true }).click();
+  await page.waitForFunction(() => window.formRequests.length === 3 && !document.querySelector("fieldset").disabled);
+  assert.deepEqual(await page.evaluate(() => window.formRequests[2].inputs), { fresh: { action: "generate" } });
   await mkdir("test-results", { recursive: true });
   for (const theme of ["light", "dark"]) for (const width of [1280, 390]) {
     await page.evaluate((theme) => { document.documentElement.dataset.theme = theme; }, theme);

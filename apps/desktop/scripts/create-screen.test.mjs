@@ -36,7 +36,7 @@ try {
         if (command === "get_bootstrap") return response({ applicationTitle: "ComposeNest", startedAtUnixSeconds: 1 });
         if (command === "prepare_create") {
           if (window.createMode === "prepare_failure") throw new Error("unavailable");
-          if (clone) { window.plan.sourceId = request.sourceId; window.sourceUpdated = false; }
+          if (clone) { window.plan.sourceId = request.sourceId; window.sourceUpdated = false; window.planExpired = false; }
           else window.plan.templateRevisionId = request.templateRevisionId;
           return response(structuredClone(window.plan));
         }
@@ -47,6 +47,7 @@ try {
           window.plan.planRevision++;
           return response(structuredClone(window.plan));
         }
+        if (window.planExpired && ["view_create_plan", "discard_create_plan"].includes(command)) return response(null, { code: "PLAN_NOT_FOUND", reason: "プランは失効しました。", fieldPath: null });
         if (command === "view_create_plan") {
           if (window.sourceUpdated) return response(null, { code: "PLAN_STALE", reason: "複製元を再確認してください。", fieldPath: "sourceId" });
           window.plan.ports = Object.fromEntries(Object.entries(window.plan.ports).map(([key]) => [key, 12789]));
@@ -149,6 +150,11 @@ try {
   assert.equal((await calls("prepare_create")).length, 1);
   await open("prepare_failure"); await page.getByRole("alert").waitFor();
   assert.equal((await calls("confirm_create")).length, 0);
+  await open();
+  await page.evaluate(() => { window.planExpired = true; });
+  await page.getByRole("button", { name: "作成を取り消す", exact: true }).click();
+  await page.waitForURL(clone ? /#\/instances$/ : /#\/templates$/);
+
   if (clone) {
     await open(); await review();
     const boxes = page.getByRole("dialog").getByRole("checkbox");

@@ -125,20 +125,42 @@ pub(super) fn envelope<T>(
 ) -> ResponseEnvelope<T> {
     match result {
         Ok(value) => ResponseEnvelope::success(context.request_id, value),
-        Err(error) => ResponseEnvelope::failure(context.request_id, ErrorDto {
-            code: error.code.into(), field_path: error.field_path,
-            reason: match error.code {
-                "OPERATION_CAPACITY_REACHED" => "他の操作が完了してから、同じプランで作成を再試行してください。",
-                "APPLICATION_SHUTTING_DOWN" => "アプリの終了中です。再起動後に作成してください。",
-                "DOCKER_UNAVAILABLE" => "Dockerの接続・対応環境を確認してください。",
-                "PLAN_NOT_FOUND" => "この作成プランは失効しました。新規作成はテンプレートから開き直してください。",
-                "PLAN_STALE" | "PLAN_RECONFIRM" | "PORT_CONFLICT" => "プランまたはポートが変わりました。同じプランの設定を再確認してください。",
-                "SOURCE_UNAVAILABLE" => "複製元を利用できません。元の環境を確認してください。",
-                "CONFIGURATION_ONLY_CONFIRMATION_REQUIRED" => "データを複製しないことの確認が必要です。",
-                "PLAINTEXT_CONFIRMATION_REQUIRED" => "平文保存の確認が必要です。",
-                _ => "要求を処理できませんでした。設定と接続を再確認してください。",
-            }.into(), retryability: if error.code == "OPERATION_CAPACITY_REACHED" { Retryability::Retryable } else { Retryability::NotRetryable }, operation_id: None, safe_details: None,
-        }),
+        Err(error) => ResponseEnvelope::failure(
+            context.request_id,
+            ErrorDto {
+                code: error.code.into(),
+                field_path: error.field_path,
+                reason: match error.code {
+                    "OPERATION_CAPACITY_REACHED" => {
+                        "他の操作が完了してから、同じプランで作成を再試行してください。"
+                    }
+                    "APPLICATION_SHUTTING_DOWN" => {
+                        "アプリの終了中です。再起動後に作成してください。"
+                    }
+                    "DOCKER_UNAVAILABLE" => "Dockerの接続・対応環境を確認してください。",
+                    "PLAN_NOT_FOUND" => {
+                        "このプランは失効しました。作成・複製画面を開き直してください。"
+                    }
+                    "PLAN_STALE" | "PLAN_RECONFIRM" | "PORT_CONFLICT" => {
+                        "プランまたはポートが変わりました。同じプランの設定を再確認してください。"
+                    }
+                    "SOURCE_UNAVAILABLE" => "複製元を利用できません。元の環境を確認してください。",
+                    "CONFIGURATION_ONLY_CONFIRMATION_REQUIRED" => {
+                        "データを複製しないことの確認が必要です。"
+                    }
+                    "PLAINTEXT_CONFIRMATION_REQUIRED" => "平文保存の確認が必要です。",
+                    _ => "要求を処理できませんでした。設定と接続を再確認してください。",
+                }
+                .into(),
+                retryability: if error.code == "OPERATION_CAPACITY_REACHED" {
+                    Retryability::Retryable
+                } else {
+                    Retryability::NotRetryable
+                },
+                operation_id: None,
+                safe_details: None,
+            },
+        ),
     }
 }
 

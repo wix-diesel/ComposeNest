@@ -10,7 +10,7 @@ use composenest_application::{
 use std::sync::Arc;
 use tauri::State;
 
-/// Prepares candidates from a registered revision without allocating resources.
+/// Prepares candidates from the source private Snapshot without allocating resources.
 #[tauri::command]
 pub async fn prepare_clone(
     request: PrepareCloneRequest,

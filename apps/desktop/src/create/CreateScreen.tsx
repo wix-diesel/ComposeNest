@@ -37,7 +37,12 @@ function PlanScreen({ client, selectionId, kind, returnTo = "instances" }: {
   const clone = kind === "clone";
   const prepare = () => clone ? client.prepareClone(selectionId) : client.prepareCreate(selectionId);
   const viewPlan = (id: string) => clone ? client.viewClone(id) : client.viewCreate(id);
-  const discard = (id: string) => clone ? client.discardClone(id) : client.discardCreate(id);
+  async function discard(id: string) {
+    try { await (clone ? client.discardClone(id) : client.discardCreate(id)); }
+    catch (error) {
+      if (error === null || typeof error !== "object" || !("code" in error) || error.code !== "PLAN_NOT_FOUND") throw error;
+    }
+  }
   const saved = draftFor(client, templateId);
   const [plan, setPlan] = useState(saved.plan);
   const [review, setReview] = useState<PlanView | null>(null);
@@ -136,7 +141,7 @@ function PlanScreen({ client, selectionId, kind, returnTo = "instances" }: {
   }
 
   function sourceFailure(error: unknown) {
-    if (clone && error !== null && typeof error === "object" && "fieldPath" in error && error.fieldPath === "sourceId") {
+    if (clone && error !== null && typeof error === "object" && (("fieldPath" in error && error.fieldPath === "sourceId") || ("code" in error && error.code === "PLAN_NOT_FOUND"))) {
       setSourceChanged(true); setReview(null); setConsent(false); setConfigurationOnly(false);
       setNotice("複製元が更新されました。元の設定を読み直し、変更内容を再確認してください。");
     }

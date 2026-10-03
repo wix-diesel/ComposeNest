@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import type { ApplicationClient } from "../ipc/ApplicationClient";
 import { API_VERSION } from "../generated/ipc";
-import type { ConfirmCreateRequest, CreatePlanView, CreateReceipt, PlanEdit } from "../generated/template-form";
+import type { CloneEdit, ClonePlanView, ConfirmCloneRequest, ConfirmCreateRequest, CreatePlanView, CreateReceipt, PlanEdit } from "../generated/template-form";
 import { ConfirmDialog } from "../shell/ConfirmDialog";
 import { TemplateForm } from "../templates/TemplateForm";
 import "./create.css";
 
-type Draft = { preparation: Promise<CreatePlanView> | null; plan: CreatePlanView | null; confirmation: ConfirmCreateRequest | null; receipt: CreateReceipt | null };
+type PlanView = CreatePlanView | ClonePlanView;
+type Confirmation = ConfirmCreateRequest | ConfirmCloneRequest;
+type Draft = { preparation: Promise<PlanView> | null; plan: PlanView | null; confirmation: Confirmation | null; receipt: CreateReceipt | null };
 // Preserve an uncertain request across local navigation, never in persistent browser storage.
 const drafts = new WeakMap<ApplicationClient, Map<string, Draft>>();
 function draftFor(client: ApplicationClient, templateId: string): Draft {
@@ -21,20 +23,34 @@ const reason = (error: unknown) => error !== null && typeof error === "object" &
   ? error.reason : "接続を確認できませんでした。同じプランの受付結果を再確認してください。";
 
 /** Prepares, reviews and accepts one create plan before opening its independent operation. */
-export function CreateScreen({ client, templateId, returnTo = "instances" }: {
-  client: ApplicationClient; templateId: string; returnTo?: "instances" | "templates";
+export function CreateScreen({ client, templateId, returnTo }: { client: ApplicationClient; templateId: string; returnTo?: "instances" | "templates" }) {
+  return <PlanScreen client={client} selectionId={templateId} kind="create" returnTo={returnTo} />;
+}
+/** Shares confirmation, cancellation and acceptance recovery with new creation. */
+export function CloneScreen({ client, sourceId }: { client: ApplicationClient; sourceId: string }) {
+  return <PlanScreen client={client} selectionId={sourceId} kind="clone" />;
+}
+function PlanScreen({ client, selectionId, kind, returnTo = "instances" }: {
+  client: ApplicationClient; selectionId: string; kind: "create" | "clone"; returnTo?: "instances" | "templates";
 }) {
+  const templateId = `${kind}:${selectionId}`;
+  const clone = kind === "clone";
+  const prepare = () => clone ? client.prepareClone(selectionId) : client.prepareCreate(selectionId);
+  const viewPlan = (id: string) => clone ? client.viewClone(id) : client.viewCreate(id);
+  const discard = (id: string) => clone ? client.discardClone(id) : client.discardCreate(id);
   const saved = draftFor(client, templateId);
   const [plan, setPlan] = useState(saved.plan);
-  const [review, setReview] = useState<CreatePlanView | null>(null);
+  const [review, setReview] = useState<PlanView | null>(null);
   const [consent, setConsent] = useState(false);
+  const [configurationOnly, setConfigurationOnly] = useState(false);
+  const [sourceChanged, setSourceChanged] = useState(false);
   const [busy, setBusy] = useState(false);
   const [uncertain, setUncertain] = useState(saved.confirmation !== null);
   const [notice, setNotice] = useState<string | null>(null);
   const inFlight = useRef(false);
   const active = useRef(false);
 
-  function remember(next: CreatePlanView) { saved.plan = next; if (active.current) setPlan(next); }
+  function remember(next: PlanView) { saved.plan = next; if (active.current) setPlan(next); }
   function accepted(receipt: CreateReceipt) {
     if (receipt.planId !== saved.plan?.planId || receipt.confirmedRevision !== (saved.confirmation?.revision ?? saved.receipt?.confirmedRevision))
       throw new Error("invalid_create_receipt");
@@ -47,7 +63,7 @@ export function CreateScreen({ client, templateId, returnTo = "instances" }: {
 
   async function receipt(): Promise<boolean> {
     if (!saved.plan) return false;
-    const found = saved.receipt ?? await client.getCreateReceipt(saved.plan.planId);
+    const found = saved.receipt ?? await (clone ? client.getCloneReceipt(saved.plan.planId) : client.getCreateReceipt(saved.plan.planId));
     if (found) { accepted(found); return true; }
     return false;
   }
@@ -57,7 +73,7 @@ export function CreateScreen({ client, templateId, returnTo = "instances" }: {
     if (saved.confirmation) {
       void reconcile();
     } else {
-      saved.preparation ??= client.prepareCreate(templateId).then((next) => { saved.plan = next; return next; });
+      saved.preparation ??= prepare().then((next) => { saved.plan = next; return next; });
       void saved.preparation.then((next) => { if (active.current) setPlan(saved.plan ?? next); })
         .catch((error: unknown) => { if (active.current) setNotice(reason(error)); });
     }
@@ -74,23 +90,24 @@ export function CreateScreen({ client, templateId, returnTo = "instances" }: {
   }
 
   async function confirm() {
-    if (inFlight.current || (!saved.confirmation && (!review || !consent))) return;
+    if (inFlight.current || (!saved.confirmation && (!review || !consent || (clone && !configurationOnly)))) return;
     if (!saved.confirmation && review) saved.confirmation = {
       context: { apiVersion: API_VERSION, requestId: crypto.randomUUID() }, planId: review.planId,
-      revision: review.planRevision, confirmedPorts: { ...review.ports }, acceptPlaintext: consent,
+      revision: review.planRevision, confirmedPorts: { ...review.ports }, acceptPlaintext: consent, ...(clone ? { acceptConfigurationOnly: configurationOnly } : {}),
     };
     const request = saved.confirmation;
     if (!request) return;
     inFlight.current = true; setBusy(true); setUncertain(true); setNotice(null);
-    try { accepted(await client.confirmCreate(request)); }
+    try { accepted(await (clone ? client.confirmClone(request as ConfirmCloneRequest) : client.confirmCreate(request))); }
     catch (error) {
       try {
         if (!await receipt()) {
           // A structured backend rejection is definitive; transport failure remains frozen.
           if (error !== null && typeof error === "object" && "code" in error) {
-            const current = await client.viewCreate(request.planId);
-            remember(current); saved.confirmation = null;
-            if (active.current) setUncertain(false);
+            saved.confirmation = null;
+            if (active.current) { setReview(null); setConsent(false); setConfigurationOnly(false); }
+            try { remember(await refreshed(request.planId)); }
+            finally { if (active.current) setUncertain(false); }
           }
           if (active.current) setNotice(reason(error));
         }
@@ -107,10 +124,10 @@ export function CreateScreen({ client, templateId, returnTo = "instances" }: {
         client.navigate({ page: returnTo });
         return;
       }
-      if (saved.plan) await client.discardCreate(saved.plan.planId);
+      if (saved.plan) await discard(saved.plan.planId);
       else if (saved.preparation) {
         const prepared = await saved.preparation;
-        await client.discardCreate(prepared.planId);
+        await discard(prepared.planId);
       }
       drafts.get(client)?.delete(templateId);
       if (active.current) client.navigate({ page: returnTo } );
@@ -118,24 +135,48 @@ export function CreateScreen({ client, templateId, returnTo = "instances" }: {
     finally { inFlight.current = false; if (active.current) setBusy(false); }
   }
 
+  function sourceFailure(error: unknown) {
+    if (clone && error !== null && typeof error === "object" && "fieldPath" in error && error.fieldPath === "sourceId") {
+      setSourceChanged(true); setReview(null); setConsent(false); setConfigurationOnly(false);
+      setNotice("複製元が更新されました。元の設定を読み直し、変更内容を再確認してください。");
+    }
+  }
+  async function refreshed(id: string) {
+    try { return await viewPlan(id); } catch (error) { sourceFailure(error); throw error; }
+  }
+  async function restart() {
+    if (inFlight.current || saved.confirmation) return;
+    inFlight.current = true; setBusy(true);
+    try {
+      if (saved.plan) await discard(saved.plan.planId);
+      saved.plan = null; saved.preparation = null; setPlan(null); setReview(null); setConfigurationOnly(false); setConsent(false);
+      saved.preparation = prepare();
+      remember(await saved.preparation); setSourceChanged(false); setNotice(null);
+    } catch (error) { saved.preparation = null; setNotice(reason(error)); }
+    finally { inFlight.current = false; setBusy(false); }
+  }
+
   return <div className="create-screen" aria-busy={busy}>
-    <ol className="steps" aria-label="作成手順"><li>✓ テンプレート選択</li><li aria-current="step">2 設定・確認</li><li>3 作成・起動</li></ol>
+    {!clone && <ol className="steps" aria-label="作成手順"><li>✓ テンプレート選択</li><li aria-current="step">2 設定・確認</li><li>3 作成・起動</li></ol>}
     {notice && <p className="notice" role="alert">{notice}</p>}
     {!plan && !notice && <p role="status">作成プランを準備しています…</p>}
+    {sourceChanged && <button className="btn" disabled={busy || uncertain} onClick={() => { void restart(); }}>複製元を読み直す</button>}
     {plan && <>
-      <p className="create-source">{origin(plan.templateOrigin)} · 登録版 <code>{plan.templateRevisionId}</code>。
-        登録済み定義の初期値とCoreの生成値を使います。出所は実機検証済みを意味しません。</p>
-      <TemplateForm key={`${plan.planId}-${uncertain}`} initialPlan={{ kind: "create", view: plan }} locked={busy || uncertain}
+      {"templateOrigin" in plan && <p className="create-source">{origin(plan.templateOrigin)} · 登録版 <code>{plan.templateRevisionId}</code>。
+        登録済み定義の初期値とCoreの生成値を使います。出所は実機検証済みを意味しません。</p>}
+      <TemplateForm key={`${plan.planId}-${uncertain}`} initialPlan={"sourceId" in plan ? { kind: "clone", view: plan } : { kind: "create", view: plan }} locked={busy || uncertain || sourceChanged}
         onUpdate={async (current, edit) => {
-          const next = await client.updateCreate(current.view.planId, edit as PlanEdit);
-          remember(next); return { kind: "create", view: next };
+          try {
+            const next = current.kind === "clone" ? await client.updateClone(current.view.planId, edit as CloneEdit) : await client.updateCreate(current.view.planId, edit as PlanEdit);
+            remember(next); return "sourceId" in next ? { kind: "clone", view: next } : { kind: "create", view: next };
+          } catch (error) { sourceFailure(error); throw error; }
         }}
         onReview={async (current) => {
-          const next = await client.viewCreate(current.view.planId);
-          remember(next); setConsent(false);
+          const next = await refreshed(current.view.planId);
+          remember(next); setConsent(false); setConfigurationOnly(false);
           if (next.concerns.length === 0) { setNotice(null); setReview(next); }
           else setNotice("未回答・入力エラー・ポートの確認事項を解消してください。");
-          return { kind: "create", view: next };
+          return "sourceId" in next ? { kind: "clone", view: next } : { kind: "create", view: next };
         }} />
     </>}
     {uncertain && <section className="panel" aria-label="受付結果の確認"><h2>受付結果を確認しています</h2>
@@ -144,15 +185,17 @@ export function CreateScreen({ client, templateId, returnTo = "instances" }: {
         <button className="btn primary" disabled={busy} onClick={() => { void confirm(); }}>同じ内容で再送</button></div>
     </section>}
     <button className="btn" disabled={busy || uncertain} onClick={() => { void cancel(); }}>作成を取り消す</button>
-    {review && <ConfirmDialog title="この内容で環境を作成しますか？" onClose={() => setReview(null)}
-      confirmLabel="作成・起動を確定" confirmDisabled={!consent || busy} onConfirm={() => { void confirm(); }}>
+    {review && <ConfirmDialog title={clone ? "設定を複製して環境を作成しますか？" : "この内容で環境を作成しますか？"} onClose={() => setReview(null)}
+      confirmLabel="作成・起動を確定" confirmDisabled={!consent || (clone && !configurationOnly) || busy} onConfirm={() => { void confirm(); }}>
       <dl className="create-summary"><div><dt>環境名</dt><dd>{review.displayName}</dd></div>
         <div><dt>テンプレート</dt><dd>{review.templateForm.name} / {review.templateForm.templateVersion}</dd></div>
-        <div><dt>出所</dt><dd>{origin(review.templateOrigin)}</dd></div><div><dt>Version</dt><dd>{review.version}</dd></div>
+        <div><dt>出所</dt><dd>{"templateOrigin" in review ? origin(review.templateOrigin) : "複製元の保存済み定義"}</dd></div><div><dt>Version</dt><dd>{review.version}</dd></div>
         <div><dt>保存方式</dt><dd>{review.storageMethod === "bind" ? "ホストフォルダー" : "Docker管理"}</dd></div>
         <div><dt>Plan版</dt><dd>{review.planRevision}</dd></div>
         {review.templateForm.ports.map((slot) => <div key={slot.key}><dt>{slot.label}</dt><dd>127.0.0.1:{review.ports[slot.key]} → {String(slot.container)}</dd></div>)}
       </dl><p>表示したポートとPlan版を確定時に再確認します。受付後は独立した処理状況画面へ進みます。</p>
+      {clone && <label className="create-consent"><input type="checkbox" checked={configurationOnly} onChange={(event) => setConfigurationOnly(event.target.checked)} />
+        データが複製されず、新しい環境が作られることを確認しました。複製元のデータや稼働状態は変更しません。</label>}
       <label className="create-consent"><input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} />
         認証情報が端末内の設定と生成されるComposeファイルに暗号化せず平文で保存されることを確認しました。</label>
     </ConfirmDialog>}

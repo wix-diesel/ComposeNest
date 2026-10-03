@@ -1,4 +1,4 @@
-import type { ConfirmCreateRequest, CreatePlanView, CreateReceipt, PlanEdit } from "../generated/template-form";
+import type { CloneEdit, ClonePlanView, ConfirmCloneRequest, ConfirmCreateRequest, CreatePlanView, CreateReceipt, PlanEdit } from "../generated/template-form";
 import { invoke } from "@tauri-apps/api/core";
 import { parseRoute, routeHash, type AppRoute } from "../navigation";
 import {
@@ -65,6 +65,31 @@ export class ApplicationClient {
   /** Discards an unconfirmed in-memory plan only. */
   discardCreate(planId: string): Promise<null> {
     return this.createCall("discard_create_plan", { context: this.context(), planId } as import("../generated/template-form").CreatePlanRequest);
+  }
+
+  /** Prepares a configuration-only clone from its private Snapshot. */
+  prepareClone(sourceId: string): Promise<ClonePlanView> {
+    return this.createCall("prepare_clone", { context: this.context(), sourceId } as import("../generated/template-form").PrepareCloneRequest);
+  }
+  /** Applies source- and revision-guarded clone edits. */
+  updateClone(planId: string, edit: CloneEdit): Promise<ClonePlanView> {
+    return this.createCall("update_clone_plan", { context: this.context(), planId, edit } as import("../generated/template-form").UpdateCloneRequest);
+  }
+  /** Revalidates the same clone plan and committed source. */
+  viewClone(planId: string): Promise<ClonePlanView> {
+    return this.createCall("view_clone_plan", { context: this.context(), planId } as import("../generated/template-form").CreatePlanRequest);
+  }
+  /** Accepts explicit configuration-only and plaintext confirmations. */
+  confirmClone(request: ConfirmCloneRequest): Promise<CreateReceipt> {
+    return this.createCall("confirm_clone", request);
+  }
+  /** Looks up durable Clone acceptance without creating a new plan. */
+  getCloneReceipt(planId: string): Promise<CreateReceipt | null> {
+    return this.createCall("get_clone_receipt", { context: this.context(), planId } as import("../generated/template-form").CreatePlanRequest);
+  }
+  /** Discards an unconfirmed clone and its secret candidates. */
+  discardClone(planId: string): Promise<null> {
+    return this.createCall("discard_clone_plan", { context: this.context(), planId } as import("../generated/template-form").CreatePlanRequest);
   }
 
   /** Loads the initial application state from the Rust application layer. */

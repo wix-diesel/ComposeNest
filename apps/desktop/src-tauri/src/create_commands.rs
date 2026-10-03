@@ -21,10 +21,11 @@ use tokio::sync::Mutex;
 
 /// Trusted runtime composition shared by the desktop create commands.
 pub struct CreateBackend {
-    database: Arc<DatabaseWorker>,
-    runner: Arc<OperationRunner>,
+    pub(super) database: Arc<DatabaseWorker>,
+    pub(super) runner: Arc<OperationRunner>,
     scope: String,
     session: Mutex<CreateSession>,
+    pub(super) clones: Mutex<composenest_application::clone_session::CloneSession>,
     probe: Option<DockerProbe>,
 }
 
@@ -66,12 +67,15 @@ impl CreateBackend {
             database,
             runner,
             session: Mutex::new(CreateSession::new(scope.clone())),
+            clones: Mutex::new(composenest_application::clone_session::CloneSession::new(
+                scope.clone(),
+            )),
             scope,
             probe,
         })
     }
 
-    async fn ports(&self) -> Result<PortSnapshot, PlanError> {
+    pub(super) async fn ports(&self) -> Result<PortSnapshot, PlanError> {
         let probe = self
             .probe
             .as_ref()
@@ -115,7 +119,10 @@ fn failure(code: &'static str) -> PlanError {
     }
 }
 
-fn envelope<T>(context: RequestContext, result: Result<T, PlanError>) -> ResponseEnvelope<T> {
+pub(super) fn envelope<T>(
+    context: RequestContext,
+    result: Result<T, PlanError>,
+) -> ResponseEnvelope<T> {
     match result {
         Ok(value) => ResponseEnvelope::success(context.request_id, value),
         Err(error) => ResponseEnvelope::failure(context.request_id, ErrorDto {
@@ -126,6 +133,8 @@ fn envelope<T>(context: RequestContext, result: Result<T, PlanError>) -> Respons
                 "DOCKER_UNAVAILABLE" => "Dockerの接続・対応環境を確認してください。",
                 "PLAN_NOT_FOUND" => "この作成プランは失効しました。新規作成はテンプレートから開き直してください。",
                 "PLAN_STALE" | "PLAN_RECONFIRM" | "PORT_CONFLICT" => "プランまたはポートが変わりました。同じプランの設定を再確認してください。",
+                "SOURCE_UNAVAILABLE" => "複製元を利用できません。元の環境を確認してください。",
+                "CONFIGURATION_ONLY_CONFIRMATION_REQUIRED" => "データを複製しないことの確認が必要です。",
                 "PLAINTEXT_CONFIRMATION_REQUIRED" => "平文保存の確認が必要です。",
                 _ => "要求を処理できませんでした。設定と接続を再確認してください。",
             }.into(), retryability: if error.code == "OPERATION_CAPACITY_REACHED" { Retryability::Retryable } else { Retryability::NotRetryable }, operation_id: None, safe_details: None,
@@ -251,7 +260,7 @@ impl ProgressSink for DesktopProgress {
     }
 }
 
-fn execute(
+pub(super) fn execute(
     state: Arc<CreateBackend>,
     receipt: RequestReceipt,
     reservation: OperationReservation,
@@ -286,7 +295,7 @@ fn execute(
     });
 }
 
-fn accept_with_capacity(
+pub(super) fn accept_with_capacity(
     runner: &Arc<OperationRunner>,
     accept: impl FnOnce() -> Result<(RequestReceipt, bool), PlanError>,
 ) -> Result<(RequestReceipt, Option<OperationReservation>), PlanError> {

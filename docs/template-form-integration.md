@@ -33,3 +33,13 @@ pnpm run check:contracts
 共通フォームは準備済みPlanを受ける部品であり、既存Appの準備中画面は#39/#40でPlan準備・確認・確定と同時に置き換える。テスト専用HTML/DTOは配布bundleへ組み込まない。テーマは`data-theme="dark"`に追従し、切替UIや保存は#58へ委ねる。
 
 ローカルのモデル検証はfixture生成後に`node --experimental-strip-types --test scripts/formModel.test.mjs`、ブラウザ検証は`pnpm run test:forms`。必要なら`COMPOSENEST_TEST_BROWSER`で検証用Chromiumの絶対パスを指定できる。
+
+## 新規作成の接続（#39）
+
+作成画面は遷移の`templateId`を登録済みrevision IDとして`prepare_create`へ渡す。Coreが返した出所、候補、確認事項を表示し、入力差分を反映してから`view_create_plan`で同じPlanを再確認する。確認dialogには現Plan版とloopbackポートを表示し、平文保存の同意とともに`confirm_create`へ送る。未回答・ポート確認事項がある場合は確定できない。
+
+確定要求のID・Plan版・ポートは受付結果が確定するまで同じ値をメモリーに保持する。連打を防ぎ、応答断では`get_create_receipt`を照会する。記録なし・照会失敗では入力と取消しを止め、同じ要求の明示的再送または再照会を案内する。画面を離れて戻っても同じ候補と要求を使う。構造化された拒否とreceiptなしを確認できたときだけ同じPlanの編集へ戻す。URL・localStorageへPlanや秘密を保存しない。
+
+確定前の取消しはPlanを破棄する。受付済みreceiptの`operationId`で独立した画面へ進み、その画面の中身は#66に委ねる。Template一覧と選択導線は#61に委ねる。Tauriでは単一scope・固定Engine・ポートを検証し、資源を作る既存Operationは確定後だけ実行する。受付済みPlanの再送でOperationを再起動しない。
+
+共通フォームの`onReview`は差分反映後のPlanを受けて更新された表示を返す。`locked`は結果未確定中に入力を止める。ブラウザ回帰検証はCore fixture生成後に`pnpm run test:create`を実行する。

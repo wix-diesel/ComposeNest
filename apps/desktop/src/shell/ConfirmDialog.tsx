@@ -2,9 +2,9 @@ import { useEffect, useId, useRef, type ReactNode } from "react";
 import { ja } from "../messages";
 
 /** Native modal with safe initial focus, Escape, focus trapping and focus restoration. */
-export function ConfirmDialog({ title, children, onClose, onConfirm, confirmLabel = ja.confirm }: {
+export function ConfirmDialog({ title, children, onClose, onConfirm, confirmLabel = ja.confirm, confirmDisabled = false }: {
   title: string; children: ReactNode; onClose: () => void;
-  onConfirm?: () => void; confirmLabel?: string;
+  onConfirm?: () => void; confirmLabel?: string; confirmDisabled?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
@@ -37,7 +37,7 @@ export function ConfirmDialog({ title, children, onClose, onConfirm, confirmLabe
     <h2 id={titleId}>{title}</h2><div id={bodyId}>{children}</div>
     <div className="actions">
       <button className="btn" onClick={onClose}>{onConfirm ? ja.cancel : ja.close}</button>
-      {onConfirm && <button className="btn primary" onClick={() => { onClose(); onConfirm(); }}>{confirmLabel}</button>}
+      {onConfirm && <button className="btn primary" disabled={confirmDisabled} onClick={() => { onClose(); onConfirm(); }}>{confirmLabel}</button>}
     </div>
   </dialog>;
 }

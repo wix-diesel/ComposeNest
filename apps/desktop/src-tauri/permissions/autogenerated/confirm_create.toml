@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-confirm-create"
+description = "Enables the confirm_create command without any pre-configured scope."
+commands.allow = ["confirm_create"]
+
+[[permission]]
+identifier = "deny-confirm-create"
+description = "Denies the confirm_create command without any pre-configured scope."
+commands.deny = ["confirm_create"]

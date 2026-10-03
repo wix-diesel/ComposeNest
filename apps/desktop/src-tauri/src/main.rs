@@ -6,7 +6,9 @@ use composenest_application::{
     operation_recovery::RecoveryJournal, operation_runner::OperationRunner,
 };
 use std::{path::PathBuf, sync::Arc, time::Duration};
-use tauri::State;
+use tauri::{Manager, State};
+mod create_commands;
+use create_commands::*;
 
 /// Returns the non-sensitive state required to initialize the desktop UI.
 #[tauri::command]
@@ -38,7 +40,7 @@ fn management_root() -> std::io::Result<PathBuf> {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bootstrap = BootstrapService::new(SystemClock).bootstrap();
-    let database = DatabaseWorker::start(&management_root()?)?;
+    let database = Arc::new(DatabaseWorker::start(&management_root()?)?);
     database.recover_on_startup().map_err(|error| {
         std::io::Error::other(format!("operation recovery startup failed: {error:?}"))
     })?;
@@ -46,9 +48,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tauri::Builder::default()
         .manage(bootstrap)
-        .manage(database)
         .manage(Arc::clone(&runner))
-        .invoke_handler(tauri::generate_handler![get_bootstrap])
+        .setup(move |app| {
+            let backend = CreateBackend::new(
+                Arc::clone(&database),
+                Arc::clone(app.state::<Arc<OperationRunner>>().inner()),
+                app.path().home_dir()?,
+            )?;
+            app.manage(Arc::new(backend));
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            get_bootstrap,
+            prepare_create,
+            update_create_plan,
+            view_create_plan,
+            get_create_receipt,
+            discard_create_plan,
+            confirm_create
+        ])
         .run(tauri::generate_context!())?;
     runner.shutdown(Duration::from_secs(30));
     Ok(())

@@ -1,0 +1,12 @@
+.create-screen .steps { list-style: none; padding: 0; display: flex; gap: 24px; margin: 0 0 28px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+.create-screen .steps li[aria-current] { color: var(--green); font-weight: 650; }
+.create-source { font-size: 12px; margin-bottom: 20px; overflow-wrap: anywhere; }
+.create-screen > .notice { padding: 14px; border: 1px solid #bd6c4d; border-radius: 8px; margin-bottom: 20px; }
+.create-screen .btn:disabled, .dialog .btn:disabled { opacity: .6; cursor: default; }
+.create-summary { font-size: 12px; margin: 18px 0; }
+.create-summary div { display: flex; gap: 16px; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.create-summary dd { margin: 0; text-align: right; overflow-wrap: anywhere; min-width: 0; }
+.create-consent { display: flex; align-items: start; gap: 10px; font-size: 12px; margin-top: 20px; }
+.create-consent input { margin-top: 4px; accent-color: var(--green); }
+[data-theme="dark"] .create-screen { color: #e1e9e4; --green: #84cba2; --muted: #a5b5ab; --line: #435b4b; }
+[data-theme="dark"] .dialog { background: #1e2a23; color: #e1e9e4; --line: #435b4b; }

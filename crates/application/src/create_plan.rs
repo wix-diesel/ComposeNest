@@ -74,6 +74,8 @@ pub struct CreatePlanView {
     pub display_name: String,
     /// Immutable Template revision used by this plan.
     pub template_revision_id: String,
+    /// Application-recorded source of the registered revision.
+    pub template_origin: String,
     /// Selected service Version.
     pub version: String,
     /// Version keys in Template display order.
@@ -159,6 +161,7 @@ struct Plan {
     display_name: String,
     revision: u64,
     template_id: String,
+    template_origin: String,
     template: Value,
     version: String,
     storage_method: StorageMethod,
@@ -355,6 +358,7 @@ impl CreatePlans {
             display_name: normalize_name(&request.display_name),
             revision: 1,
             template_id: revision.id,
+            template_origin: revision.origin,
             template,
             version: selected,
             storage_method,
@@ -488,6 +492,24 @@ impl CreatePlans {
         Ok(preview(id, plan, inspector))
     }
 
+    /// Refreshes the same plan without changing its revision or allocating resources.
+    pub fn view_plan(
+        &mut self,
+        scope: &str,
+        id: &str,
+        clock: &impl Clock,
+        inspector: &impl PortInspector,
+    ) -> Result<CreatePlanView, PlanError> {
+        self.expire(clock.unix_seconds());
+        let plan = self
+            .plans
+            .get_mut(id)
+            .filter(|plan| plan.scope == scope)
+            .ok_or_else(|| error("PLAN_NOT_FOUND", None))?;
+        plan.last_used = clock.unix_seconds();
+        Ok(preview(id, plan, inspector))
+    }
+
     /// Removes an unconfirmed plan and its secrets from process memory.
     pub fn discard_plan(
         &mut self,
@@ -534,7 +556,7 @@ pub fn get_plan_commit(
         .map_err(commit_store_error)
 }
 
-fn commit_hash(plan_id: &str, revision: u64) -> String {
+pub(crate) fn commit_hash(plan_id: &str, revision: u64) -> String {
     format!(
         "{:x}",
         Sha256::digest(format!("create:{plan_id}:{revision}").as_bytes())
@@ -741,6 +763,7 @@ fn preview(id: &str, plan: &mut Plan, inspector: &impl PortInspector) -> CreateP
         plan_revision: plan.revision,
         display_name: plan.display_name.clone(),
         template_revision_id: plan.template_id.clone(),
+        template_origin: plan.template_origin.clone(),
         version: plan.version.clone(),
         versions: plan.template["manifest"]["versions"]
             .as_array()

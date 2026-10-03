@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-update-create-plan"
+description = "Enables the update_create_plan command without any pre-configured scope."
+commands.allow = ["update_create_plan"]
+
+[[permission]]
+identifier = "deny-update-create-plan"
+description = "Denies the update_create_plan command without any pre-configured scope."
+commands.deny = ["update_create_plan"]

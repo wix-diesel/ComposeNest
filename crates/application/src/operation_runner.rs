@@ -3,7 +3,7 @@
 use std::{
     collections::HashSet,
     future::Future,
-    sync::{Condvar, Mutex},
+    sync::{Arc, Condvar, Mutex},
     time::{Duration, Instant},
 };
 
@@ -61,6 +61,7 @@ impl From<StoreConflict> for RunnerError {
 #[derive(Default)]
 struct Active {
     closing: bool,
+    reservations: usize,
     instances: HashSet<String>,
 }
 
@@ -97,7 +98,7 @@ impl OperationRunner {
         if active.instances.contains(instance_id) {
             return Err(RunnerError::InstanceBusy);
         }
-        if active.instances.len() == MAX_CONCURRENT_CHANGES {
+        if active.instances.len() + active.reservations == MAX_CONCURRENT_CHANGES {
             return Err(RunnerError::CapacityReached);
         }
         active.instances.insert(instance_id.to_owned());
@@ -105,6 +106,56 @@ impl OperationRunner {
             runner: self,
             instance_id: instance_id.to_owned(),
         })
+    }
+
+    /// Reserves global capacity before accepting a new durable operation.
+    /// Dropping the reservation releases capacity, including after acceptance failure.
+    pub fn reserve(self: &Arc<Self>) -> Result<OperationReservation, RunnerError> {
+        let mut active = self
+            .active
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if active.closing {
+            return Err(RunnerError::ShuttingDown);
+        }
+        if active.instances.len() + active.reservations == MAX_CONCURRENT_CHANGES {
+            return Err(RunnerError::CapacityReached);
+        }
+        active.reservations += 1;
+        Ok(OperationReservation {
+            runner: Arc::clone(self),
+            instance_id: None,
+        })
+    }
+
+    /// Binds reserved capacity to an accepted instance and holds it across all stages.
+    /// Previously admitted work may finish while shutdown waits for it.
+    pub async fn run_reserved<T, E, F, Fut>(
+        &self,
+        mut reservation: OperationReservation,
+        instance_id: &str,
+        work: F,
+    ) -> Result<Result<T, E>, RunnerError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<T, E>>,
+    {
+        if !std::ptr::eq(self, Arc::as_ptr(&reservation.runner)) {
+            return Err(RunnerError::Store(StoreConflict::InvalidInput));
+        }
+        {
+            let mut active = self
+                .active
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            if active.instances.contains(instance_id) {
+                return Err(RunnerError::InstanceBusy);
+            }
+            active.reservations -= 1;
+            active.instances.insert(instance_id.to_owned());
+            reservation.instance_id = Some(instance_id.to_owned());
+        }
+        Ok(work().await)
     }
 
     /// Holds one instance's change gate across every stage of an async operation.
@@ -189,7 +240,7 @@ impl OperationRunner {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         active.closing = true;
-        while !active.instances.is_empty() {
+        while !active.instances.is_empty() || active.reservations != 0 {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 return false;
@@ -201,6 +252,29 @@ impl OperationRunner {
                 .0;
         }
         true
+    }
+}
+
+/// Owned capacity that can cross the acceptance and detached-worker boundary.
+/// Capacity is released when this value is dropped or its execution completes.
+pub struct OperationReservation {
+    runner: Arc<OperationRunner>,
+    instance_id: Option<String>,
+}
+
+impl Drop for OperationReservation {
+    fn drop(&mut self) {
+        let mut active = self
+            .runner
+            .active
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if let Some(instance_id) = &self.instance_id {
+            active.instances.remove(instance_id);
+        } else {
+            active.reservations -= 1;
+        }
+        self.runner.idle.notify_all();
     }
 }
 
@@ -429,6 +503,57 @@ mod tests {
         ));
         drop(first);
         drop(second);
+        assert!(runner.shutdown(Duration::ZERO));
+    }
+
+    #[tokio::test]
+    async fn reserved_capacity_survives_acceptance_and_shutdown_until_execution_finishes() {
+        let runner = Arc::new(OperationRunner::new());
+        let first = runner.reserve().unwrap();
+        let second = runner.reserve().unwrap();
+        assert!(matches!(
+            runner.reserve(),
+            Err(RunnerError::CapacityReached)
+        ));
+        assert!(matches!(
+            runner.enter("other"),
+            Err(RunnerError::CapacityReached)
+        ));
+        drop(second);
+        assert!(runner.reserve().is_ok());
+        assert!(!runner.shutdown(Duration::ZERO));
+        let result = runner
+            .run_reserved(first, "accepted", || async {
+                assert!(matches!(
+                    runner.enter("accepted"),
+                    Err(RunnerError::ShuttingDown)
+                ));
+                assert!(!runner.shutdown(Duration::ZERO));
+                Ok::<_, ()>("completed")
+            })
+            .await;
+        assert_eq!(result, Ok(Ok("completed")));
+        assert!(runner.shutdown(Duration::ZERO));
+    }
+
+    #[tokio::test]
+    async fn reservation_cannot_bypass_instance_gate_or_use_another_runner() {
+        let runner = Arc::new(OperationRunner::new());
+        let active = runner.enter("same").unwrap();
+        let result = runner
+            .run_reserved(runner.reserve().unwrap(), "same", || async {
+                Err::<(), ()>(())
+            })
+            .await;
+        assert_eq!(result, Err(RunnerError::InstanceBusy));
+        drop(active);
+        let other = Arc::new(OperationRunner::new());
+        let result = other
+            .run_reserved(runner.reserve().unwrap(), "new", || async {
+                Ok::<(), ()>(())
+            })
+            .await;
+        assert_eq!(result, Err(RunnerError::Store(StoreConflict::InvalidInput)));
         assert!(runner.shutdown(Duration::ZERO));
     }
 

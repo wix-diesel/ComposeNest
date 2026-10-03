@@ -10,7 +10,7 @@ use crate::{
     operation_journal::{
         ExpectedResult, OperationJournal, RequestReceipt, StepCommand, StepIntent, StepOutcome,
     },
-    operation_runner::{OperationRunner, ProgressSink, RunnerError},
+    operation_runner::{OperationReservation, OperationRunner, ProgressSink, RunnerError},
     state_store::StoreConflict,
 };
 
@@ -146,6 +146,20 @@ impl<S: CreateStateStore, J: OperationJournal, A: CreateStages, P: ProgressSink>
     pub async fn run(&self, receipt: &RequestReceipt) -> Result<String, CreateOperationError> {
         self.runner
             .run_exclusive(&receipt.instance_id, || self.run_locked(receipt))
+            .await
+            .map_err(CreateOperationError::Runner)?
+    }
+
+    /// Executes accepted work using capacity reserved before its durable acceptance.
+    pub async fn run_reserved(
+        &self,
+        receipt: &RequestReceipt,
+        reservation: OperationReservation,
+    ) -> Result<String, CreateOperationError> {
+        self.runner
+            .run_reserved(reservation, &receipt.instance_id, || {
+                self.run_locked(receipt)
+            })
             .await
             .map_err(CreateOperationError::Runner)?
     }
@@ -526,6 +540,37 @@ mod tests {
         assert!(position("intent:compose_create") < position("create"));
         assert!(position("intent:compose_start") < position("start"));
         assert_eq!(entries.last().map(String::as_str), Some("event:Completed"));
+    }
+
+    #[tokio::test]
+    async fn reserved_operation_executes_without_reentering_a_full_capacity_gate() {
+        let log = Log::default();
+        let state = FakeState(log.clone());
+        let journal = FakeJournal(log.clone());
+        let stages = FakeStages {
+            log: log.clone(),
+            fail: None,
+        };
+        let progress = FakeProgress(log.clone());
+        let runner = std::sync::Arc::new(OperationRunner::new());
+        let reservation = runner.reserve().unwrap();
+        let other = runner.reserve().unwrap();
+        let result = CreateOperation {
+            state: &state,
+            journal: &journal,
+            runner: &runner,
+            stages: &stages,
+            progress: &progress,
+        }
+        .run_reserved(&receipt(), reservation)
+        .await;
+        assert_eq!(result, Ok("a".repeat(64)));
+        assert_eq!(
+            log.entries().last().map(String::as_str),
+            Some("event:Completed")
+        );
+        drop(other);
+        assert!(runner.shutdown(std::time::Duration::ZERO));
     }
 
     #[tokio::test]

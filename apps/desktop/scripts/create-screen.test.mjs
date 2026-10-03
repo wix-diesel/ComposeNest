@@ -3,7 +3,8 @@ import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { chromium } from "playwright";
 
-const fixture = JSON.parse(await readFile("test-results/template-form-plans.json", "utf8")).create;
+const clone = process.argv.includes("--clone");
+const fixture = JSON.parse(await readFile("test-results/template-form-plans.json", "utf8"))[clone ? "clone" : "create"];
 const server = spawn(process.execPath, ["node_modules/vite/bin/vite.js", "--host", "127.0.0.1", "--port", "4175", "--strictPort"], { stdio: "pipe" });
 let browser;
 try {
@@ -18,23 +19,25 @@ try {
   let page;
   const errors = [];
   const selected = "selected-registered-revision";
-  const hash = `#/instance-create?templateId=${selected}&returnTo=templates`;
+  const hash = clone ? `#/instance-clone?instanceId=${selected}` : `#/instance-create?templateId=${selected}&returnTo=templates`;
   async function open(mode = "normal") {
     await page?.close();
     page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
     page.on("pageerror", (error) => errors.push(error.message));
-    await page.addInitScript(({ fixture, mode }) => {
+    await page.addInitScript(({ fixture, mode, clone }) => {
       window.createMode = mode;
       window.calls = []; window.receiptFailure = false; window.acceptedReceipt = null;
       window.plan = { ...fixture, displayName: "", concerns: [{ code: "DISPLAY_NAME_INVALID", fieldPath: "displayName" }] };
       window.__TAURI_INTERNALS__ = { invoke: async (command, { request }) => {
         window.calls.push({ command, request: structuredClone(request) });
+        command = command.replace("clone", "create");
         const context = request.context ?? request;
         const response = (result, error = null) => ({ apiVersion: 1, requestId: context.requestId, result, error });
         if (command === "get_bootstrap") return response({ applicationTitle: "ComposeNest", startedAtUnixSeconds: 1 });
         if (command === "prepare_create") {
           if (window.createMode === "prepare_failure") throw new Error("unavailable");
-          window.plan.templateRevisionId = request.templateRevisionId;
+          if (clone) { window.plan.sourceId = request.sourceId; window.sourceUpdated = false; window.planExpired = false; }
+          else window.plan.templateRevisionId = request.templateRevisionId;
           return response(structuredClone(window.plan));
         }
         if (command === "update_create_plan") {
@@ -44,7 +47,9 @@ try {
           window.plan.planRevision++;
           return response(structuredClone(window.plan));
         }
+        if (window.planExpired && ["view_create_plan", "discard_create_plan"].includes(command)) return response(null, { code: "PLAN_NOT_FOUND", reason: "プランは失効しました。", fieldPath: null });
         if (command === "view_create_plan") {
+          if (window.sourceUpdated) return response(null, { code: "PLAN_STALE", reason: "複製元を再確認してください。", fieldPath: "sourceId" });
           window.plan.ports = Object.fromEntries(Object.entries(window.plan.ports).map(([key]) => [key, 12789]));
           return response(structuredClone(window.plan));
         }
@@ -63,25 +68,25 @@ try {
         }
         throw new Error(`Unexpected command: ${command}`);
       } };
-    }, { fixture, mode });
+    }, { fixture, mode, clone });
     await page.goto(`http://127.0.0.1:4175/${hash}`);
     if (mode !== "prepare_failure") await page.locator("#display-name").waitFor();
   }
   async function review() {
     await page.locator("#display-name").fill("My database");
-    await page.getByRole("button", { name: "作成内容を確認", exact: true }).click();
+    await page.getByRole("button", { name: clone ? "複製内容を確認" : "作成内容を確認", exact: true }).click();
     await page.getByRole("dialog").waitFor();
   }
   async function confirm() {
-    await page.getByRole("dialog").getByRole("checkbox").check();
+    for (const box of await page.getByRole("dialog").getByRole("checkbox").all()) await box.check();
     await page.getByRole("button", { name: "作成・起動を確定", exact: true }).click();
   }
-  async function calls(command) { return page.evaluate((command) => window.calls.filter((call) => call.command === command), command); }
+  async function calls(command) { return page.evaluate((command) => window.calls.filter((call) => call.command === command), clone ? command.replace("create", "clone") : command); }
 
   await open();
   assert.equal((await calls("prepare_create")).length, 1, "StrictMode must not prepare twice");
-  assert.equal((await calls("prepare_create"))[0].request.templateRevisionId, selected);
-  await page.getByRole("button", { name: "作成内容を確認", exact: true }).click();
+  assert.equal((await calls("prepare_create"))[0].request[clone ? "sourceId" : "templateRevisionId"], selected);
+  await page.getByRole("button", { name: clone ? "複製内容を確認" : "作成内容を確認", exact: true }).click();
   await page.getByText("未回答・入力エラー・ポートの確認事項を解消してください。").waitFor();
   assert.equal(await page.getByRole("dialog").count(), 0);
   await page.locator("#input-password").fill("OnlyUserEnteredSecret");
@@ -99,7 +104,7 @@ try {
   await page.keyboard.press("Escape");
   assert.equal((await calls("confirm_create")).length, 0);
   await page.getByRole("button", { name: "作成を取り消す", exact: true }).click();
-  await page.waitForURL(/#\/templates$/);
+  await page.waitForURL(clone ? /#\/instances$/ : /#\/templates$/);
   assert.equal((await calls("discard_create_plan")).length, 1);
   assert.equal((await calls("confirm_create")).length, 0);
 
@@ -109,6 +114,7 @@ try {
   const confirmed = (await calls("confirm_create"))[0].request;
   assert.equal(confirmed.revision, 2);
   assert.equal(confirmed.acceptPlaintext, true);
+  if (clone) assert.equal(confirmed.acceptConfigurationOnly, true);
   assert.deepEqual(confirmed.confirmedPorts, { db: 12789 });
   assert.doesNotMatch(page.url(), /OnlyUserEnteredSecret|planId|requestId/);
 
@@ -144,6 +150,30 @@ try {
   assert.equal((await calls("prepare_create")).length, 1);
   await open("prepare_failure"); await page.getByRole("alert").waitFor();
   assert.equal((await calls("confirm_create")).length, 0);
+  await open();
+  await page.evaluate(() => { window.planExpired = true; });
+  await page.getByRole("button", { name: "作成を取り消す", exact: true }).click();
+  await page.waitForURL(clone ? /#\/instances$/ : /#\/templates$/);
+
+  if (clone) {
+    await open(); await review();
+    const boxes = page.getByRole("dialog").getByRole("checkbox");
+    assert.equal(await boxes.count(), 2);
+    await boxes.nth(1).check();
+    assert.equal(await page.getByRole("button", { name: "作成・起動を確定" }).isDisabled(), true);
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => { window.sourceUpdated = true; });
+    await page.getByRole("button", { name: "複製内容を確認", exact: true }).click();
+    await page.getByRole("button", { name: "複製元を読み直す" }).waitFor();
+    assert.equal(await page.getByRole("dialog").count(), 0);
+    assert.equal(await page.locator("#display-name").isDisabled(), true);
+    await page.getByRole("button", { name: "複製元を読み直す" }).click();
+    await page.waitForFunction(() => !document.querySelector("#display-name").disabled);
+    assert.equal((await calls("prepare_create")).length, 2);
+    assert.equal((await calls("discard_create_plan")).length, 1);
+    await review();
+    for (const box of await page.getByRole("dialog").getByRole("checkbox").all()) assert.equal(await box.isChecked(), false);
+  }
   assert.deepEqual(errors, []);
-  console.log("Create: selection, current revision/ports, consent, cancellation, lost response/receipt, same-request resend, navigation recovery and themes passed.");
+  console.log(`${clone ? "Clone" : "Create"}: selection, current revision/ports, consent, cancellation, lost response/receipt, same-request resend, navigation recovery and themes passed.`);
 } finally { await browser?.close(); server.kill(); }

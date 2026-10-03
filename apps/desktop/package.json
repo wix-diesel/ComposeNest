@@ -12,7 +12,8 @@
     "test:navigation": "node --experimental-strip-types --test scripts/navigation.test.mjs",
     "test:forms": "node --experimental-strip-types --test scripts/formModel.test.mjs && node scripts/template-form.test.mjs",
     "test:shell": "node scripts/shell.test.mjs",
-    "test:create": "node scripts/create-screen.test.mjs"
+    "test:create": "node scripts/create-screen.test.mjs",
+    "test:clone": "node scripts/create-screen.test.mjs --clone"
   },
   "dependencies": {
     "@tauri-apps/api": "2.6.0",

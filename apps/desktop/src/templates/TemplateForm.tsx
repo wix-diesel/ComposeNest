@@ -104,7 +104,7 @@ export function TemplateForm({ initialPlan, onUpdate, onReview, locked = false }
       </section>
       <div className="form-footer"><small>{busy ? "設定を確認しています…" : "確定前にポートと設定を再確認します。"}</small><div className="actions">
         <button className="btn" type="submit" disabled={!dirty}>入力を反映</button>
-        {onReview && <button className="btn primary" type="button" onClick={() => { void apply({}, true); }}>作成内容を確認</button>}
+        {onReview && <button className="btn primary" type="button" onClick={() => { void apply({}, true); }}>{plan.kind === "clone" ? "複製内容を確認" : "作成内容を確認"}</button>}
       </div></div>
     </div><aside><section className="panel"><h2>設定する環境</h2><strong className="summary-title">{form.name}</strong><p>{form.description}</p>
       <dl className="summary-list"><div><dt>テンプレート</dt><dd>{form.templateVersion}</dd></div><div><dt>環境名</dt><dd>{draft.displayName ?? view.displayName}</dd></div>

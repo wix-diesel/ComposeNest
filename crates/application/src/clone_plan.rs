@@ -110,10 +110,16 @@ pub struct InputDiff {
     pub definition: Option<Value>,
     /// Source value, omitted for secrets.
     pub source: Option<Value>,
+    /// Whether the committed source field is secret, including removed fields.
+    pub source_has_secret: bool,
+    /// Source label retained for removed inputs.
+    pub source_label: String,
     /// Candidate value, omitted for secrets.
     pub candidate: Option<Value>,
     /// Effective Clone Policy.
     pub policy: String,
+    /// Whether the source value satisfies the active type and constraints.
+    pub can_copy: bool,
     /// Candidate provenance.
     pub origin: ValueOrigin,
     /// Whether source and candidate differ, including absence.
@@ -140,6 +146,10 @@ pub struct ClonePlanView {
     pub plan_revision: u64,
     /// Source instance ID.
     pub source_id: String,
+    /// Committed source display name.
+    pub source_name: String,
+    /// Source instance revision guarded at confirmation.
+    pub source_revision: u64,
     /// Proposed fresh instance ID, stable for this plan.
     pub instance_id: String,
     /// Compose project derived from the new instance ID.
@@ -164,6 +174,8 @@ pub struct ClonePlanView {
     pub ports: BTreeMap<String, u16>,
     /// Committed source port bindings by stable slot.
     pub source_ports: BTreeMap<String, u16>,
+    /// Active port slots explicitly entered by the user.
+    pub explicit_ports: Vec<String>,
     /// Port slots added in the selected Version.
     pub added_ports: Vec<String>,
     /// Port slots removed in the selected Version.
@@ -327,6 +339,13 @@ impl ClonePlans {
                 .find(|(name, _)| name == &key)
                 .expect("validated active input")
                 .1;
+            if matches!(answer, CloneAnswer::Copy)
+                && !entries(&plan.source_definition["inputs"])
+                    .iter()
+                    .any(|(name, old)| name == &key && old["type"] == input["type"])
+            {
+                return Err(error("INPUT_TYPE_CHANGED", Some(format!("inputs.{key}"))));
+            }
             let source = plan.source_values.get(&key);
             let state = answer_field(&key, input, source, answer, &fields, &active, random)?;
             fields.insert(key, state);

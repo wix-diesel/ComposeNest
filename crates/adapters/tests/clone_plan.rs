@@ -197,6 +197,7 @@ fn clone_secret_reuse_needs_confirmation_even_when_entered_by_hand() {
         .find(|input| input.key == "password")
         .unwrap();
     assert!(!password.changed);
+    assert!(password.can_copy);
     assert_eq!(
         password.origin,
         composenest_application::clone_plan::ValueOrigin::UserInput
@@ -213,6 +214,25 @@ fn clone_secret_reuse_needs_confirmation_even_when_entered_by_hand() {
         &mut random,
     );
     assert!(ready.concerns.is_empty());
+    let mut switch = clone_edit(ready.plan_revision);
+    switch.version = Some("2".into());
+    let switched = update_clone(
+        &mut plans,
+        &first.plan_id,
+        switch,
+        &store,
+        &clock,
+        &mut random,
+    );
+    assert!(
+        switched
+            .inputs
+            .iter()
+            .find(|item| item.key == "password")
+            .unwrap()
+            .needs_secret_confirmation
+    );
+
     assert!(
         !serde_json::to_string(&ready)
             .unwrap()

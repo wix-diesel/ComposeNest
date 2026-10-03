@@ -197,6 +197,7 @@ fn clone_secret_reuse_needs_confirmation_even_when_entered_by_hand() {
         .find(|input| input.key == "password")
         .unwrap();
     assert!(!password.changed);
+    assert!(password.can_copy);
     assert_eq!(
         password.origin,
         composenest_application::clone_plan::ValueOrigin::UserInput

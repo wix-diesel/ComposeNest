@@ -118,6 +118,8 @@ pub struct InputDiff {
     pub candidate: Option<Value>,
     /// Effective Clone Policy.
     pub policy: String,
+    /// Whether the source value satisfies the active type and constraints.
+    pub can_copy: bool,
     /// Candidate provenance.
     pub origin: ValueOrigin,
     /// Whether source and candidate differ, including absence.

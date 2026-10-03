@@ -141,6 +141,7 @@ export interface InputDiff {
   sourceLabel: string;
   candidate: JsonValue | null;
   policy: string;
+  canCopy: boolean;
   origin: ValueOrigin;
   changed: boolean;
   added: boolean;

@@ -223,6 +223,7 @@ fn source_secret_is_masked_after_type_change_and_an_explicit_answer_resolves_it(
         .find(|item| item.key == "password")
         .unwrap();
     assert!(password.source_has_secret);
+    assert!(!password.can_copy);
     assert!(password.needs_answer);
     let mut copy = clone_edit(next.plan_revision);
     copy.inputs.insert(

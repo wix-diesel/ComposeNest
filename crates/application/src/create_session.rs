@@ -3,7 +3,7 @@
 use crate::{
     Clock, RequestContext,
     create_plan::{
-        CommitCreate, CreatePlanView, CreatePlans, PlanEdit, PlanError, PrepareCreate,
+        CommitCreate, CreatePlanView, CreatePlans, PlanEdit, PlanError, PrepareCreate, commit_hash,
         get_plan_commit,
     },
     host_ports::PortInspector,
@@ -165,7 +165,13 @@ impl CreateSession {
         id: &str,
         store: &impl PlanCommitStore,
     ) -> Result<Option<RequestReceipt>, PlanError> {
-        get_plan_commit(store, &self.scope, id)
+        let receipt = get_plan_commit(store, &self.scope, id)?;
+        if receipt.as_ref().is_some_and(|receipt| {
+            receipt.request_hash != commit_hash(id, receipt.confirmed_revision)
+        }) {
+            return Err(failure("PLAN_ALREADY_COMMITTED"));
+        }
+        Ok(receipt)
     }
 
     /// Discards only an unconfirmed plan; committed resources remain owned.
@@ -194,7 +200,8 @@ impl CreateSession {
             .receipt(&self.scope, &request.context.request_id)
             .map_err(|_| failure("STORE_UNAVAILABLE"))?
             && (previous.plan_id.as_deref() != Some(request.plan_id.as_str())
-                || previous.confirmed_revision != request.revision)
+                || previous.confirmed_revision != request.revision
+                || previous.request_hash != commit_hash(&request.plan_id, request.revision))
         {
             return Err(failure("REQUEST_ALREADY_USED"));
         }

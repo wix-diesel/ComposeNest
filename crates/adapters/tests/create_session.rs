@@ -184,3 +184,75 @@ fn acceptance_is_reconciled_after_plan_loss_without_new_ids_or_resources() {
         .unwrap();
     assert_eq!(count, 1);
 }
+
+#[test]
+fn clone_acceptance_cannot_be_returned_by_create_commands() {
+    use composenest_application::{
+        clone_plan::{ClonePlans, PrepareClone},
+        create_plan::CommitCreate,
+        state_store::StorageAllocation,
+    };
+    let (_root, store, template) = store();
+    setup_source(&store, &template);
+    let clock = TestClock(Cell::new(0));
+    let mut random = TestRandom::default();
+    let mut clones = ClonePlans::default();
+    let plan = clones
+        .prepare_clone(
+            &PrepareClone {
+                scope_id: "scope".into(),
+                source_id: "source".into(),
+                display_name: "Copy".into(),
+            },
+            &store,
+            &clock,
+            &mut random,
+            &FreePorts,
+        )
+        .unwrap();
+    clones
+        .commit_plan(
+            CommitCreate {
+                plan_id: plan.plan_id.clone(),
+                revision: plan.plan_revision,
+                scope_id: "scope".into(),
+                request_id: "request".into(),
+                target_id: "target".into(),
+                instance_id: plan.instance_id,
+                operation_id: "clone-op".into(),
+                confirmed_ports: plan.ports.clone(),
+                storage: vec![StorageAllocation {
+                    slot: "data".into(),
+                    resource_identity: "root/clone/data".into(),
+                    ownership_evidence: "clone-proof".into(),
+                }],
+            },
+            &store,
+            &clock,
+            &FreePorts,
+        )
+        .unwrap();
+    let mut session = CreateSession::new("scope".into());
+    assert_eq!(
+        session.receipt(&plan.plan_id, &store).unwrap_err().code,
+        "PLAN_ALREADY_COMMITTED"
+    );
+    for (request_id, expected) in [
+        ("request", "REQUEST_ALREADY_USED"),
+        ("new-request", "PLAN_ALREADY_COMMITTED"),
+    ] {
+        let mut request = confirmation(&plan.plan_id, plan.plan_revision, plan.ports.clone());
+        request.context.request_id = request_id.into();
+        assert_eq!(
+            session.accepted(&request, &store).unwrap_err().code,
+            expected
+        );
+        assert_eq!(
+            session
+                .confirm(request, &store, &clock, &mut random, &FreePorts)
+                .unwrap_err()
+                .code,
+            expected
+        );
+    }
+}

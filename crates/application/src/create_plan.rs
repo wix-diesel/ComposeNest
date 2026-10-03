@@ -556,7 +556,7 @@ pub fn get_plan_commit(
         .map_err(commit_store_error)
 }
 
-fn commit_hash(plan_id: &str, revision: u64) -> String {
+pub(crate) fn commit_hash(plan_id: &str, revision: u64) -> String {
     format!(
         "{:x}",
         Sha256::digest(format!("create:{plan_id}:{revision}").as_bytes())

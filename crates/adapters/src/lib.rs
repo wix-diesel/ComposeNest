@@ -43,6 +43,7 @@ pub mod delete_state;
 pub mod docker_cli;
 pub mod docker_create;
 pub mod docker_delete;
+pub mod docker_executable;
 pub mod docker_observation;
 pub mod docker_target;
 mod entities;

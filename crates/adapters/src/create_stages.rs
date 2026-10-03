@@ -10,7 +10,7 @@ use composenest_application::{
     operation_journal::{
         ExpectedResult, OperationJournal, RequestReceipt, StepCommand, StepIntent, StepOutcome,
     },
-    operation_runner::{OperationRunner, ProgressSink},
+    operation_runner::{OperationReservation, OperationRunner, ProgressSink},
     state_store::StorageMethod,
     storage::StoragePort,
 };
@@ -32,7 +32,7 @@ use crate::{
     storage::BindStorage,
 };
 
-/// Executes one accepted create or clone receipt through the fixed local adapters.
+/// Executes an accepted receipt with capacity reserved before durable acceptance.
 pub async fn run_confirmed_create<P: ProgressSink>(
     database: &DatabaseWorker,
     probe: &DockerProbe,
@@ -40,6 +40,7 @@ pub async fn run_confirmed_create<P: ProgressSink>(
     runner: &OperationRunner,
     receipt: &RequestReceipt,
     progress: &P,
+    reservation: OperationReservation,
 ) -> Result<String, CreateOperationError> {
     let confirmed = database
         .confirmed_create(receipt)
@@ -70,7 +71,7 @@ pub async fn run_confirmed_create<P: ProgressSink>(
         stages: &stages,
         progress,
     }
-    .run(receipt)
+    .run_reserved(receipt, reservation)
     .await
 }
 

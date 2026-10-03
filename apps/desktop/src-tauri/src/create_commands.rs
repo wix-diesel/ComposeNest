@@ -12,7 +12,7 @@ use composenest_application::{
         PrepareCreateRequest, UpdateCreateRequest,
     },
     operation_journal::RequestReceipt,
-    operation_runner::{OperationRunner, ProgressSink},
+    operation_runner::{OperationReservation, OperationRunner, ProgressSink, RunnerError},
     state_store::StateStore,
 };
 use std::{path::PathBuf, sync::Arc};
@@ -56,20 +56,7 @@ impl CreateBackend {
             }
             _ => return Err(std::io::Error::other("ambiguous management scope").into()),
         };
-        let executable = std::env::var_os("PATH")
-            .and_then(|paths| {
-                std::env::split_paths(&paths)
-                    .filter(|path| path.is_absolute())
-                    .map(|path| {
-                        path.join(if cfg!(windows) {
-                            "docker.exe"
-                        } else {
-                            "docker"
-                        })
-                    })
-                    .find(|path| path.is_file())
-            })
-            .and_then(|path| path.canonicalize().ok());
+        let executable = composenest_adapters::docker_executable::discover(&home);
         let probe = executable.map(|executable| DockerProbe {
             executable,
             directory: database.management_root().to_path_buf(),
@@ -134,12 +121,14 @@ fn envelope<T>(context: RequestContext, result: Result<T, PlanError>) -> Respons
         Err(error) => ResponseEnvelope::failure(context.request_id, ErrorDto {
             code: error.code.into(), field_path: error.field_path,
             reason: match error.code {
+                "OPERATION_CAPACITY_REACHED" => "他の操作が完了してから、同じプランで作成を再試行してください。",
+                "APPLICATION_SHUTTING_DOWN" => "アプリの終了中です。再起動後に作成してください。",
                 "DOCKER_UNAVAILABLE" => "Dockerの接続・対応環境を確認してください。",
                 "PLAN_NOT_FOUND" => "この作成プランは失効しました。新規作成はテンプレートから開き直してください。",
                 "PLAN_STALE" | "PLAN_RECONFIRM" | "PORT_CONFLICT" => "プランまたはポートが変わりました。同じプランの設定を再確認してください。",
                 "PLAINTEXT_CONFIRMATION_REQUIRED" => "平文保存の確認が必要です。",
                 _ => "要求を処理できませんでした。設定と接続を再確認してください。",
-            }.into(), retryability: Retryability::NotRetryable, operation_id: None, safe_details: None,
+            }.into(), retryability: if error.code == "OPERATION_CAPACITY_REACHED" { Retryability::Retryable } else { Retryability::NotRetryable }, operation_id: None, safe_details: None,
         }),
     }
 }
@@ -262,7 +251,12 @@ impl ProgressSink for DesktopProgress {
     }
 }
 
-fn execute(state: Arc<CreateBackend>, receipt: RequestReceipt, app: tauri::AppHandle) {
+fn execute(
+    state: Arc<CreateBackend>,
+    receipt: RequestReceipt,
+    reservation: OperationReservation,
+    app: tauri::AppHandle,
+) {
     tauri::async_runtime::spawn_blocking(move || {
         let result = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -278,6 +272,7 @@ fn execute(state: Arc<CreateBackend>, receipt: RequestReceipt, app: tauri::AppHa
                         &state.runner,
                         &receipt,
                         &DesktopProgress(app),
+                        reservation,
                     ))
                     .map_err(|_| ())
             });
@@ -289,6 +284,20 @@ fn execute(state: Arc<CreateBackend>, receipt: RequestReceipt, app: tauri::AppHa
             });
         }
     });
+}
+
+fn accept_with_capacity(
+    runner: &Arc<OperationRunner>,
+    accept: impl FnOnce() -> Result<(RequestReceipt, bool), PlanError>,
+) -> Result<(RequestReceipt, Option<OperationReservation>), PlanError> {
+    let reservation = runner.reserve().map_err(|error| {
+        failure(match error {
+            RunnerError::CapacityReached => "OPERATION_CAPACITY_REACHED",
+            _ => "APPLICATION_SHUTTING_DOWN",
+        })
+    })?;
+    let (receipt, fresh) = accept()?;
+    Ok((receipt, fresh.then_some(reservation)))
 }
 
 /// Accepts explicit confirmation and starts each fresh operation once.
@@ -307,23 +316,25 @@ pub async fn confirm_create(
     let context = request.context.clone();
     let mut session = state.session.lock().await;
     let result = match session.accepted(&request, &*state.database) {
-        Ok(Some(receipt)) => Ok((receipt, false)),
+        Ok(Some(receipt)) => Ok((receipt, None)),
         Ok(None) => state.ports().await.and_then(|ports| {
-            session.confirm(
-                request,
-                &*state.database,
-                &SystemClock,
-                &mut SystemRandom,
-                &ports,
-            )
+            accept_with_capacity(&state.runner, || {
+                session.confirm(
+                    request,
+                    &*state.database,
+                    &SystemClock,
+                    &mut SystemRandom,
+                    &ports,
+                )
+            })
         }),
         Err(error) => Err(error),
     };
     Ok(envelope(
         context,
-        result.map(|(receipt, fresh)| {
-            if fresh {
-                execute(Arc::clone(state.inner()), receipt.clone(), app);
+        result.map(|(receipt, reservation)| {
+            if let Some(reservation) = reservation {
+                execute(Arc::clone(state.inner()), receipt.clone(), reservation, app);
             }
             CreateReceipt::from(&receipt)
         }),
@@ -347,6 +358,69 @@ mod tests {
         assert_eq!(error.code, "DOCKER_UNAVAILABLE");
         assert!(error.safe_details.is_none());
         assert!(error.reason.contains("Docker"));
+    }
+
+    fn receipt() -> RequestReceipt {
+        RequestReceipt {
+            scope_id: "scope".into(),
+            request_id: "request".into(),
+            plan_id: Some("plan".into()),
+            confirmed_revision: 1,
+            request_hash: "a".repeat(64),
+            instance_id: "new-instance".into(),
+            operation_id: "new-operation".into(),
+        }
+    }
+
+    #[test]
+    fn third_confirmation_is_not_accepted_and_can_retry_after_capacity_is_released() {
+        let runner = Arc::new(OperationRunner::new());
+        let first = runner.reserve().unwrap();
+        let second = runner.reserve().unwrap();
+        let acceptances = std::cell::Cell::new(0);
+        let accept = || {
+            acceptances.set(acceptances.get() + 1);
+            Ok((receipt(), true))
+        };
+        let error = accept_with_capacity(&runner, accept).err().unwrap();
+        assert_eq!(error.code, "OPERATION_CAPACITY_REACHED");
+        assert_eq!(acceptances.get(), 0);
+        drop(first);
+        let (accepted, reservation) = accept_with_capacity(&runner, accept).unwrap();
+        assert_eq!(accepted.operation_id, "new-operation");
+        assert!(reservation.is_some());
+        assert_eq!(acceptances.get(), 1);
+        assert!(matches!(
+            runner.reserve(),
+            Err(RunnerError::CapacityReached)
+        ));
+        drop(reservation);
+        drop(second);
+        assert!(runner.shutdown(std::time::Duration::ZERO));
+    }
+
+    #[test]
+    fn rejected_or_duplicate_acceptance_releases_its_reserved_capacity() {
+        let runner = Arc::new(OperationRunner::new());
+        assert!(accept_with_capacity(&runner, || Err(failure("PLAN_STALE"))).is_err());
+        let (_, reservation) = accept_with_capacity(&runner, || Ok((receipt(), false))).unwrap();
+        assert!(reservation.is_none());
+        assert!(runner.shutdown(std::time::Duration::ZERO));
+    }
+
+    #[test]
+    fn capacity_rejection_is_retryable_on_the_same_plan() {
+        let context = RequestContext {
+            api_version: 1,
+            request_id: "busy".into(),
+        };
+        let response =
+            envelope::<CreateReceipt>(context, Err(failure("OPERATION_CAPACITY_REACHED")));
+        assert!(response.result.is_none());
+        let error = response.error.unwrap();
+        assert_eq!(error.retryability, Retryability::Retryable);
+        assert!(error.operation_id.is_none());
+        assert!(error.reason.contains("同じプラン"));
     }
 
     #[test]

@@ -29,6 +29,9 @@ pub(super) fn evaluate_fields(
         let kind = input["type"].as_str().unwrap_or("").to_owned();
         if let Some(state) = previous.get(key).filter(|state| state.kind == kind) {
             let mut retained = state.clone();
+            if kind == "secret" {
+                retained.secret_confirmed = false;
+            }
             if policy(input) == "ask"
                 && (state.policy != "ask" || state.options != input.get("options").cloned())
             {
@@ -42,6 +45,9 @@ pub(super) fn evaluate_fields(
         let source = source_values
             .get(key)
             .filter(|_| source_types.get(key) == Some(&input["type"]));
+        let type_changed = source_types
+            .get(key)
+            .is_some_and(|old| old != &input["type"]);
         let chosen = policy(input);
         let (value, origin, answered) = match chosen {
             "copy" => (
@@ -95,7 +101,7 @@ pub(super) fn evaluate_fields(
                 options: input.get("options").cloned(),
                 value,
                 origin,
-                answered,
+                answered: answered && !type_changed,
                 secret_confirmed: false,
             },
         );
@@ -256,9 +262,20 @@ pub(super) fn preview(
         inputs.push(InputDiff {
             key: key.clone(),
             definition: Some(input.clone()),
-            source: if secret { None } else { source.cloned() },
+            source: if secret || source_input.is_some_and(|old| old["type"] == "secret") {
+                None
+            } else {
+                source.cloned()
+            },
+            source_has_secret: source_input.is_some_and(|old| old["type"] == "secret")
+                && source.is_some(),
+            source_label: source_input
+                .and_then(|old| old["label"].as_str())
+                .unwrap_or(key)
+                .into(),
             candidate: if secret { None } else { state.value.clone() },
             policy: policy(input).into(),
+            can_copy: !type_changed && source.is_some() && valid_input(input, source),
             origin: state.origin,
             changed: state.value.as_ref() != source,
             added: source_input.is_none(),
@@ -281,8 +298,11 @@ pub(super) fn preview(
             } else {
                 plan.source_values.get(key).cloned()
             },
+            source_has_secret: secret && plan.source_values.contains_key(key),
+            source_label: old["label"].as_str().unwrap_or(key).into(),
             candidate: None,
             policy: policy(old).into(),
+            can_copy: false,
             origin: ValueOrigin::Unset,
             changed: plan.source_values.contains_key(key),
             added: false,
@@ -385,6 +405,8 @@ pub(super) fn preview(
         plan_id: id.into(),
         plan_revision: plan.revision,
         source_id: plan.source.id.clone(),
+        source_name: plan.source.name.clone(),
+        source_revision: plan.source.revision,
         instance_id: plan.instance_id.clone(),
         project_name: format!("cn-{}", plan.instance_id),
         display_name: plan.display_name.clone(),
@@ -410,6 +432,7 @@ pub(super) fn preview(
             .iter()
             .map(|port| (port.slot.clone(), port.host_port))
             .collect(),
+        explicit_ports: plan.explicit_ports.keys().cloned().collect(),
         added_ports,
         removed_ports,
         storage_slots,

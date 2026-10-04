@@ -9,6 +9,8 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 use tauri::{Manager, State};
 mod create_commands;
 use create_commands::*;
+mod clone_commands;
+use clone_commands::*;
 
 /// Returns the non-sensitive state required to initialize the desktop UI.
 #[tauri::command]
@@ -65,7 +67,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             view_create_plan,
             get_create_receipt,
             discard_create_plan,
-            confirm_create
+            confirm_create,
+            prepare_clone,
+            update_clone_plan,
+            view_clone_plan,
+            get_clone_receipt,
+            discard_clone_plan,
+            confirm_clone
         ])
         .run(tauri::generate_context!())?;
     runner.shutdown(Duration::from_secs(30));

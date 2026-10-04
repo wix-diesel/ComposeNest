@@ -35,3 +35,17 @@
 [data-theme="dark"] .template-form .btn.primary { background: #3d8059; color: white; }
 @media (max-width: 1000px) { .template-form .two-column { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 540px) { .template-form .two-equal, .template-form .radio-options { grid-template-columns: minmax(0, 1fr); } }
+.clone-diff { max-width: 100%; overflow-x: auto; }
+.clone-diff table { border-collapse: collapse; width: 100%; min-width: 660px; font-size: 12px; }
+.clone-diff th, .clone-diff td { padding: 14px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+.clone-diff thead { background: var(--form-soft, #f3f7f2); }
+.clone-diff th:first-child { width: 15%; }
+.clone-diff td:nth-child(2) { width: 16%; }
+.clone-diff td:nth-child(3) { width: 42%; }
+.clone-diff .field { margin: 0; }
+.clone-diff .actions { margin-top: 8px; flex-wrap: wrap; }
+.clone-diff .badge { display: inline-block; border: 1px solid var(--line); border-radius: 5px; padding: 3px 6px; margin: 0 4px 5px 0; font-size: 10px; }
+.clone-diff small { display: block; margin-top: 6px; }
+.clone-diff .sr-only { position: absolute; width: 1px; height: 1px; clip-path: inset(50%); overflow: hidden; }
+.dialog:has(.clone-diff) { width: 900px; max-height: calc(100vh - 40px); overflow-y: auto; }
+[data-theme="dark"] .clone-diff thead { background: #263b2c; }

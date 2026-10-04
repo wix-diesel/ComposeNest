@@ -173,6 +173,7 @@ jobs:
           pnpm run test:forms
           pnpm run test:create
           pnpm run test:clone
+          pnpm run test:instances
       - uses: actions/upload-artifact@v4
         if: always()
         with:

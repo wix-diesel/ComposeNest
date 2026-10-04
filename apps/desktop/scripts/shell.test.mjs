@@ -26,6 +26,9 @@ try {
   await page.addInitScript(() => {
     window.bootstrapCalls = 0;
     window.__TAURI_INTERNALS__ = { invoke: async (command, { request }) => {
+      if (command === "get_instance_actions") return { apiVersion: 1, requestId: request.context.requestId, error: null,
+        result: { id: request.instanceId, name: "対象の環境", revision: 1, runtimeStatus: "unknown", observedAt: null,
+          operationId: null, operationStatus: null, operationKind: null, operationPhase: null, actions: [] } };
       window.bootstrapCalls++;
       if (command !== "get_bootstrap" || window.failBootstrap) throw new Error("test failure");
       return { apiVersion: 1, requestId: request.requestId, error: null, result: { applicationTitle: "ComposeNest", startedAtUnixSeconds: 1 } };

@@ -19,11 +19,34 @@ try {
   await page.addInitScript(() => {
     window.calls = []; window.mode = "normal";
     window.view = { id: "target", name: "開発用データベース", revision: 3, runtimeStatus: "stopped", observedAt: "2026-10-05 08:00:00", operationId: null, operationStatus: null, operationKind: null, operationPhase: null, actions: ["rename", "start", "stop", "restart"] };
+    window.edit = { templateId: "generic-service", selectedVersion: "custom-17", storageMethod: "volume", specRevision: 1, appliedSpecRevision: 1,
+      inputs: [{ slot: "username", secret: false, value: "app-user" }, { slot: "password", secret: true, value: null }, { slot: "enabled", secret: false, value: false }],
+      ports: [{ slot: "db", hostIp: "127.0.0.1", containerPort: 5432, oldPort: 15432, committedPort: 15432, candidatePort: null, oldReservation: "committed", candidateReservation: null }, { slot: "metrics", hostIp: "127.0.0.1", containerPort: 9000, oldPort: 19000, committedPort: 19000, candidatePort: null, oldReservation: "committed", candidateReservation: null }] };
     window.__TAURI_INTERNALS__ = { invoke: async (command, { request }) => {
       window.calls.push({ command, request: structuredClone(request) });
       const response = (result, error = null) => ({ apiVersion: 1, requestId: (request.context ?? request).requestId, result, error });
       if (command === "get_bootstrap") return response({ applicationTitle: "ComposeNest", startedAtUnixSeconds: 1 });
       if (command === "get_instance_actions") { if (window.mode === "read_failure") throw new Error("Disconnected"); return response(structuredClone(window.view)); }
+      const editView = () => ({ ...structuredClone(window.edit), state: structuredClone(window.view), canEditPorts: ["stopped", "absent"].includes(window.view.runtimeStatus) && window.view.actions.includes("rename") });
+      if (command === "get_instance_edit") {
+        if (window.mode === "fresh_running") Object.assign(window.view, { runtimeStatus: "ready", actions: ["rename", "stop"] });
+        return response(editView());
+      }
+      if (command === "edit_instance_ports") {
+        if (window.mode === "port_conflict") return response(null, { code: "PORT_EDIT_CONFLICT" });
+        if (window.mode === "delay") await new Promise((resolve) => { window.finishChange = resolve; });
+        if (!window.view.operationId) {
+          Object.assign(window.view, { operationId: "port-operation", operationKind: "edit_port", operationStatus: window.mode === "outcome_unknown" ? "OutcomeUnknown" : "Accepted", operationPhase: "recreate", actions: [] });
+          window.edit.ports.forEach((port) => { port.candidatePort = request.ports[port.slot]; port.candidateReservation = port.candidatePort === port.oldPort ? "committed" : "held"; });
+        }
+        if (window.mode === "port_success") {
+          Object.assign(window.view, { revision: 4, runtimeStatus: "stopped", operationStatus: "Succeeded", operationPhase: "stopped", actions: ["rename", "start"] });
+          Object.assign(window.edit, { specRevision: 2, appliedSpecRevision: 2 });
+          window.edit.ports.forEach((port) => { port.committedPort = port.candidatePort; port.candidateReservation = "committed"; port.oldReservation = port.oldPort === port.committedPort ? "committed" : "released"; });
+        }
+        if (window.mode === "lost") throw new Error("Disconnected after port acceptance");
+        return response(editView());
+      }
       if (command === "change_instance") {
         if (window.mode === "delay") await new Promise((resolve) => { window.finishChange = resolve; });
         if (!window.view.operationId) Object.assign(window.view, { operationId: "accepted-op", operationStatus: "Accepted", operationKind: request.action, operationPhase: "inspect", actions: [] });
@@ -91,6 +114,100 @@ try {
     await page.getByText(`${action} · 受付済み`, { exact: true }).waitFor();
     assert.equal((await calls("change_instance"))[0].request.action, action === "停止" ? "stop" : "restart");
     assert.equal(await page.locator(".badge").textContent(), "利用可能");
+  }
+
+  async function confirmPorts(port = "15433") {
+    await page.locator("#edit-port-db").fill(port);
+    await page.getByRole("button", { name: "ポート変更内容を確認", exact: true }).click();
+  }
+  const applyPorts = () => page.getByRole("button", { name: "ポート変更を適用", exact: true }).click();
+  await open(true);
+  assert.equal(await page.getByText("generic-service custom-17", { exact: true }).count(), 1);
+  assert.equal(await page.getByText("app-user", { exact: true }).count(), 1);
+  assert.equal(await page.getByText("false", { exact: true }).count(), 1);
+  assert.equal(await page.getByText("••••••••（非表示）", { exact: true }).count(), 1);
+  assert.equal(await page.getByText("named volume", { exact: true }).count(), 1);
+  assert.equal(await page.locator("input").count(), 3, "version, initialization and storage have no editable controls");
+  for (const value of ["80", "65536", "15432.5", "19000", ""]) {
+    await page.locator("#edit-port-db").fill(value);
+    assert.equal(await page.getByRole("button", { name: "ポート変更内容を確認", exact: true }).isDisabled(), true);
+  }
+  await page.locator("#edit-port-db").fill("15433");
+  await rename();
+  assert.equal(await page.locator("#edit-port-db").inputValue(), "15433", "rename preserves the separate port draft");
+  assert.equal((await calls("edit_instance_ports")).length, 0);
+  await confirmPorts();
+  await page.getByText("15432 → 15433", { exact: true }).waitFor();
+  await page.keyboard.press("Escape");
+  assert.equal((await calls("edit_instance_ports")).length, 0);
+  await confirmPorts(); await page.evaluate(() => { window.mode = "port_conflict"; }); await applyPorts();
+  await page.getByText("新しいポートを利用できません。ポートとDockerの接続を確認してください。", { exact: true }).waitFor();
+  assert.equal(await page.getByText("環境名を変更しました。", { exact: true }).count(), 1, "rename success is separate from the port failure");
+  const separate = (await calls("edit_instance_ports"))[0].request;
+  assert.equal(separate.expectedRevision, 4); assert.equal(separate.expectedSpecRevision, 1);
+  assert.deepEqual(separate.ports, { db: 15433, metrics: 19000 }); assert.equal("name" in separate, false);
+
+  await open(true); await confirmPorts();
+  await page.evaluate(() => { window.mode = "fresh_running"; }); await applyPorts();
+  await page.getByText("停止またはコンテナ不在を新しく確認できなかったため、ポート変更は受け付けていません。", { exact: true }).waitFor();
+  assert.equal((await calls("edit_instance_ports")).length, 0, "fresh running state blocks sending the request");
+  await open(true); await page.evaluate(() => { window.view.runtimeStatus = "unknown"; });
+  await page.waitForFunction(() => document.querySelector("#edit-port-db").disabled);
+  assert.equal(await page.locator("#edit-name").isDisabled(), false, "unknown runtime does not prohibit independent rename");
+
+  await open(true); await page.evaluate(() => { window.view.runtimeStatus = "absent"; });
+  await page.getByText("コンテナ不在", { exact: true }).waitFor();
+  await confirmPorts(); await page.evaluate(() => { window.mode = "delay"; });
+  await page.getByRole("button", { name: "ポート変更を適用", exact: true }).evaluate((button) => { button.click(); button.click(); });
+  await page.waitForFunction(() => typeof window.finishChange === "function");
+  assert.equal((await calls("edit_instance_ports")).length, 1);
+  assert.equal(await page.locator("#edit-name").isDisabled(), true);
+  await page.evaluate(() => window.finishChange());
+  await page.getByText("ポート変更: 受付済み・未適用。", { exact: true }).waitFor();
+  assert.equal(await page.getByText("15432 · 確定予約を保持", { exact: true }).count(), 1);
+  assert.equal(await page.getByText("15433 · 候補予約を保持", { exact: true }).count(), 1);
+  assert.equal(await page.locator("#edit-port-db").isDisabled(), true);
+  assert.equal((await calls("change_instance")).length, 0, "port edit never starts a container");
+  await page.evaluate(() => {
+    Object.assign(window.view, { revision: 4, runtimeStatus: "stopped", operationStatus: "Succeeded", actions: ["rename", "start"] });
+    Object.assign(window.edit, { specRevision: 2, appliedSpecRevision: 2 });
+    window.edit.ports.forEach((port) => { port.committedPort = port.candidatePort; port.oldReservation = port.oldPort === port.committedPort ? "committed" : "released"; port.candidateReservation = "committed"; });
+  });
+  await page.getByText("ポート変更: 適用完了。", { exact: true }).waitFor();
+  await page.getByText("表示していた版が古くなりました。現在の状態を再確認してください。", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "現在の状態を再確認", exact: true }).click();
+  assert.equal(await page.locator("#edit-port-db").inputValue(), "15433");
+  await confirmPorts("15434");
+  await page.evaluate(() => { window.edit.specRevision++; });
+  await page.getByText("表示していた版が古くなりました。現在の状態を再確認してください。", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "ポート変更を適用", exact: true }).isDisabled(), true);
+  await page.keyboard.press("Escape");
+  assert.equal((await calls("edit_instance_ports")).length, 1);
+
+  await open(true); await confirmPorts(); await page.evaluate(() => { window.mode = "port_success"; }); await applyPorts();
+  await page.getByText("ポート変更: 適用完了。", { exact: true }).waitFor();
+  assert.equal(await page.locator(".badge").textContent(), "停止中");
+  assert.equal(await page.locator("#edit-port-db").inputValue(), "15433");
+  assert.equal(await page.getByText("15432 · 解放済み", { exact: true }).count(), 1);
+  assert.equal(await page.getByText("保存 r2 / 適用 r2", { exact: true }).count(), 1);
+  assert.equal((await calls("rename_instance")).length, 0);
+  assert.equal((await calls("change_instance")).length, 0);
+  for (const mode of ["outcome_unknown", "lost"]) {
+    await open(true); await confirmPorts(); await page.evaluate((mode) => { window.mode = mode; }, mode); await applyPorts();
+    await page.getByText(mode === "lost" ? "受付結果の確認が必要です。別の変更は実行できません。" : "ポート変更: 結果不明。", { exact: true }).waitFor();
+    await page.getByText("15433 · 候補予約を保持", { exact: true }).waitFor();
+    assert.equal(await page.locator("#edit-name").isDisabled(), true);
+    assert.equal(await page.getByText("15432 · 確定予約を保持", { exact: true }).count(), 1);
+    assert.equal(await page.getByText("15433 · 候補予約を保持", { exact: true }).count(), 1);
+    if (mode === "lost") {
+      await page.evaluate(() => { location.hash = "#/instances"; });
+      await page.getByRole("heading", { level: 1, name: "環境一覧", exact: true }).waitFor();
+      await page.evaluate(() => { window.mode = "normal"; location.hash = "#/instance-edit?instanceId=target"; });
+      await page.getByRole("button", { name: "受付を再確認", exact: true }).click();
+      await page.waitForFunction(() => !document.querySelector(".instance-edit").textContent.includes("受付結果の確認が必要です"));
+      const requests = await calls("edit_instance_ports"); assert.equal(requests.length, 2); assert.deepEqual(requests[0].request, requests[1].request);
+      assert.equal(await page.locator("#edit-name").isDisabled(), true, "known acceptance does not imply completed application");
+    }
   }
   await open(true);
   await page.locator("#edit-name").fill("変更案");
@@ -177,5 +294,5 @@ try {
   await page.getByRole("alert").waitFor();
   assert.equal(await page.getByRole("button", { name: "編集", exact: true }).isDisabled(), true);
   assert.deepEqual(errors, []);
-  console.log("Instance actions: acceptance, double clicks, persisted completion, absent restart, unresolved failure, name conflicts/version, uncertain requests/navigation, running rename and responsive layouts passed.");
+  console.log("Instance actions/edit: lifecycle and rename regressions, separate port results, fresh state guards, old/new reservations, stopped completion, receipt retry/navigation, immutable masked settings and responsive themes passed.");
 } finally { await browser?.close(); server.kill(); }

@@ -1,3 +1,4 @@
+import type { ChangeInstanceRequest, InstanceActionView, RenameInstanceRequest } from "../generated/template-form";
 import type { CloneEdit, ClonePlanView, ConfirmCloneRequest, ConfirmCreateRequest, CreatePlanView, CreateReceipt, PlanEdit } from "../generated/template-form";
 import { invoke } from "@tauri-apps/api/core";
 import { parseRoute, routeHash, type AppRoute } from "../navigation";
@@ -90,6 +91,47 @@ export class ApplicationClient {
   /** Discards an unconfirmed clone and its secret candidates. */
   discardClone(planId: string): Promise<null> {
     return this.createCall("discard_clone_plan", { context: this.context(), planId } as import("../generated/template-form").CreatePlanRequest);
+  }
+
+  private instanceChanges = new Map<string, { command: string; request: ChangeInstanceRequest | RenameInstanceRequest; readBack?: boolean; promise?: Promise<InstanceActionView> }>();
+
+  /** Reads committed state and available actions without optimistic status changes. */
+  getInstanceActions(instanceId: string): Promise<InstanceActionView> {
+    return this.createCall("get_instance_actions", { context: this.context(), instanceId } as import("../generated/template-form").InstanceActionRequest);
+  }
+  /** Reports an in-flight or uncertain change across screen navigation. */
+  hasInstanceChange(instanceId: string): boolean { return this.instanceChanges.has(instanceId); }
+
+  private sendInstanceChange(instanceId: string): Promise<InstanceActionView> {
+    const pending = this.instanceChanges.get(instanceId);
+    if (!pending) return this.getInstanceActions(instanceId);
+    if (pending.promise) return pending.promise;
+    const call = pending.command === "rename_instance" && pending.readBack
+      ? this.getInstanceActions(instanceId) : this.createCall<InstanceActionView>(pending.command, pending.request);
+    pending.promise = call.then((view) => { this.instanceChanges.delete(instanceId); return view; }).catch((error: unknown) => {
+      const code = typeof error === "object" && error !== null && "code" in error ? error.code : null;
+      if (["NAME_OR_REQUEST_CONFLICT", "INSTANCE_STALE", "INSTANCE_MISSING", "INSTANCE_INPUT_INVALID", "INSTANCE_ACTION_UNAVAILABLE"].includes(String(code)))
+        this.instanceChanges.delete(instanceId);
+      else if (pending.command === "rename_instance") pending.readBack = true;
+      throw error;
+    }).finally(() => { pending.promise = undefined; });
+    return pending.promise;
+  }
+  /** Reconciles lifecycle acceptance with the original request; uncertain renames are read back. */
+  retryInstanceChange(instanceId: string): Promise<InstanceActionView> { return this.sendInstanceChange(instanceId); }
+
+  private beginInstanceChange(command: string, request: ChangeInstanceRequest | RenameInstanceRequest): Promise<InstanceActionView> {
+    if (this.hasInstanceChange(request.instanceId)) return Promise.reject(new Error("instance_change_pending"));
+    this.instanceChanges.set(request.instanceId, { command, request });
+    return this.sendInstanceChange(request.instanceId);
+  }
+  /** Accepts one fixed lifecycle action with a stable request ID until reconciliation. */
+  changeInstance(instanceId: string, expectedRevision: number, action: string): Promise<InstanceActionView> {
+    return this.beginInstanceChange("change_instance", { context: this.context(), instanceId, expectedRevision, action });
+  }
+  /** Changes only the display name against the exact version shown by Core. */
+  renameInstance(instanceId: string, expectedRevision: number, name: string): Promise<InstanceActionView> {
+    return this.beginInstanceChange("rename_instance", { context: this.context(), instanceId, expectedRevision, name });
   }
 
   /** Loads the initial application state from the Rust application layer. */

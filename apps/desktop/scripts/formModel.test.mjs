@@ -39,9 +39,11 @@ test("explicit generation never conflicts with a pending secret answer", () => {
     assert.equal(candidate(plan, "password").hasSecret, true);
   }
 });
-test("only explicit secret acknowledgement sends confirmSecrets", () => {
+
+test("clone source-copy and secret confirmation are independent explicit actions", () => {
   const plan = { kind: "clone", view: views.clone };
-  const edit = planEdit(plan, emptyDraft(), { confirmSecret: "password" });
-  assert.deepEqual(edit.confirmSecrets, ["password"]);
-  assert.deepEqual(edit.inputs, {});
+  assert.deepEqual(planEdit(plan, emptyDraft(), { copy: "retained" }).inputs, { retained: { action: "copy" } });
+  const confirmation = planEdit(plan, emptyDraft(), { confirmSecret: "password" });
+  assert.deepEqual(confirmation.inputs, {});
+  assert.deepEqual(confirmation.confirmSecrets, ["password"]);
 });

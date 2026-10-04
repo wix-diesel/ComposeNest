@@ -3,6 +3,7 @@ import type { ApplicationClient } from "../ipc/ApplicationClient";
 import { API_VERSION } from "../generated/ipc";
 import type { CloneEdit, ClonePlanView, ConfirmCloneRequest, ConfirmCreateRequest, CreatePlanView, CreateReceipt, PlanEdit } from "../generated/template-form";
 import { ConfirmDialog } from "../shell/ConfirmDialog";
+import { CloneDiff } from "../templates/CloneDiff";
 import { TemplateForm } from "../templates/TemplateForm";
 import "./create.css";
 
@@ -226,7 +227,7 @@ function PlanScreen({ client, selectionId, kind, returnTo = "instances" }: {
         <div><dt>保存方式</dt><dd>{review.storageMethod === "bind" ? "ホストフォルダー" : "Docker管理"}</dd></div>
         <div><dt>Plan版</dt><dd>{review.planRevision}</dd></div>
         {review.templateForm.ports.map((slot) => <div key={slot.key}><dt>{slot.label}</dt><dd>127.0.0.1:{review.ports[slot.key]} → {String(slot.container)}</dd></div>)}
-      </dl><p>表示したポートとPlan版を確定時に再確認します。受付後は独立した処理状況画面へ進みます。</p>
+      </dl>{"sourceId" in review && <CloneDiff plan={review} />}<p>表示したポートとPlan版を確定時に再確認します。受付後は独立した処理状況画面へ進みます。</p>
       {clone && <label className="create-consent"><input type="checkbox" checked={configurationOnly} onChange={(event) => setConfigurationOnly(event.target.checked)} />
         データが複製されず、新しい環境が作られることを確認しました。複製元のデータや稼働状態は変更しません。</label>}
       <label className="create-consent"><input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} />

@@ -10,7 +10,7 @@ export interface FormDraft {
   ports: Record<string, string | null>;
 }
 /** Explicit actions, separate from candidate edits. */
-export interface FormAction { version?: string; generate?: string; confirmSecret?: string }
+export interface FormAction { version?: string; generate?: string; copy?: string; confirmSecret?: string }
 /** Returns an empty, process-local edit buffer. */
 export const emptyDraft = (): FormDraft => ({ inputs: {}, ports: {} });
 /** Preserves invalid integer text so Core can report its field error. */
@@ -37,7 +37,8 @@ export function planEdit(plan: FormPlan, draft: FormDraft, action: FormAction = 
   if (plan.kind === "create") return { ...shared, inputs, regenerateSecrets: action.generate ? [action.generate] : [] };
   return { ...shared, inputs: { ...Object.fromEntries(Object.entries(inputs).map(([key, value]) =>
     [key, value === null ? { action: "clear" as const } : { action: "input" as const, value }])),
-    ...(action.generate ? { [action.generate]: { action: "generate" as const } } : {}) }, confirmSecrets: action.confirmSecret ? [action.confirmSecret] : [] };
+    ...(action.generate ? { [action.generate]: { action: "generate" as const } } : {}),
+    ...(action.copy ? { [action.copy]: { action: "copy" as const } } : {}) }, confirmSecrets: action.confirmSecret ? [action.confirmSecret] : [] };
 }
 /** Japanese presentation for safe Core concern codes; unknown codes remain visible. */
 export function concernMessage(code: string): string {

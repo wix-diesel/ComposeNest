@@ -33,6 +33,12 @@ createRoot(root).render(<div className="workspace"><TemplateForm initialPlan={wi
   for (const input of next.view.inputs) {
     const answer = edit.inputs[input.key];
     if (answer === undefined) continue;
+    if ("candidate" in input && answer !== null && typeof answer === "object" && "action" in answer && answer.action === "copy") {
+      input.candidate = input.source; input.origin = "inherited"; input.changed = false; input.needsAnswer = false;
+      input.hasSecret = input.sourceHasSecret; input.needsSecretConfirmation = input.sourceHasSecret;
+      if (input.sourceHasSecret) next.view.concerns.push({ code: "SECRET_REUSE_NEEDS_CONFIRMATION", fieldPath: `inputs.${input.key}` });
+      continue;
+    }
     const value: JsonValue = "confirmSecrets" in edit
       ? answer !== null && typeof answer === "object" && "action" in answer && answer.action === "input" && "value" in answer ? answer.value : null
       : answer;

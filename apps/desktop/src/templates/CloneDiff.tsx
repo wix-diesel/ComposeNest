@@ -30,7 +30,7 @@ export function CloneDiff({ plan, draft, renderCandidate }: {
         const value = edited ? draft.inputs[input.key] : input.candidate;
         const hasSecret = edited ? value !== null : input.hasSecret;
         return row(`inputs.${input.key}`, form?.label ?? input.sourceLabel ?? input.key,
-          input.added ? "—" : input.sourceHasSecret || secret ? "••••••••（非表示）" : show(input.source),
+          input.added ? "—" : input.sourceHasSecret ? "••••••••（非表示）" : show(input.source),
           input.removed ? "—" : secret ? hasSecret ? "••••••••（設定済み）" : "未設定" : show(value),
           [input.removed ? "削除" : input.added ? "追加" : input.changed ? "変更" : "同じ値",
             edited ? "ユーザー入力・未反映" : origins[input.origin], ...(input.needsAnswer ? ["入力待ち"] : []),

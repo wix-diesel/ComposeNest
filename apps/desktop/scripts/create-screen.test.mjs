@@ -27,7 +27,12 @@ try {
     await page.addInitScript(({ fixture, mode, clone }) => {
       window.createMode = mode;
       window.calls = []; window.receiptFailure = false; window.acceptedReceipt = null;
+      window.livePlans = new Set(); window.preparations = 0;
       window.plan = { ...fixture, displayName: "", concerns: [{ code: "DISPLAY_NAME_INVALID", fieldPath: "displayName" }] };
+      if (mode === "secret_reuse" && clone) {
+        window.plan.inputs.find((input) => input.key === "password").needsSecretConfirmation = true;
+        window.plan.concerns.push({ code: "SECRET_REUSE_NEEDS_CONFIRMATION", fieldPath: "inputs.password" });
+      }
       window.__TAURI_INTERNALS__ = { invoke: async (command, { request }) => {
         window.calls.push({ command, request: structuredClone(request) });
         command = command.replace("clone", "create");
@@ -36,14 +41,24 @@ try {
         if (command === "get_bootstrap") return response({ applicationTitle: "ComposeNest", startedAtUnixSeconds: 1 });
         if (command === "prepare_create") {
           if (window.createMode === "prepare_failure") throw new Error("unavailable");
+          if (window.livePlans.size >= 16) return response(null, { code: "PLAN_LIMIT", reason: "プラン数が上限に達しました。", fieldPath: null });
+          window.plan.planId = `plan-${++window.preparations}`;
+          window.livePlans.add(window.plan.planId);
+          const prepared = structuredClone(window.plan);
           if (clone) { window.plan.sourceId = request.sourceId; window.sourceUpdated = false; window.planExpired = false; }
           else window.plan.templateRevisionId = request.templateRevisionId;
+          if (window.createMode === "prepare_delay") {
+            await new Promise((resolve) => setTimeout(resolve, 200));
+            return response(prepared);
+          }
           return response(structuredClone(window.plan));
         }
         if (command === "update_create_plan") {
           if (request.edit.expectedRevision !== window.plan.planRevision) throw new Error("stale test edit");
           if (request.edit.displayName !== null) window.plan.displayName = request.edit.displayName;
+          if (clone && request.edit.confirmSecrets.includes("password")) window.plan.inputs.find((input) => input.key === "password").needsSecretConfirmation = false;
           window.plan.concerns = window.plan.displayName ? [] : [{ code: "DISPLAY_NAME_INVALID", fieldPath: "displayName" }];
+          if (clone && window.plan.inputs.find((input) => input.key === "password").needsSecretConfirmation) window.plan.concerns.push({ code: "SECRET_REUSE_NEEDS_CONFIRMATION", fieldPath: "inputs.password" });
           window.plan.planRevision++;
           return response(structuredClone(window.plan));
         }
@@ -57,7 +72,7 @@ try {
           if (window.receiptFailure) throw new Error("lookup disconnected");
           return response(window.acceptedReceipt);
         }
-        if (command === "discard_create_plan") return response(null);
+        if (command === "discard_create_plan") { window.livePlans.delete(request.planId); return response(null); }
         if (command === "confirm_create") {
           if (window.createMode === "lost") throw new Error("acceptance disconnected");
           if (window.createMode === "rejected") return response(null, { code: "PLAN_RECONFIRM", reason: "ポートを再確認してください。", fieldPath: "ports", retryability: "notRetryable", operationId: null, safeDetails: null });
@@ -70,7 +85,7 @@ try {
       } };
     }, { fixture, mode, clone });
     await page.goto(`http://127.0.0.1:4175/${hash}`);
-    if (mode !== "prepare_failure") await page.locator("#display-name").waitFor();
+    if (!["prepare_failure", "prepare_delay"].includes(mode)) await page.locator("#display-name").waitFor();
   }
   async function review() {
     await page.locator("#display-name").fill("My database");
@@ -125,6 +140,7 @@ try {
   assert.equal(await page.getByRole("button", { name: "作成を取り消す" }).isDisabled(), true);
   await page.evaluate(() => { window.receiptFailure = false; location.hash = "#/instances"; });
   await page.getByRole("heading", { name: "環境一覧", exact: true }).waitFor();
+  assert.equal((await calls("discard_create_plan")).length, 0, "uncertain acceptance must survive navigation");
   await page.evaluate((hash) => { location.hash = hash; }, hash);
   await page.getByText("受付記録はまだありません。同じ内容・同じ要求IDで再送できます。").waitFor();
   assert.equal((await calls("prepare_create")).length, 1, "reopening must reconcile the original plan");
@@ -156,6 +172,37 @@ try {
   await page.waitForURL(clone ? /#\/instances$/ : /#\/templates$/);
 
   if (clone) {
+    await open("secret_reuse");
+    await page.locator("#display-name").fill("My database");
+    await page.getByRole("button", { name: "Passwordの引継ぎを確認", exact: true }).click();
+    await page.waitForFunction(() => !document.querySelector("fieldset").disabled && !window.plan.inputs.find((input) => input.key === "password").needsSecretConfirmation);
+    const edits = await calls("update_create_plan");
+    assert.deepEqual(edits[0].request.edit.confirmSecrets, [], "ordinary name edits must not acknowledge secrets");
+    assert.deepEqual(edits[1].request.edit.confirmSecrets, ["password"]);
+    assert.deepEqual(edits[1].request.edit.inputs, {});
+    await review(); await confirm();
+    await page.waitForURL(/operationId=accepted-operation/);
+
+    await open();
+    await page.getByRole("button", { name: "戻る", exact: true }).click();
+    await page.waitForFunction(() => window.livePlans.size === 0);
+    assert.equal((await calls("discard_create_plan")).length, 1);
+    for (let index = 0; index < 17; index++) {
+      await page.evaluate((index) => { location.hash = `#/instance-clone?instanceId=source-${index}`; }, index);
+      await page.locator("#display-name").waitFor();
+      await page.getByRole("button", { name: "テンプレート", exact: true }).click();
+      await page.waitForFunction(() => window.livePlans.size === 0);
+    }
+    assert.equal((await calls("prepare_create")).length, 18);
+    assert.equal((await calls("discard_create_plan")).length, 18);
+
+    await open("prepare_delay");
+    await page.getByRole("button", { name: "戻る", exact: true }).click();
+    await page.waitForFunction(() => window.calls.some((call) => call.command === "discard_clone_plan") && window.livePlans.size === 0);
+    await page.evaluate((hash) => { window.createMode = "normal"; location.hash = hash; }, hash);
+    await page.locator("#display-name").waitFor();
+    assert.equal((await calls("prepare_create")).length, 2, "ordinary navigation must prepare a fresh plan");
+
     await open(); await review();
     const boxes = page.getByRole("dialog").getByRole("checkbox");
     assert.equal(await boxes.count(), 2);

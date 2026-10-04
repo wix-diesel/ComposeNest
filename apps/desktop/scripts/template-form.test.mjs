@@ -29,6 +29,11 @@ try {
       initial.concerns.push({ code: "SECRET_REUSE_NEEDS_CONFIRMATION", fieldPath: "inputs.password" });
     }
     if (extra === "ask") initial.concerns.push({ code: "VERSION_NEEDS_ANSWER", fieldPath: "version" }, { code: "STORAGE_NEEDS_ANSWER", fieldPath: "storageMethod" });
+    if (extra === "unset_secret") {
+      const input = initial.inputs.find((item) => item.key === "password");
+      input.source = null; input.sourceHasSecret = false; input.canCopy = false;
+      initial.templateForm.inputs.find((item) => item.key === "password").required = false;
+    }
     if (extra && kind === "create") {
       initial.templateForm.inputs.push({ key: "count", label: "件数", inputType: "integer", required: false, description: "整数テスト", validation: { min: -10, max: 10 }, options: [], canGenerate: false });
       initial.inputs.push({ key: "count", definition: {}, value: 0, hasSecret: false });
@@ -91,13 +96,30 @@ try {
   await page.getByRole("alert").waitFor();
   assert.equal(await page.locator("#input-retained").inputValue(), "retry");
   assert.equal(await page.locator("#input-retained").getAttribute("aria-invalid"), "true");
+  await open("clone", "unset_secret");
+  const sourceSecret = page.locator('[data-diff-path="inputs.password"] td').first();
+  assert.equal(await sourceSecret.textContent(), "未設定");
+  assert.equal(await page.locator('[data-diff-path="inputs.password"]').getByRole("button", { name: "元の値を使用" }).count(), 0);
+
+  await open("clone");
+  const passwordRow = page.locator('[data-diff-path="inputs.password"]');
+  assert.match(await passwordRow.locator("td").first().textContent(), /非表示/);
+  assert.equal(fixtures.clone.inputs.find((input) => input.key === "password").policy, "regenerate");
+  await passwordRow.getByRole("button", { name: "元の値を使用", exact: true }).click();
+  await page.getByRole("button", { name: "Passwordの引継ぎを確認", exact: true }).waitFor();
+  assert.deepEqual(await page.evaluate(() => window.formRequests[0].inputs), { password: { action: "copy" } });
+  assert.deepEqual(await page.evaluate(() => window.formRequests[0].confirmSecrets), [], "copy requires a separate explicit acknowledgement");
+  await page.getByRole("button", { name: "Passwordの引継ぎを確認", exact: true }).click();
+  await page.waitForFunction(() => window.formRequests.length === 2 && !document.querySelector("fieldset").disabled);
+  assert.deepEqual(await page.evaluate(() => window.formRequests[1].confirmSecrets), ["password"]);
+
   await open("clone", true);
   assert.deepEqual(await page.locator("#service-version option").allTextContents(), ["1", "2"]);
   await page.getByRole("heading", { name: "複製元の環境" }).waitFor();
   assert.equal(await page.getByRole("radio", { name: /ホストフォルダー/ }).isChecked(), true);
   assert.match(await page.locator('[data-diff-path="ports.db"]').textContent(), /5432/);
   assert.match(await page.locator('[data-diff-path="inputs.password"]').textContent(), /非表示/);
-  await page.getByRole("button", { name: "秘密の引継ぎを確認", exact: true }).click();
+  await page.getByRole("button", { name: "Passwordの引継ぎを確認", exact: true }).click();
   await page.waitForFunction(() => window.formRequests.length === 1 && !document.querySelector("fieldset").disabled);
   assert.deepEqual(await page.evaluate(() => window.formRequests[0].confirmSecrets), ["password"]);
   assert.deepEqual(await page.evaluate(() => window.formRequests[0].inputs), {});

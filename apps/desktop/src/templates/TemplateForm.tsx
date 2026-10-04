@@ -89,8 +89,8 @@ export function TemplateForm({ initialPlan, onUpdate, onReview, locked = false }
           {...candidate(plan, input.key)} value={value(input.key)} error={error(`inputs.${input.key}`)}
           onChange={(answer) => setDraft({ ...draft, inputs: { ...draft.inputs, [input.key]: answer } })}
           onGenerate={() => { void apply({ generate: input.key }); }} />{plan.kind === "clone" && <div className="actions">
-    {plan.view.inputs.some((item) => item.key === input.key && item.canCopy && (item.policy === "ask" || item.needsAnswer)) && <button type="button" className="btn small" onClick={() => { void apply({ copy: input.key }); }}>元の値を使用</button>}
-    {plan.view.inputs.find((item) => item.key === input.key)?.needsSecretConfirmation && <button type="button" className="btn small" onClick={() => { void apply({ confirmSecret: input.key }); }}>秘密の引継ぎを確認</button>}
+    {plan.view.inputs.some((item) => item.key === input.key && item.canCopy) && <button type="button" className="btn small" onClick={() => { void apply({ copy: input.key }); }}>元の値を使用</button>}
+    {plan.view.inputs.find((item) => item.key === input.key)?.needsSecretConfirmation && <button type="button" className="btn small" onClick={() => { void apply({ confirmSecret: input.key }); }}>{input.label}の引継ぎを確認</button>}
   </div>}</div>;
   function cloneControl(path: string) {
     if (path === "displayName") return nameField;

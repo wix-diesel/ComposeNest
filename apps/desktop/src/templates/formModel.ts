@@ -10,7 +10,7 @@ export interface FormDraft {
   ports: Record<string, string | null>;
 }
 /** Explicit actions, separate from candidate edits. */
-export interface FormAction { version?: string; generate?: string }
+export interface FormAction { version?: string; generate?: string; copy?: string; confirmSecret?: string }
 /** Returns an empty, process-local edit buffer. */
 export const emptyDraft = (): FormDraft => ({ inputs: {}, ports: {} });
 /** Preserves invalid integer text so Core can report its field error. */
@@ -37,13 +37,14 @@ export function planEdit(plan: FormPlan, draft: FormDraft, action: FormAction = 
   if (plan.kind === "create") return { ...shared, inputs, regenerateSecrets: action.generate ? [action.generate] : [] };
   return { ...shared, inputs: { ...Object.fromEntries(Object.entries(inputs).map(([key, value]) =>
     [key, value === null ? { action: "clear" as const } : { action: "input" as const, value }])),
-    ...(action.generate ? { [action.generate]: { action: "generate" as const } } : {}) }, confirmSecrets: [] };
+    ...(action.generate ? { [action.generate]: { action: "generate" as const } } : {}),
+    ...(action.copy ? { [action.copy]: { action: "copy" as const } } : {}) }, confirmSecrets: action.confirmSecret ? [action.confirmSecret] : [] };
 }
 /** Japanese presentation for safe Core concern codes; unknown codes remain visible. */
 export function concernMessage(code: string): string {
   const messages: Record<string, string> = {
     INPUT_REQUIRED_OR_INVALID: "入力内容を確認してください。",
-    INPUT_TYPE_CHANGED: "入力型が変更されています。入力し直してください。",
+    INPUT_TYPE_CHANGED: "入力型が変更されているため複製できません。別のバージョンを選択してください。",
     DISPLAY_NAME_INVALID: "環境名を確認してください。",
     VERSION_NEEDS_ANSWER: "バージョンを選択・確認してください。",
     STORAGE_NEEDS_ANSWER: "保存方式を選択してください。",

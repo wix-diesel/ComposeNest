@@ -4,6 +4,43 @@ import type { RequestContext } from "./ipc";
 
 export type JsonValue = null | boolean | number | string | Array<JsonValue> | { [key: string]: JsonValue };
 
+export interface EditInstancePortsRequest {
+  context: RequestContext;
+  instanceId: string;
+  expectedRevision: number;
+  expectedSpecRevision: number;
+  ports: Record<string, number>;
+}
+
+export interface EditSettingView {
+  slot: string;
+  secret: boolean;
+  value: JsonValue | null;
+}
+
+export interface EditPortView {
+  slot: string;
+  hostIp: string;
+  containerPort: number;
+  oldPort: number;
+  committedPort: number;
+  candidatePort: number | null;
+  oldReservation: string;
+  candidateReservation: string | null;
+}
+
+export interface InstanceEditView {
+  state: InstanceActionView;
+  templateId: string;
+  selectedVersion: string;
+  storageMethod: string;
+  specRevision: number;
+  appliedSpecRevision: number | null;
+  inputs: Array<EditSettingView>;
+  ports: Array<EditPortView>;
+  canEditPorts: boolean;
+}
+
 export interface InstanceActionRequest {
   context: RequestContext;
   instanceId: string;

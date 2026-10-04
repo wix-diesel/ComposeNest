@@ -15,6 +15,8 @@
     "allow-confirm-create",
     "allow-get-instance-actions",
     "allow-rename-instance",
-    "allow-change-instance"
+    "allow-change-instance",
+    "allow-get-instance-edit",
+    "allow-edit-instance-ports"
   ]
 }

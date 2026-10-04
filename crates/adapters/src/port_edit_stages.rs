@@ -174,7 +174,7 @@ pub async fn run_port_edit(
         .map_err(PortEditError::Runner)?
 }
 
-async fn run_locked(
+pub(crate) async fn run_locked(
     database: &DatabaseWorker,
     probe: &DockerProbe,
     management_root: &Path,

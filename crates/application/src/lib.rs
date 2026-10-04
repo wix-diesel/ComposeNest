@@ -13,6 +13,7 @@ pub mod delete_operation;
 pub mod host_ports;
 pub mod image_resolution;
 pub mod instance_actions;
+pub mod instance_edit;
 pub mod lifecycle_operation;
 pub mod named_volumes;
 pub mod operation_journal;

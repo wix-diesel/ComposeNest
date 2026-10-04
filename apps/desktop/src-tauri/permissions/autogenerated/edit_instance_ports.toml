@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-edit-instance-ports"
+description = "Enables the edit_instance_ports command without any pre-configured scope."
+commands.allow = ["edit_instance_ports"]
+
+[[permission]]
+identifier = "deny-edit-instance-ports"
+description = "Denies the edit_instance_ports command without any pre-configured scope."
+commands.deny = ["edit_instance_ports"]

@@ -5,6 +5,8 @@ fn main() {
             "get_instance_actions",
             "rename_instance",
             "change_instance",
+            "get_instance_edit",
+            "edit_instance_ports",
             "prepare_create",
             "update_create_plan",
             "view_create_plan",

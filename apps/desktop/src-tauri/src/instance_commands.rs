@@ -14,7 +14,7 @@ use composenest_application::{
 use std::sync::Arc;
 use tauri::State;
 
-fn envelope<T>(
+pub(super) fn envelope<T>(
     context: composenest_application::RequestContext,
     result: Result<T, StoreConflict>,
 ) -> ResponseEnvelope<T> {
@@ -165,7 +165,13 @@ mod tests {
     fn generated_acl_allows_instance_commands_only_on_the_local_main_window() {
         let mut context: tauri::Context<tauri::Wry> = tauri::generate_context!();
         let authority = context.runtime_authority_mut();
-        for command in ["get_instance_actions", "rename_instance", "change_instance"] {
+        for command in [
+            "get_instance_actions",
+            "rename_instance",
+            "change_instance",
+            "get_instance_edit",
+            "edit_instance_ports",
+        ] {
             assert!(
                 authority
                     .resolve_access(command, "main", "main", &tauri::ipc::Origin::Local)

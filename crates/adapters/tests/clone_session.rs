@@ -178,7 +178,7 @@ fn source_changes_and_port_reproposal_require_new_review() {
 }
 
 #[test]
-fn source_secret_is_masked_after_type_change_and_an_explicit_answer_resolves_it() {
+fn source_secret_stays_masked_and_type_change_blocks_confirmation_after_explicit_answer() {
     let (_root, store, template) = store();
     setup_source(&store, &template);
     let source = store.clone_source("scope", "source").unwrap().unwrap();
@@ -245,6 +245,13 @@ fn source_secret_is_masked_after_type_change_and_an_explicit_answer_resolves_it(
         "INPUT_TYPE_CHANGED"
     );
     let mut answer = clone_edit(next.plan_revision);
+    answer.display_name = Some("Copy".into());
+    for (key, value) in [("retained", "long enough"), ("added", "blue")] {
+        answer.inputs.insert(
+            key.into(),
+            composenest_application::clone_plan::CloneAnswer::Input(serde_json::json!(value)),
+        );
+    }
     answer.inputs.insert(
         "password".into(),
         composenest_application::clone_plan::CloneAnswer::Input(serde_json::json!("new text")),
@@ -259,10 +266,26 @@ fn source_secret_is_masked_after_type_change_and_an_explicit_answer_resolves_it(
             &FreePorts,
         )
         .unwrap();
+    assert_eq!(answered.concerns.len(), 1);
+    assert_eq!(answered.concerns[0].code, "INPUT_TYPE_CHANGED");
+    assert_eq!(answered.concerns[0].field_path, "inputs.password");
     assert!(
-        !answered
-            .concerns
-            .iter()
-            .any(|item| item.field_path == "inputs.password")
+        !serde_json::to_string(&answered)
+            .unwrap()
+            .contains(&"p".repeat(32))
     );
+    assert_eq!(
+        session
+            .confirm(
+                confirmation(&answered),
+                &store,
+                &clock,
+                &mut random,
+                &FreePorts
+            )
+            .unwrap_err()
+            .code,
+        "INPUT_TYPE_CHANGED"
+    );
+    assert!(session.receipt(&first.plan_id, &store).unwrap().is_none());
 }

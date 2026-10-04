@@ -56,7 +56,7 @@ export function TemplateForm({ initialPlan, onUpdate, onReview, locked = false }
     try {
       // Flush edits against their original Version before requesting a switch.
       if (dirty) await update(planEdit(next, draft));
-      if (action.version !== undefined || action.generate !== undefined) await update(planEdit(next, emptyDraft(), action));
+      if (action.version !== undefined || action.generate !== undefined || action.confirmSecret !== undefined) await update(planEdit(next, emptyDraft(), action));
       if (review && onReview) {
         const refreshed = await onReview(next);
         if (refreshed.kind !== next.kind || refreshed.view.planId !== next.view.planId || refreshed.view.planRevision < next.view.planRevision) throw new Error("invalid_plan_response");
@@ -90,10 +90,13 @@ export function TemplateForm({ initialPlan, onUpdate, onReview, locked = false }
         </div>)}</div>
       </section>
       {form.inputs.length > 0 && <section className="panel"><h2>接続情報・入力設定</h2><div className="two-equal">
-        {form.inputs.map((input) => <TemplateInput key={`${view.planRevision}-${input.key}`} input={input}
+        {form.inputs.map((input) => <div key={input.key}><TemplateInput key={`${view.planRevision}-${input.key}`} input={input}
           {...candidate(plan, input.key)} value={value(input.key)} error={error(`inputs.${input.key}`)}
           onChange={(answer) => setDraft({ ...draft, inputs: { ...draft.inputs, [input.key]: answer } })}
-          onGenerate={() => { void apply({ generate: input.key }); }} />)}
+          onGenerate={() => { void apply({ generate: input.key }); }} />
+          {plan.kind === "clone" && plan.view.inputs.some((item) => item.key === input.key && item.needsSecretConfirmation) &&
+            <button type="button" className="btn small" onClick={() => { void apply({ confirmSecret: input.key }); }}>{input.label}の引継ぎを確認</button>}
+        </div>)}
       </div><p className="notice">認証情報は端末内の設定と生成されるComposeファイルに平文で保存されます。</p></section>}
       <section className="panel"><h2>データの保存先</h2><div className="radio-options" role="radiogroup" aria-label="保存方式" aria-describedby="storage-help">
         {(["bind", "volume"] as const).map((choice) => <label key={choice} className="radio-option"><input type="radio" name="storage-method" checked={method === choice}

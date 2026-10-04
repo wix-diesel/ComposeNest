@@ -39,3 +39,9 @@ test("explicit generation never conflicts with a pending secret answer", () => {
     assert.equal(candidate(plan, "password").hasSecret, true);
   }
 });
+test("only explicit secret acknowledgement sends confirmSecrets", () => {
+  const plan = { kind: "clone", view: views.clone };
+  const edit = planEdit(plan, emptyDraft(), { confirmSecret: "password" });
+  assert.deepEqual(edit.confirmSecrets, ["password"]);
+  assert.deepEqual(edit.inputs, {});
+});

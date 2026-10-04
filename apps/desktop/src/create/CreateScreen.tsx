@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ApplicationClient } from "../ipc/ApplicationClient";
 import { API_VERSION } from "../generated/ipc";
 import type { CloneEdit, ClonePlanView, ConfirmCloneRequest, ConfirmCreateRequest, CreatePlanView, CreateReceipt, PlanEdit } from "../generated/template-form";
@@ -8,14 +8,17 @@ import "./create.css";
 
 type PlanView = CreatePlanView | ClonePlanView;
 type Confirmation = ConfirmCreateRequest | ConfirmCloneRequest;
-type Draft = { preparation: Promise<PlanView> | null; plan: PlanView | null; confirmation: Confirmation | null; receipt: CreateReceipt | null };
+type Draft = {
+  preparation: Promise<PlanView> | null; plan: PlanView | null; confirmation: Confirmation | null; receipt: CreateReceipt | null;
+  owner: object | null; release: Promise<void> | null; cleanupError: string | null;
+};
 // Preserve an uncertain request across local navigation, never in persistent browser storage.
 const drafts = new WeakMap<ApplicationClient, Map<string, Draft>>();
 function draftFor(client: ApplicationClient, templateId: string): Draft {
   let entries = drafts.get(client);
   if (!entries) { entries = new Map(); drafts.set(client, entries); }
   let draft = entries.get(templateId);
-  if (!draft) { draft = { preparation: null, plan: null, confirmation: null, receipt: null }; entries.set(templateId, draft); }
+  if (!draft) { draft = { preparation: null, plan: null, confirmation: null, receipt: null, owner: null, release: null, cleanupError: null }; entries.set(templateId, draft); }
   return draft;
 }
 const origin = (value: string) => value === "bundled" ? "同梱テンプレート" : value === "local" ? "ローカルテンプレート" : "出所不明";
@@ -43,8 +46,8 @@ function PlanScreen({ client, selectionId, kind, returnTo = "instances" }: {
       if (error === null || typeof error !== "object" || !("code" in error) || error.code !== "PLAN_NOT_FOUND") throw error;
     }
   }
-  const saved = draftFor(client, templateId);
-  const [plan, setPlan] = useState(saved.plan);
+  const saved = useMemo(() => draftFor(client, templateId), [client, templateId]);
+  const [plan, setPlan] = useState(saved.release ? null : saved.plan);
   const [review, setReview] = useState<PlanView | null>(null);
   const [consent, setConsent] = useState(false);
   const [configurationOnly, setConfigurationOnly] = useState(false);
@@ -75,14 +78,39 @@ function PlanScreen({ client, selectionId, kind, returnTo = "instances" }: {
 
   useEffect(() => {
     active.current = true;
-    if (saved.confirmation) {
-      void reconcile();
-    } else {
+    const owner = {};
+    saved.owner = owner;
+    async function open() {
+      if (saved.release) await saved.release;
+      if (!active.current || saved.owner !== owner) return;
+      if (saved.cleanupError) setNotice(saved.cleanupError);
+      if (saved.confirmation) { void reconcile(); return; }
       saved.preparation ??= prepare().then((next) => { saved.plan = next; return next; });
-      void saved.preparation.then((next) => { if (active.current) setPlan(saved.plan ?? next); })
-        .catch((error: unknown) => { if (active.current) setNotice(reason(error)); });
+      try {
+        const next = await saved.preparation;
+        if (active.current) setPlan(saved.plan ?? next);
+      } catch (error) { if (active.current) setNotice(reason(error)); }
     }
-    return () => { active.current = false; };
+    void open();
+    return () => {
+      active.current = false;
+      // StrictMode remounts synchronously; only the final owner releases a draft.
+      queueMicrotask(() => {
+        if (saved.owner !== owner || drafts.get(client)?.get(templateId) !== saved || saved.confirmation || saved.receipt || saved.release) return;
+        saved.release = (async () => {
+          let prepared = saved.plan;
+          if (!prepared && saved.preparation) {
+            try { prepared = await saved.preparation; } catch { /* Failed preparation allocated no plan. */ }
+          }
+          try {
+            if (prepared) await discard(prepared.planId);
+            saved.plan = null; saved.preparation = null; saved.cleanupError = null;
+            if (saved.owner === owner && drafts.get(client)?.get(templateId) === saved) drafts.get(client)?.delete(templateId);
+          } catch (error) { saved.cleanupError = reason(error); }
+          finally { saved.release = null; }
+        })();
+      });
+    };
   }, [client, templateId, saved]);
 
   async function reconcile() {

@@ -4,6 +4,38 @@ import type { RequestContext } from "./ipc";
 
 export type JsonValue = null | boolean | number | string | Array<JsonValue> | { [key: string]: JsonValue };
 
+export interface InstanceActionRequest {
+  context: RequestContext;
+  instanceId: string;
+}
+
+export interface RenameInstanceRequest {
+  context: RequestContext;
+  instanceId: string;
+  expectedRevision: number;
+  name: string;
+}
+
+export interface ChangeInstanceRequest {
+  context: RequestContext;
+  instanceId: string;
+  expectedRevision: number;
+  action: string;
+}
+
+export interface InstanceActionView {
+  id: string;
+  name: string;
+  revision: number;
+  runtimeStatus: string;
+  observedAt: string | null;
+  operationId: string | null;
+  operationStatus: string | null;
+  operationKind: string | null;
+  operationPhase: string | null;
+  actions: Array<string>;
+}
+
 export interface FormInput {
   key: string;
   label: string;

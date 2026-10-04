@@ -83,6 +83,8 @@ pub struct OperationView {
     pub kind: String,
     /// Persisted outcome or progress state.
     pub status: String,
+    /// Fixed progress phase without external arguments.
+    pub phase: String,
     /// Start time in SQLite UTC format.
     pub started_at: String,
 }

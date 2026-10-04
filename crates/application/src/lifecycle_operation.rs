@@ -7,7 +7,7 @@ use crate::{
         ExpectedResult, OperationJournal, OperationKind, RequestReceipt, StepCommand, StepIntent,
         StepOutcome,
     },
-    operation_runner::{OperationRunner, RunnerError},
+    operation_runner::{OperationReservation, OperationRunner, RunnerError},
     state_store::StoreConflict,
 };
 
@@ -159,6 +159,27 @@ impl<S: LifecycleState, J: OperationJournal, A: LifecycleStages> LifecycleOperat
         }
         self.runner
             .run_exclusive(&receipt.instance_id, || self.run_locked(receipt, kind))
+            .await
+            .map_err(LifecycleOperationError::Runner)?
+    }
+
+    /// Executes accepted work while holding capacity reserved before durable acceptance.
+    pub async fn run_reserved(
+        &self,
+        receipt: &RequestReceipt,
+        kind: OperationKind,
+        reservation: OperationReservation,
+    ) -> Result<String, LifecycleOperationError> {
+        if !matches!(
+            kind,
+            OperationKind::Start | OperationKind::Stop | OperationKind::Restart
+        ) {
+            return Err(LifecycleOperationError::Store(StoreConflict::InvalidInput));
+        }
+        self.runner
+            .run_reserved(reservation, &receipt.instance_id, || {
+                self.run_locked(receipt, kind)
+            })
             .await
             .map_err(LifecycleOperationError::Runner)?
     }
@@ -516,6 +537,27 @@ mod tests {
         }
         .run(&receipt(), kind)
         .await
+    }
+
+    #[tokio::test]
+    async fn reserved_lifecycle_can_finish_during_shutdown_and_releases_capacity() {
+        let fake = Fake::new(RuntimeStatus::Stopped);
+        let runner = std::sync::Arc::new(OperationRunner::new());
+        let reservation = runner.reserve().unwrap();
+        assert!(!runner.shutdown(std::time::Duration::ZERO));
+        let operation = LifecycleOperation {
+            state: &fake,
+            journal: &fake,
+            runner: &runner,
+            stages: &fake,
+        };
+        assert_eq!(
+            operation
+                .run_reserved(&receipt(), OperationKind::Start, reservation)
+                .await,
+            Ok("a".repeat(64))
+        );
+        assert!(runner.shutdown(std::time::Duration::ZERO));
     }
 
     #[tokio::test]

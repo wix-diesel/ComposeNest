@@ -7,6 +7,8 @@ import { Icon } from "./shell/Icon";
 import { Toast } from "./shell/Toast";
 import { CloneScreen, CreateScreen } from "./create/CreateScreen";
 
+import { InstanceActions } from "./instances/InstanceActions";
+
 const applicationClient = new ApplicationClient();
 
 /** Shared Japanese shell; each destination reserves content for its own feature issue. */
@@ -81,7 +83,7 @@ export function App({ client = applicationClient }: { client?: ApplicationClient
             {parent && <button className="btn" onClick={() => client.navigate(parent)}>{ja.back}</button>}
             <button className="btn" onClick={() => setAbout(true)}>{ja.about}</button>
           </div></div>
-          {route.page === "instance-create" ? <CreateScreen key={hash} client={client} templateId={route.templateId} returnTo={route.returnTo} /> : route.page === "instance-clone" ? <CloneScreen key={hash} client={client} sourceId={route.instanceId} /> : <section className="panel" aria-label={ja.pages[route.page]} key={hash}>
+          {route.page === "instance-create" ? <CreateScreen key={hash} client={client} templateId={route.templateId} returnTo={route.returnTo} /> : route.page === "instance-clone" ? <CloneScreen key={hash} client={client} sourceId={route.instanceId} /> : route.page === "instance-detail" || route.page === "instance-edit" ? <InstanceActions key={hash} client={client} instanceId={route.instanceId} edit={route.page === "instance-edit"} /> : <section className="panel" aria-label={ja.pages[route.page]} key={hash}>
             <p>{ja.unimplemented}</p>
             {"instanceId" in route && route.instanceId && <p>{ja.target}: <code>{route.instanceId}</code></p>}
             {"operationId" in route && <p>{ja.operationId}: <code>{route.operationId}</code></p>}

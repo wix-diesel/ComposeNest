@@ -9,6 +9,8 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 use tauri::{Manager, State};
 mod create_commands;
 use create_commands::*;
+mod instance_commands;
+use instance_commands::*;
 mod clone_commands;
 use clone_commands::*;
 
@@ -62,6 +64,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .invoke_handler(tauri::generate_handler![
             get_bootstrap,
+            get_instance_actions,
+            rename_instance,
+            change_instance,
             prepare_create,
             update_create_plan,
             view_create_plan,

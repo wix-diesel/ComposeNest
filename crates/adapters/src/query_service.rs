@@ -91,8 +91,8 @@ pub(crate) fn read_instance(
         [id], |row| Ok(ObservationView { runtime_state: row.get(0)?, health: row.get(1)?, observed_at: row.get(2)?, freshness: row.get(3)? }),
     ).optional()?;
     let last_operation = db.query_row(
-        "SELECT id, kind, status, started_at FROM operations WHERE instance_id=?1 ORDER BY started_at DESC, rowid DESC LIMIT 1",
-        [id], |row| Ok(OperationView { id: row.get(0)?, kind: row.get(1)?, status: row.get(2)?, started_at: row.get(3)? }),
+        "SELECT id, kind, status, started_at, phase FROM operations WHERE instance_id=?1 ORDER BY started_at DESC, rowid DESC LIMIT 1",
+        [id], |row| Ok(OperationView { id: row.get(0)?, kind: row.get(1)?, status: row.get(2)?, started_at: row.get(3)?, phase: row.get(4)? }),
     ).optional()?;
     let snapshot: Value =
         serde_json::from_str(&canonical).map_err(|_| DatabaseError::InvalidInput)?;

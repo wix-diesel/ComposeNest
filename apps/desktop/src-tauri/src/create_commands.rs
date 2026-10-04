@@ -23,10 +23,10 @@ use tokio::sync::Mutex;
 pub struct CreateBackend {
     pub(super) database: Arc<DatabaseWorker>,
     pub(super) runner: Arc<OperationRunner>,
-    scope: String,
+    pub(super) scope: String,
     session: Mutex<CreateSession>,
     pub(super) clones: Mutex<composenest_application::clone_session::CloneSession>,
-    probe: Option<DockerProbe>,
+    pub(super) probe: Option<DockerProbe>,
 }
 
 impl CreateBackend {

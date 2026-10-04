@@ -2,6 +2,9 @@ fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "get_bootstrap",
+            "get_instance_actions",
+            "rename_instance",
+            "change_instance",
             "prepare_create",
             "update_create_plan",
             "view_create_plan",

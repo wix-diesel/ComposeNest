@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-change-instance"
+description = "Enables the change_instance command without any pre-configured scope."
+commands.allow = ["change_instance"]
+
+[[permission]]
+identifier = "deny-change-instance"
+description = "Denies the change_instance command without any pre-configured scope."
+commands.deny = ["change_instance"]

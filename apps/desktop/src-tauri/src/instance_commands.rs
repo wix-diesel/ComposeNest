@@ -158,3 +158,39 @@ pub async fn change_instance(
     })();
     Ok(envelope(request.context, result))
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn generated_acl_allows_instance_commands_only_on_the_local_main_window() {
+        let mut context: tauri::Context<tauri::Wry> = tauri::generate_context!();
+        let authority = context.runtime_authority_mut();
+        for command in ["get_instance_actions", "rename_instance", "change_instance"] {
+            assert!(
+                authority
+                    .resolve_access(command, "main", "main", &tauri::ipc::Origin::Local)
+                    .is_some(),
+                "{command}"
+            );
+            assert!(
+                authority
+                    .resolve_access(command, "other", "other", &tauri::ipc::Origin::Local)
+                    .is_none(),
+                "{command}"
+            );
+            assert!(
+                authority
+                    .resolve_access(
+                        command,
+                        "main",
+                        "main",
+                        &tauri::ipc::Origin::Remote {
+                            url: "https://example.com".parse().unwrap()
+                        }
+                    )
+                    .is_none(),
+                "{command}"
+            );
+        }
+    }
+}

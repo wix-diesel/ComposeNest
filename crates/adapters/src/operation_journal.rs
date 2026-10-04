@@ -357,6 +357,16 @@ impl OperationJournal for DatabaseWorker {
             if current.revision != expected {
                 return Ok(Err(StoreConflict::StaleRevision));
             }
+            // Keep the unique index as a final guard, but return an actionable conflict
+            // when another request won the race after the caller's saved-state read.
+            if operation_entity::Entity::find()
+                .filter(operation_entity::Column::InstanceId.eq(&intent.instance_id))
+                .filter(operation_entity::Column::Status.is_not_in(["Succeeded", "Abandoned"]))
+                .one(&transaction)?
+                .is_some()
+            {
+                return Ok(Err(StoreConflict::UnresolvedOperation));
+            }
             if intent.kind == OperationKind::Delete {
                 if confirmed != expected || old.is_some() || new.is_some() {
                     return Ok(Err(StoreConflict::InvalidInput));
@@ -893,6 +903,53 @@ mod tests {
         }
     }
 
+    #[test]
+    fn concurrent_requests_accept_one_operation_and_leave_no_losing_receipt() {
+        let (_root, worker) = store();
+        let barrier = std::sync::Barrier::new(2);
+        let results = std::thread::scope(|scope| {
+            let tasks = ["first", "second"].map(|id| {
+                let worker = &worker;
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    let operation = intent(id);
+                    let request = receipt(id);
+                    barrier.wait();
+                    worker.accept(&operation, &request)
+                })
+            });
+            tasks.map(|task| task.join().unwrap())
+        });
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| **result == Err(StoreConflict::UnresolvedOperation))
+                .count(),
+            1
+        );
+        let winner = results.into_iter().find_map(Result::ok).unwrap();
+        assert_eq!(
+            worker.accept(&intent(&winner.operation_id), &winner),
+            Ok(winner.clone())
+        );
+        let loser = if winner.request_id == "first" {
+            "second"
+        } else {
+            "first"
+        };
+        assert_eq!(worker.receipt("scope", loser).unwrap(), None);
+        assert_eq!(
+            worker
+                .read(|db| Ok(
+                    db.query_row("SELECT COUNT(*) FROM operations", [], |row| row
+                        .get::<_, i64>(0))?
+                ))
+                .unwrap(),
+            1
+        );
+    }
+
     #[tokio::test]
     async fn startup_marks_executing_unknown_and_preserves_identity_and_reservations() {
         let (root, worker) = store();
@@ -924,7 +981,7 @@ mod tests {
         );
         assert_eq!(
             worker.accept(&intent("second"), &receipt("second")),
-            Err(StoreConflict::Duplicate)
+            Err(StoreConflict::UnresolvedOperation)
         );
         worker
             .reconcile_step("first", 1, StepOutcome::Failed)
@@ -993,14 +1050,14 @@ mod tests {
             worker.set_status("first", status, "observe").unwrap();
             assert_eq!(
                 worker.accept(&intent("second"), &receipt("second")),
-                Err(StoreConflict::Duplicate)
+                Err(StoreConflict::UnresolvedOperation)
             );
             assert_eq!(worker.receipt("scope", "second").unwrap(), None);
         }
         assert_eq!(worker.retry("first", "retry"), Ok(2));
         assert_eq!(
             worker.accept(&intent("second"), &receipt("second")),
-            Err(StoreConflict::Duplicate)
+            Err(StoreConflict::UnresolvedOperation)
         );
         worker
             .set_status("first", OperationStatus::Failed, "observe")

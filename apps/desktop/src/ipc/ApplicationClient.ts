@@ -102,12 +102,38 @@ export class ApplicationClient {
   /** Reports an in-flight or uncertain change across screen navigation. */
   hasInstanceChange(instanceId: string): boolean { return this.instanceChanges.has(instanceId); }
 
+  /** Restores the user's original name draft while an uncertain rename is pending. */
+  getPendingInstanceName(instanceId: string): string | null {
+    const request = this.instanceChanges.get(instanceId)?.request;
+    return request && "name" in request ? request.name : null;
+  }
+
+  private async reconcileRename(request: RenameInstanceRequest): Promise<InstanceActionView> {
+    const canonicalName = request.name.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "").normalize("NFC");
+    const matches = (view: InstanceActionView) => view.id === request.instanceId
+      && view.name === canonicalName && view.revision === request.expectedRevision + 1;
+    const unconfirmed = () => ({ code: "INSTANCE_RENAME_UNCONFIRMED" });
+    const current = await this.getInstanceActions(request.instanceId);
+    if (matches(current)) return current;
+    if (current.id !== request.instanceId || current.revision !== request.expectedRevision) throw unconfirmed();
+    // An unchanged revision permits only the exact original optimistic-lock request.
+    // If the first invocation won meanwhile, read back its result after the stale retry.
+    try {
+      const replayed = await this.createCall<InstanceActionView>("rename_instance", request);
+      if (matches(replayed)) return replayed;
+    } catch {
+      const observed = await this.getInstanceActions(request.instanceId);
+      if (matches(observed)) return observed;
+    }
+    throw unconfirmed();
+  }
+
   private sendInstanceChange(instanceId: string): Promise<InstanceActionView> {
     const pending = this.instanceChanges.get(instanceId);
     if (!pending) return this.getInstanceActions(instanceId);
     if (pending.promise) return pending.promise;
-    const call = pending.command === "rename_instance" && pending.readBack
-      ? this.getInstanceActions(instanceId) : this.createCall<InstanceActionView>(pending.command, pending.request);
+    const call = pending.readBack && "name" in pending.request
+      ? this.reconcileRename(pending.request) : this.createCall<InstanceActionView>(pending.command, pending.request);
     pending.promise = call.then((view) => { this.instanceChanges.delete(instanceId); return view; }).catch((error: unknown) => {
       const code = typeof error === "object" && error !== null && "code" in error ? error.code : null;
       if (["NAME_OR_REQUEST_CONFLICT", "INSTANCE_STALE", "INSTANCE_MISSING", "INSTANCE_INPUT_INVALID", "INSTANCE_ACTION_UNAVAILABLE"].includes(String(code)))
@@ -117,7 +143,7 @@ export class ApplicationClient {
     }).finally(() => { pending.promise = undefined; });
     return pending.promise;
   }
-  /** Reconciles lifecycle acceptance with the original request; uncertain renames are read back. */
+  /** Reconciles the original request and releases a rename only after its name/version agree. */
   retryInstanceChange(instanceId: string): Promise<InstanceActionView> { return this.sendInstanceChange(instanceId); }
 
   private beginInstanceChange(command: string, request: ChangeInstanceRequest | RenameInstanceRequest): Promise<InstanceActionView> {

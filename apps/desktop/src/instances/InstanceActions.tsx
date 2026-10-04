@@ -12,6 +12,7 @@ function failure(error: unknown): string {
   const code = typeof error === "object" && error !== null && "code" in error ? error.code : null;
   switch (code) {
     case "NAME_OR_REQUEST_CONFLICT": return "同じ環境名が使用されています。別の名前を入力してください。";
+    case "INSTANCE_RENAME_UNCONFIRMED": return "名前変更の確定を確認できませんでした。入力内容を保持しています。受付を再確認してください。";
     case "INSTANCE_STALE": return "環境が更新されています。現在の状態を再確認し、変更内容を確認し直してください。";
     case "INSTANCE_MISSING": return "対象の環境が見つかりません。環境一覧へ戻ってください。";
     case "INSTANCE_INPUT_INVALID": return "環境名は空白だけにせず、制御文字を含まない100文字以内で入力してください。";
@@ -45,7 +46,7 @@ export function InstanceActions({ client, instanceId, edit = false }: { client: 
         if (!active) return;
         if (readingEpoch !== epoch.current || gate.current) { timer = setTimeout(read, 1000); return; }
         setView(current);
-        if (draftRevision.current === null) { draftRevision.current = current.revision; setName(current.name); }
+        if (draftRevision.current === null) { draftRevision.current = current.revision; setName(client.getPendingInstanceName(instanceId) ?? current.name); }
         else if (current.revision !== draftRevision.current) setStale(true);
       } catch (error) { if (active && readingEpoch === epoch.current && !gate.current) { setMessage(failure(error)); setView(null); } }
       if (active) timer = setTimeout(read, 1000);

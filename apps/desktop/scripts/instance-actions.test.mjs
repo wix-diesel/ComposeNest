@@ -31,10 +31,15 @@ try {
         return response(structuredClone(window.view));
       }
       if (command === "rename_instance") {
+        if (window.mode === "lost_before_rename") throw new Error("Disconnected before rename");
+        if (window.mode === "rename_race") {
+          window.view.name = request.name.trim().normalize("NFC"); window.view.revision = request.expectedRevision + 1;
+          return response(null, { code: "INSTANCE_STALE" });
+        }
         if (window.mode === "duplicate") return response(null, { code: "NAME_OR_REQUEST_CONFLICT" });
         if (window.mode === "stale") return response(null, { code: "INSTANCE_STALE" });
         if (window.mode === "delay") await new Promise((resolve) => { window.finishChange = resolve; });
-        window.view.name = request.name.trim(); window.view.revision++;
+        window.view.name = request.name.trim().normalize("NFC"); window.view.revision++;
         if (window.mode === "lost") throw new Error("Disconnected after rename");
         return response(structuredClone(window.view));
       }
@@ -47,8 +52,8 @@ try {
     await page.locator(".instance-actions h2").filter({ hasText: "開発用データベース" }).waitFor();
   }
   const calls = (command) => page.evaluate((command) => window.calls.filter((call) => call.command === command), command);
-  async function rename() {
-    await page.locator("#edit-name").fill("変更した名前");
+  async function rename(name = "変更した名前") {
+    await page.locator("#edit-name").fill(name);
     await page.getByRole("button", { name: "変更内容を確認", exact: true }).click();
     await page.getByRole("button", { name: "名前変更を適用", exact: true }).click();
   }
@@ -123,6 +128,45 @@ try {
   await page.locator("#edit-name").filter({ visible: true }).waitFor();
   await page.waitForFunction(() => document.querySelector("#edit-name").value === "変更した名前" && !document.querySelector("#edit-name").disabled);
   assert.equal((await calls("rename_instance")).length, 1, "uncertain rename is read back without resubmission");
+  await open(true); await page.evaluate(() => { window.mode = "lost_before_rename"; }); await rename();
+  const pendingMessage = "名前変更の確定を確認できませんでした。入力内容を保持しています。受付を再確認してください。";
+  await page.getByRole("button", { name: "受付を再確認", exact: true }).click();
+  await page.getByText(pendingMessage, { exact: true }).waitFor();
+  assert.equal(await page.locator("#edit-name").inputValue(), "変更した名前");
+  assert.equal(await page.locator("#edit-name").isDisabled(), true, "an old name/revision cannot release the pending request");
+  assert.equal((await calls("rename_instance")).length, 2);
+  await page.evaluate(() => { location.hash = "#/instances"; });
+  await page.getByRole("heading", { level: 1, name: "環境一覧", exact: true }).waitFor();
+  await page.evaluate(() => { location.hash = "#/instance-edit?instanceId=target"; });
+  await page.locator("#edit-name").waitFor();
+  await page.waitForFunction(() => document.querySelector("#edit-name").value === "変更した名前");
+  await page.evaluate(() => { window.mode = "normal"; });
+  await page.getByRole("button", { name: "受付を再確認", exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector("#edit-name").disabled);
+  const nameRequests = await calls("rename_instance");
+  assert.equal(nameRequests.length, 3);
+  for (const call of nameRequests) assert.deepEqual(call.request, nameRequests[0].request);
+
+  for (const current of [{ name: "別の名前", revision: 4 }, { name: "変更した名前", revision: 5 }]) {
+    await open(true); await page.evaluate(() => { window.mode = "lost"; }); await rename();
+    await page.evaluate((current) => { Object.assign(window.view, current); window.mode = "normal"; }, current);
+    await page.getByRole("button", { name: "受付を再確認", exact: true }).click();
+    await page.getByText(pendingMessage, { exact: true }).waitFor();
+    assert.equal(await page.locator("#edit-name").inputValue(), "変更した名前");
+    assert.equal(await page.locator("#edit-name").isDisabled(), true);
+    assert.equal((await calls("rename_instance")).length, 1, "a conflicting revision must not be replayed");
+  }
+  await open(true); await page.evaluate(() => { window.mode = "lost_before_rename"; }); await rename();
+  await page.evaluate(() => { window.mode = "rename_race"; });
+  await page.getByRole("button", { name: "受付を再確認", exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector("#edit-name").disabled);
+  const raced = await calls("rename_instance"); assert.equal(raced.length, 2); assert.deepEqual(raced[0].request, raced[1].request);
+
+  await open(true); await page.evaluate(() => { window.mode = "lost"; }); await rename("　Cafe\u0301　");
+  await page.evaluate(() => { window.mode = "normal"; });
+  await page.getByRole("button", { name: "受付を再確認", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector("#edit-name").value === "Café" && !document.querySelector("#edit-name").disabled);
+  assert.equal((await calls("rename_instance")).length, 1, "Core-normalized names confirm an already committed rename");
   await mkdir("test-results", { recursive: true });
   for (const [theme, width] of [["light", 1280], ["dark", 390]]) {
     await page.setViewportSize({ width, height: 900 }); await page.evaluate((theme) => { document.documentElement.dataset.theme = theme; }, theme);

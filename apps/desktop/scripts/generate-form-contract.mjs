@@ -3,6 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 // This deliberately supports only the simple public DTO shapes listed below.
 // Fail closed on an unfamiliar Rust field type or Serde attribute.
 const sources = {
+  instance_actions: ["InstanceActionRequest", "RenameInstanceRequest", "ChangeInstanceRequest", "InstanceActionView"],
   template_form: ["FormInput", "FormOption", "FormSlot", "FormConnection", "TemplateForm"],
   create_session: ["PrepareCreateRequest", "CreatePlanRequest", "UpdateCreateRequest", "ConfirmCreateRequest", "CreateReceipt"],
   create_plan: ["InputView", "PlanConcern", "CreatePlanView", "PlanEdit"],

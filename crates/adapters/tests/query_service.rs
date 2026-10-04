@@ -164,3 +164,113 @@ fn failed_operation_and_missing_storage_remain_visible_with_ready_observation() 
     assert_eq!(view.last_operation.unwrap().status, "Failed");
     assert!(view.needs_attention);
 }
+
+#[test]
+fn lifecycle_acceptance_is_scoped_versioned_idempotent_and_never_optimistic() {
+    use composenest_application::{
+        RequestContext,
+        instance_actions::{self, ChangeInstanceRequest},
+    };
+    let (_root, db) = fixture();
+    db.write(|db| { db.execute_batch("UPDATE runtime_observations SET freshness='fresh', runtime_state='stopped', health=NULL;")?; Ok(()) }).unwrap();
+    let accept = |scope: &str, request: &ChangeInstanceRequest| {
+        instance_actions::accept(&db, scope, request, &mut composenest_adapters::SystemRandom)
+    };
+    let mut request = ChangeInstanceRequest {
+        context: RequestContext {
+            api_version: 1,
+            request_id: "lifecycle-request".into(),
+        },
+        instance_id: "one".into(),
+        expected_revision: 1,
+        action: "start".into(),
+    };
+    assert!(matches!(
+        accept("other", &request),
+        Err(StoreConflict::Missing)
+    ));
+    request.expected_revision = 2;
+    assert!(matches!(
+        accept("scope", &request),
+        Err(StoreConflict::StaleRevision)
+    ));
+    request.expected_revision = 1;
+    let (receipt, _, fresh) = accept("scope", &request).unwrap();
+    assert!(fresh);
+    let state = instance_actions::view(&db, "scope", "one").unwrap();
+    assert_eq!(state.runtime_status, "stopped");
+    assert_eq!(state.operation_status.as_deref(), Some("Accepted"));
+    assert!(state.actions.is_empty());
+    assert!(
+        !serde_json::to_string(&state)
+            .unwrap()
+            .contains("top-secret")
+    );
+    let (repeated, _, fresh) = accept("scope", &request).unwrap();
+    assert_eq!(receipt, repeated);
+    assert!(!fresh);
+    request.action = "stop".into();
+    assert!(matches!(
+        accept("scope", &request),
+        Err(StoreConflict::Duplicate)
+    ));
+    request.context.request_id = "another-request".into();
+    assert!(matches!(
+        accept("scope", &request),
+        Err(StoreConflict::UnresolvedOperation)
+    ));
+    for status in ["Executing", "Failed", "OutcomeUnknown", "AwaitingDecision"] {
+        db.write(move |db| {
+            db.execute(
+                "UPDATE operations SET status=?1 WHERE status NOT IN ('Succeeded','Abandoned')",
+                [status],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        assert!(
+            instance_actions::view(&db, "scope", "one")
+                .unwrap()
+                .actions
+                .is_empty()
+        );
+        assert_eq!(
+            QueryService::new(&db).rename("scope", "one", 1, "Renamed"),
+            Err(StoreConflict::UnresolvedOperation)
+        );
+    }
+}
+
+#[test]
+fn absent_restart_offers_start_and_running_rename_keeps_runtime_and_ports() {
+    use composenest_application::instance_actions;
+    let (_root, db) = fixture();
+    db.write(|db| { db.execute_batch("UPDATE runtime_observations SET freshness='fresh', runtime_state='absent', health=NULL;")?; Ok(()) }).unwrap();
+    let state = instance_actions::view(&db, "scope", "one").unwrap();
+    assert!(state.actions.contains(&"start".into()));
+    assert!(!state.actions.contains(&"restart".into()));
+    db.write(|db| {
+        db.execute_batch(
+            "UPDATE runtime_observations SET runtime_state='running', health='healthy';",
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    assert!(
+        instance_actions::view(&db, "scope", "one")
+            .unwrap()
+            .actions
+            .contains(&"rename".into())
+    );
+    assert_eq!(
+        QueryService::new(&db).rename("scope", "one", 1, "Running DB"),
+        Ok(2)
+    );
+    let state = QueryService::new(&db)
+        .get_instance("scope", "one")
+        .unwrap()
+        .unwrap();
+    assert_eq!(state.runtime_status, "ready");
+    assert_eq!(state.ports[0].host_port, 15432);
+    assert_eq!(state.spec_revision, 1);
+}

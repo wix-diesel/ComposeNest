@@ -12,7 +12,7 @@ use composenest_application::{
     },
     named_volumes::NamedVolumePort,
     operation_journal::{OperationKind, RequestReceipt},
-    operation_runner::OperationRunner,
+    operation_runner::{OperationReservation, OperationRunner},
     state_store::StorageMethod,
     storage::StoragePort,
 };
@@ -42,6 +42,51 @@ pub async fn run_confirmed_lifecycle(
     runner: &OperationRunner,
     receipt: &RequestReceipt,
     kind: OperationKind,
+) -> Result<String, LifecycleOperationError> {
+    run_lifecycle(
+        database,
+        probe,
+        management_root,
+        runner,
+        receipt,
+        kind,
+        None,
+    )
+    .await
+}
+
+/// Runs accepted work using the capacity held since its durable acceptance.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_confirmed_lifecycle_reserved(
+    database: &DatabaseWorker,
+    probe: &DockerProbe,
+    management_root: &Path,
+    runner: &OperationRunner,
+    receipt: &RequestReceipt,
+    kind: OperationKind,
+    reservation: OperationReservation,
+) -> Result<String, LifecycleOperationError> {
+    run_lifecycle(
+        database,
+        probe,
+        management_root,
+        runner,
+        receipt,
+        kind,
+        Some(reservation),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_lifecycle(
+    database: &DatabaseWorker,
+    probe: &DockerProbe,
+    management_root: &Path,
+    runner: &OperationRunner,
+    receipt: &RequestReceipt,
+    kind: OperationKind,
+    reservation: Option<OperationReservation>,
 ) -> Result<String, LifecycleOperationError> {
     let snapshot = database
         .snapshot(receipt, kind)
@@ -86,14 +131,16 @@ pub async fn run_confirmed_lifecycle(
             composenest_application::state_store::StoreConflict::InvalidInput,
         ));
     }
-    LifecycleOperation {
+    let operation = LifecycleOperation {
         state: database,
         journal: database,
         runner,
         stages: &stages,
+    };
+    match reservation {
+        Some(reservation) => operation.run_reserved(receipt, kind, reservation).await,
+        None => operation.run(receipt, kind).await,
     }
-    .run(receipt, kind)
-    .await
 }
 
 pub(crate) struct AdapterLifecycleStages<'a> {

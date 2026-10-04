@@ -238,11 +238,10 @@ pub(super) fn preview(
         let state = &plan.fields[key];
         let secret = input["type"] == "secret";
         let type_changed = source_input.is_some_and(|old| old["type"] != input["type"]);
-        let type_needs_answer = type_changed && !state.answered;
         let invalid = !valid_input(input, state.value.as_ref());
-        if type_needs_answer || invalid || !state.answered {
+        if type_changed || invalid || !state.answered {
             concerns.push(PlanConcern {
-                code: if type_needs_answer {
+                code: if type_changed {
                     "INPUT_TYPE_CHANGED"
                 } else {
                     "INPUT_REQUIRED_OR_INVALID"

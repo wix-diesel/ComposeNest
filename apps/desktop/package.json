@@ -15,7 +15,8 @@
     "test:appearance": "node scripts/appearance.test.mjs",
     "test:create": "node scripts/create-screen.test.mjs",
     "test:clone": "node scripts/create-screen.test.mjs --clone",
-    "test:instances": "node scripts/instance-actions.test.mjs"
+    "test:instances": "node scripts/instance-actions.test.mjs",
+    "test:list": "node --experimental-strip-types --test scripts/listModel.test.mjs && node scripts/instance-list.test.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "2.6.0",

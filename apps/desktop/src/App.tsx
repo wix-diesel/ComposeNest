@@ -8,6 +8,7 @@ import { Toast } from "./shell/Toast";
 import { CloneScreen, CreateScreen } from "./create/CreateScreen";
 
 import { InstanceActions } from "./instances/InstanceActions";
+import { InstanceList } from "./instances/InstanceList";
 import { useDisplayPreferences } from "./appearance";
 import { ListViewChoices, ThemeChoices } from "./shell/DisplayChoices";
 
@@ -25,6 +26,8 @@ export function App({ client = applicationClient }: { client?: ApplicationClient
   const [retry, setRetry] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
   const [about, setAbout] = useState(false);
+  const [listRefresh, setListRefresh] = useState(0);
+  const [listLoading, setListLoading] = useState(true);
   const { preferences, update, saveFailed } = useDisplayPreferences();
 
   useEffect(() => {
@@ -84,18 +87,17 @@ export function App({ client = applicationClient }: { client?: ApplicationClient
             <h1 id="screen" ref={heading} tabIndex={-1}>{ja.pages[route.page]}</h1>
             <p className="subtitle">{ja.subtitles[route.page]}</p>
           </div><div className="actions">
+            {route.page === "instances" && <><button className="btn" disabled={listLoading} onClick={() => setListRefresh((value) => value + 1)}><Icon name="refresh" />更新</button>
+              <button className="btn primary" onClick={() => client.navigate({ page: "templates" })}><Icon name="plus" />環境を作成</button></>}
             {parent && <button className="btn" onClick={() => client.navigate(parent)}>{ja.back}</button>}
             <button className="btn" onClick={() => setAbout(true)}>{ja.about}</button>
           </div></div>
           {saveFailed && <p className="notice warning" role="status">{ja.displaySaveFailed}</p>}
-          {route.page === "instances" && <div className="view-toolbar">
-            <ListViewChoices value={preferences.listView} onChange={(value) => update("listView", value)} />
-          </div>}
-          {route.page === "settings" ? <section className="panel display-settings" aria-label={ja.design}>
+          {route.page === "instances" ? <InstanceList key={hash} client={client} refresh={listRefresh} loadingChanged={setListLoading} listView={preferences.listView} changeView={(view) => update("listView", view)} /> : route.page === "settings" ? <section className="panel display-settings" aria-label={ja.design}>
             <h2>{ja.design}</h2><p>{ja.displayOnly}</p>
             <div><h3>{ja.theme}</h3><ThemeChoices value={preferences.theme} onChange={(value) => update("theme", value)} /></div>
             <div><h3>{ja.listView}</h3><ListViewChoices value={preferences.listView} onChange={(value) => update("listView", value)} /></div>
-          </section> : route.page === "instance-create" ? <CreateScreen key={hash} client={client} templateId={route.templateId} returnTo={route.returnTo} /> : route.page === "instance-clone" ? <CloneScreen key={hash} client={client} sourceId={route.instanceId} /> : route.page === "instance-detail" || route.page === "instance-edit" ? <InstanceActions key={hash} client={client} instanceId={route.instanceId} edit={route.page === "instance-edit"} /> : <section className="panel" aria-label={ja.pages[route.page]} data-view={route.page === "instances" ? preferences.listView : undefined} key={hash}>
+          </section> : route.page === "instance-create" ? <CreateScreen key={hash} client={client} templateId={route.templateId} returnTo={route.returnTo} /> : route.page === "instance-clone" ? <CloneScreen key={hash} client={client} sourceId={route.instanceId} /> : route.page === "instance-detail" || route.page === "instance-edit" ? <InstanceActions key={hash} client={client} instanceId={route.instanceId} edit={route.page === "instance-edit"} /> : <section className="panel" aria-label={ja.pages[route.page]} key={hash}>
             <p>{ja.unimplemented}</p>
             {"instanceId" in route && route.instanceId && <p>{ja.target}: <code>{route.instanceId}</code></p>}
             {"operationId" in route && <p>{ja.operationId}: <code>{route.operationId}</code></p>}

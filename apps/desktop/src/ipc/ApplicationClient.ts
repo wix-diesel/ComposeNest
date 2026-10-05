@@ -2,6 +2,7 @@ import type { ChangeInstanceRequest, InstanceActionView, RenameInstanceRequest }
 import type { EditInstancePortsRequest, InstanceEditView } from "../generated/template-form";
 import type { CloneEdit, ClonePlanView, ConfirmCloneRequest, ConfirmCreateRequest, CreatePlanView, CreateReceipt, PlanEdit } from "../generated/template-form";
 import { invoke } from "@tauri-apps/api/core";
+import type { InstanceListView } from "../generated/template-form";
 import { parseRoute, routeHash, type AppRoute } from "../navigation";
 import {
   API_VERSION,
@@ -30,6 +31,15 @@ export class ApplicationClient {
     window.location.hash = hash;
   }
   private context() { return { apiVersion: API_VERSION, requestId: crypto.randomUUID() }; }
+
+  /** Reloads scoped saved list data, preserving its original observation timestamps. */
+  async listInstances(): Promise<InstanceListView[]> {
+    const request = this.context();
+    const response = await invoke<ResponseEnvelope<InstanceListView[]>>("list_instances", { request });
+    if (response.apiVersion !== API_VERSION || response.requestId !== request.requestId
+      || response.error !== null || !Array.isArray(response.result)) throw new Error("instance_list_failed");
+    return response.result;
+  }
 
   private async createCall<T>(command: string, request: { context: { apiVersion: number; requestId: string } }): Promise<T> {
     const response = await invoke<ResponseEnvelope<T>>(command, { request });

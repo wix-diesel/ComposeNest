@@ -1,0 +1,49 @@
+/* List spacing follows the instances mock while using the shared theme palette. */
+.instance-list .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin-bottom: 30px; }
+.instance-list .stat { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px 21px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.instance-list .stat-label { font-size: 11px; color: var(--muted); }
+.instance-list .stat-value { font-size: 29px; font-weight: 600; line-height: 1.3; margin-top: 5px; }
+.instance-list .stat-value small { font-size: 11px; font-weight: 400; margin-left: 8px; }
+.instance-list .stat-icon { background: var(--soft); border-radius: 10px; width: 38px; height: 38px; display: grid; place-items: center; color: var(--muted); flex-shrink: 0; }
+.instance-list .stat:nth-child(2) .stat-value { color: var(--green); }
+.instance-list .stat:nth-child(4) .stat-value { color: #b47d32; }
+.instance-list .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 19px; flex-wrap: wrap; }
+.instance-list .tabs { display: flex; gap: 24px; flex-wrap: wrap; }
+.instance-list .tabs button { background: none; border: 0; border-bottom: 2px solid transparent; color: var(--muted); padding: 8px 0; font-size: 12px; white-space: nowrap; }
+.instance-list .tabs button.active { border-bottom-color: var(--green); color: var(--green); font-weight: 650; }
+.instance-list .tab-count { font-size: 10px; background: var(--soft); padding: 1px 5px; border-radius: 4px; margin-left: 6px; }
+.instance-list .search { position: relative; display: flex; align-items: center; max-width: 100%; }
+.instance-list .search svg { position: absolute; left: 12px; color: var(--muted); width: 15px; }
+.instance-list .search input { min-width: 0; width: 235px; border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px 10px 35px; background: var(--input-bg); color: var(--text); font: inherit; font-size: 12px; }
+.instance-list .view-toolbar { justify-content: space-between; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+.instance-list .cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+.instance-list .instance-card { background: var(--surface); border: 1px solid var(--line); border-radius: 11px; overflow: hidden; display: flex; flex-direction: column; }
+.instance-list .card-body { padding: 21px; flex: 1; }
+.instance-list .card-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; gap: 8px; }
+.instance-list .service-icon { width: 41px; height: 41px; display: grid; place-items: center; border-radius: 11px; background: var(--soft); color: var(--green); }
+.instance-list .service-icon.pg { background: #edf3f8; color: #547d9f; }
+.instance-list .service-icon.redis { background: #fcf0e9; color: #c1715a; }
+.instance-list .badge { font-size: 10px; padding: 3px 8px; border-radius: 5px; background: var(--soft); color: var(--muted); }
+.instance-list .badge.ready { background: var(--active-bg); color: var(--active-text); }
+.instance-list .badge.warn { background: #fff4de; color: #946423; }
+.instance-list h3 { margin-bottom: 3px; overflow-wrap: anywhere; }
+.instance-list .service-description { font-size: 10px; color: var(--muted); margin-bottom: 20px; overflow-wrap: anywhere; }
+.instance-list .card-meta { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 9px; font-size: 11px; }
+.instance-list .card-meta dt { color: var(--muted); }
+.instance-list .card-meta dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+.instance-list .mono { font-family: Consolas, monospace; }
+.instance-list .card-footer { display: flex; justify-content: space-between; align-items: center; gap: 8px; border-top: 1px solid var(--line); padding: 11px 18px; }
+.instance-list .card-footer small { font-size: 10px; overflow-wrap: anywhere; }
+.instance-list .empty { padding: 38px 20px; text-align: center; color: var(--muted); background: var(--surface); border: 1px solid var(--line); border-radius: 11px; }
+.instance-list .footnote, .instance-list .list-note { font-size: 11px; color: var(--muted); margin: 16px 0; }
+.page-heading .btn:disabled { opacity: .55; cursor: default; }
+[data-theme="dark"] .instance-list .badge.warn { background: #3a3020; color: #e1c58a; }
+[data-theme="dark"] .instance-list .service-icon { background: var(--soft); color: var(--green); }
+@media (max-width: 1100px) { .instance-list .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 800px) { .instance-list .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 540px) {
+  .instance-list .cards { grid-template-columns: minmax(0, 1fr); }
+  .instance-list .stat { padding: 14px; }
+  .instance-list .stat-icon { display: none; }
+  .instance-list .tabs { gap: 12px; }
+}

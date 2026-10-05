@@ -181,6 +181,7 @@ mod tests {
         let mut context: tauri::Context<tauri::Wry> = tauri::generate_context!();
         let authority = context.runtime_authority_mut();
         for command in [
+            "list_instances",
             "get_instance_actions",
             "rename_instance",
             "change_instance",

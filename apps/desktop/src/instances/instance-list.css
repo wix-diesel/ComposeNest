@@ -35,7 +35,18 @@
 .instance-list .card-footer { display: flex; justify-content: space-between; align-items: center; gap: 8px; border-top: 1px solid var(--line); padding: 11px 18px; }
 .instance-list .card-footer small { font-size: 10px; overflow-wrap: anywhere; }
 .instance-list .empty { padding: 38px 20px; text-align: center; color: var(--muted); background: var(--surface); border: 1px solid var(--line); border-radius: 11px; }
-.instance-list .footnote, .instance-list .list-note { font-size: 11px; color: var(--muted); margin: 16px 0; }
+.instance-list .footnote { font-size: 11px; color: var(--muted); margin: 16px 0; }
+.instance-list .grid-panel { border: 1px solid var(--line); border-radius: 10px; overflow: auto; max-height: 65vh; background: var(--surface); }
+.instance-list .grid-panel:focus-visible { outline: 2px solid var(--green); outline-offset: 4px; }
+.instance-list .grid-panel table { width: 100%; min-width: 850px; border-collapse: separate; border-spacing: 0; font-size: 12px; }
+.instance-list .grid-panel th, .instance-list .grid-panel td { padding: 12px 16px; white-space: nowrap; border-bottom: 1px solid var(--line); text-align: left; }
+.instance-list .grid-panel th { position: sticky; top: 0; z-index: 1; background: var(--soft); color: var(--muted); font-size: 11px; font-weight: 500; }
+.instance-list .grid-panel th button { border: 0; background: transparent; color: inherit; padding: 0; font: inherit; }
+.instance-list .grid-panel th button span { opacity: .65; }
+.instance-list .grid-panel th[aria-sort="ascending"] button span, .instance-list .grid-panel th[aria-sort="descending"] button span { opacity: 1; }
+.instance-list .grid-panel tbody tr:hover { background: var(--soft); }
+.instance-list .grid-panel tbody tr:last-child td { border-bottom: 0; }
+.instance-list .grid-panel .environment-name { font-weight: 600; }
 .page-heading .btn:disabled { opacity: .55; cursor: default; }
 [data-theme="dark"] .instance-list .badge.warn { background: #3a3020; color: #e1c58a; }
 [data-theme="dark"] .instance-list .service-icon { background: var(--soft); color: var(--green); }

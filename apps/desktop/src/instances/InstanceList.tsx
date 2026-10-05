@@ -3,11 +3,12 @@ import type { ApplicationClient } from "../ipc/ApplicationClient";
 import { ja } from "../messages";
 import { ListViewChoices } from "../shell/DisplayChoices";
 import { Icon } from "../shell/Icon";
-import { listItem, selectInstances, type InstanceFilter, type InstanceListItem } from "./listModel";
+import { instanceStateLabels, listItem, selectInstances, type InstanceFilter, type InstanceListItem, type InstanceSort } from "./listModel";
+import { InstanceGrid } from "./InstanceGrid";
 import "./instance-list.css";
 
 const filters: InstanceFilter[] = ["all", "ready", "stopped", "attention"];
-const labels = { all: "すべて", ready: "利用可能", stopped: "停止中", attention: "要確認" };
+const labels = { all: "すべて", ...instanceStateLabels };
 const stats = { ...labels, all: "すべての環境", attention: "確認が必要" };
 
 /** Renders one saved-state snapshot and distinguishes loading, failures and empty results. */
@@ -19,6 +20,7 @@ export function InstanceList({ client, refresh, loadingChanged, listView, change
   const [status, setStatus] = useState<"loading" | "ready" | "failed">("loading");
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<InstanceFilter>("all");
+  const [sort, setSort] = useState<InstanceSort | null>(null);
   useEffect(() => {
     let active = true;
     setStatus("loading"); loadingChanged(true);
@@ -41,9 +43,10 @@ export function InstanceList({ client, refresh, loadingChanged, listView, change
     <div className="view-toolbar"><span role="status">{status === "ready" ? `${shown.length} / ${items.length} 環境` : status === "loading" ? "環境を読み込み中…" : "環境一覧の取得に失敗しました。更新して再確認してください。"}</span>
       <ListViewChoices value={listView} onChange={changeView} /></div>
     {status === "ready" && <>
-      {listView === "grid" && <p className="list-note">DataGridは準備中です。現在はカードで表示します。</p>}
       {items.length === 0 ? <div className="empty">環境はまだありません。「環境を作成」から追加してください。</div>
         : shown.length === 0 ? <div className="empty">条件に一致する環境はありません。</div>
+          : listView === "grid" ? <InstanceGrid items={shown} sort={sort} changeSort={setSort}
+            showDetail={(instanceId) => client.navigate({ page: "instance-detail", instanceId })} />
           : <div className="cards">{shown.map((item) => <article className="instance-card" key={item.source.id}>
             <div className="card-body"><div className="card-top"><span className={`service-icon ${item.source.templateId === "redis" ? "redis" : "pg"}`}><Icon name="templates" /></span>
               <span className={`badge ${item.state === "attention" ? "warn" : item.state}`}>{labels[item.state]}</span></div>

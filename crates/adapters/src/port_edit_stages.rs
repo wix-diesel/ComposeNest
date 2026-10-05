@@ -8,7 +8,7 @@ use composenest_application::{
     image_resolution::ImageResolutionStore,
     lifecycle_operation::{LifecycleEffectError, LifecycleStages},
     operation_journal::{ExpectedResult, OperationJournal, StepCommand, StepIntent, StepOutcome},
-    operation_runner::{OperationRunner, RunnerError},
+    operation_runner::{OperationReservation, OperationRunner, RunnerError},
     port_edit::{PortEditRequest, PortEditStore},
     state_store::{RuntimeTarget, StoreConflict},
 };
@@ -174,12 +174,22 @@ pub async fn run_port_edit(
         .map_err(PortEditError::Runner)?
 }
 
-async fn run_locked(
+pub(crate) async fn run_locked(
     database: &DatabaseWorker,
     probe: &DockerProbe,
     management_root: &Path,
     request: &PortEditRequest,
 ) -> Result<String, PortEditError> {
+    accept_port_edit(database, probe, management_root, request).await?;
+    run_accepted(database, probe, management_root, request).await
+}
+
+pub(crate) async fn accept_port_edit(
+    database: &DatabaseWorker,
+    probe: &DockerProbe,
+    management_root: &Path,
+    request: &PortEditRequest,
+) -> Result<composenest_application::operation_journal::RequestReceipt, PortEditError> {
     let context = context(database, request)?;
     let docker = probe
         .bind(context.target.clone())
@@ -226,8 +236,46 @@ async fn run_locked(
     let receipt = database
         .begin_port_edit(request)
         .map_err(PortEditError::Store)?;
+    Ok(receipt)
+}
+
+/// Applies an accepted edit using capacity held continuously from acceptance to completion.
+pub async fn run_accepted_port_edit_reserved(
+    database: &DatabaseWorker,
+    probe: &DockerProbe,
+    management_root: &Path,
+    runner: &OperationRunner,
+    request: &PortEditRequest,
+    reservation: OperationReservation,
+) -> Result<String, PortEditError> {
+    runner.run_reserved(reservation, &request.receipt.instance_id, || async {
+        let result = run_accepted(database, probe, management_root, request).await;
+        if result.is_err() {
+            // Preserve specific failed phases; only incomplete stages need a fallback.
+            let operation_id = request.receipt.operation_id.clone();
+            database.write(move |db| {
+                db.execute("UPDATE operations SET status='OutcomeUnknown', phase='reconcile' WHERE id=?1 AND status IN ('Accepted','Executing')", [&operation_id])?;
+                Ok(())
+            }).map_err(|_| PortEditError::OutcomeUnknown)?;
+        }
+        result
+    }).await.map_err(PortEditError::Runner)?
+}
+
+async fn run_accepted(
+    database: &DatabaseWorker,
+    probe: &DockerProbe,
+    management_root: &Path,
+    request: &PortEditRequest,
+) -> Result<String, PortEditError> {
+    let receipt = &request.receipt;
+    let context = context(database, request)?;
+    let docker = probe
+        .bind(context.target.clone())
+        .map_err(|_| PortEditError::OutcomeUnknown)?;
+    let artifacts = ArtifactStore::new(management_root, database);
     let confirmed = database
-        .confirmed_create(&receipt)
+        .confirmed_create(receipt)
         .map_err(PortEditError::Store)?;
     let artifact_id = format!("{}-r{}", receipt.instance_id, confirmed.spec_revision);
     let create = DockerCreate::new(

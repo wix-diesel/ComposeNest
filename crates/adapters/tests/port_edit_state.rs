@@ -9,6 +9,10 @@ use composenest_application::{
 };
 
 fn fixture() -> (tempfile::TempDir, DatabaseWorker, PortEditRequest) {
+    fixture_for("instance")
+}
+
+fn fixture_for(instance: &str) -> (tempfile::TempDir, DatabaseWorker, PortEditRequest) {
     let root = tempfile::tempdir().unwrap();
     #[cfg(unix)]
     {
@@ -24,8 +28,10 @@ fn fixture() -> (tempfile::TempDir, DatabaseWorker, PortEditRequest) {
         }
     }
     let db = DatabaseWorker::start(root.path()).unwrap();
-    db.write(|db| {
-        db.execute_batch("INSERT INTO management_scopes (id, owner_id, root_identity) VALUES ('scope', 'owner', 'root');
+    let saved_instance = instance.to_owned();
+    db.write(move |db| {
+        let instance = saved_instance;
+        db.execute_batch(&r#"INSERT INTO management_scopes (id, owner_id, root_identity) VALUES ('scope', 'owner', 'root');
             INSERT INTO runtime_targets (id, scope_id, endpoint, engine_id, platform) VALUES ('target', 'scope', 'local', 'engine', 'linux/amd64');
             INSERT INTO instances (id, scope_id, target_id, display_name, normalized_name, project_name, applied_spec_revision)
                 VALUES ('instance', 'scope', 'target', 'Test', 'Test', 'cn-instance', 1);
@@ -39,8 +45,12 @@ fn fixture() -> (tempfile::TempDir, DatabaseWorker, PortEditRequest) {
                 VALUES ('old', 'scope', 'instance', '127.0.0.1', 'tcp', 15432, 'committed');
             INSERT INTO port_reservations (id, scope_id, instance_id, host_ip, protocol, host_port, status)
                 VALUES ('unchanged', 'scope', 'instance', '127.0.0.1', 'tcp', 19000, 'committed');
+            INSERT INTO template_snapshots (id, instance_id, template_id, template_version, selected_version, schema_version, normalization, semantic_hash, canonical_json)
+                VALUES ('snapshot', 'instance', 'generic', '1', '1', 1, 'v1', 'hash', '{"versions":[{"key":"1","definition":{"inputs":{"order":["password"],"values":{"password":{"type":"secret"}}},"connections":{"order":[],"values":{}}}}]}');
             INSERT INTO runtime_observations (instance_id, container_id, runtime_state, freshness)
-                VALUES ('instance', NULL, 'absent', 'fresh');")?;
+                VALUES ('instance', NULL, 'absent', 'fresh');"#
+            .replace("'instance'", &format!("'{instance}'"))
+            .replace("'cn-instance'", &format!("'cn-{instance}'")))?;
         Ok(())
     }).unwrap();
     let request = PortEditRequest {
@@ -50,7 +60,7 @@ fn fixture() -> (tempfile::TempDir, DatabaseWorker, PortEditRequest) {
             plan_id: None,
             confirmed_revision: 1,
             request_hash: "a".repeat(64),
-            instance_id: "instance".into(),
+            instance_id: instance.into(),
             operation_id: "edit".into(),
         },
         expected_instance_revision: 1,
@@ -84,6 +94,153 @@ fn status(db: &DatabaseWorker, port: u16) -> Option<String> {
             .ok())
     })
     .unwrap()
+}
+
+#[tokio::test]
+async fn edit_projection_masks_secrets_and_replays_receipt_without_docker_or_capacity() {
+    use composenest_adapters::instance_edit::{apply_instance_ports, view_instance_edit};
+    use composenest_application::{
+        RequestContext, instance_edit::EditInstancePortsRequest, operation_runner::OperationRunner,
+    };
+    use sha2::{Digest, Sha256};
+    let (root, db, mut edit) = fixture();
+    let request = EditInstancePortsRequest {
+        context: RequestContext {
+            api_version: 1,
+            request_id: "edit-1".into(),
+        },
+        instance_id: "instance".into(),
+        expected_revision: 1,
+        expected_spec_revision: 1,
+        ports: [("db".into(), 15433), ("metrics".into(), 19000)].into(),
+    };
+    edit.receipt.request_hash = format!(
+        "{:x}",
+        Sha256::digest(
+            serde_json::to_vec(&(
+                "edit_port",
+                &request.instance_id,
+                request.expected_revision,
+                request.expected_spec_revision,
+                &request.ports,
+            ))
+            .unwrap()
+        )
+    );
+    assert_eq!(
+        view_instance_edit(&db, "other", "instance").unwrap_err(),
+        StoreConflict::Missing
+    );
+    assert!(
+        view_instance_edit(&db, "scope", "instance")
+            .unwrap()
+            .can_edit_ports
+    );
+    db.write(|db| {
+        db.execute(
+            "UPDATE instance_specs SET inputs_json='{\"password\":\"never-expose\"}'",
+            [],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    db.begin_port_edit(&edit).unwrap();
+    db.set_status("edit", OperationStatus::OutcomeUnknown, "recreate")
+        .unwrap();
+    let runner = OperationRunner::new();
+    assert!(runner.shutdown(std::time::Duration::ZERO));
+    let view = apply_instance_ports(&db, None, root.path(), &runner, "scope", &request)
+        .await
+        .unwrap();
+    assert!(
+        !serde_json::to_string(&view)
+            .unwrap()
+            .contains("never-expose")
+    );
+    assert_eq!(
+        view.state.operation_status.as_deref(),
+        Some("OutcomeUnknown")
+    );
+    assert!(!view.can_edit_ports);
+    assert_eq!(
+        (
+            view.ports[0].old_port,
+            view.ports[0].committed_port,
+            view.ports[0].candidate_port
+        ),
+        (15432, 15432, Some(15433))
+    );
+    assert_eq!(view.ports[0].old_reservation, "committed");
+    assert_eq!(view.ports[0].candidate_reservation.as_deref(), Some("held"));
+    let mut conflicting = request;
+    conflicting.ports.insert("db".into(), 15434);
+    assert_eq!(
+        apply_instance_ports(&db, None, root.path(), &runner, "scope", &conflicting)
+            .await
+            .unwrap_err(),
+        composenest_adapters::port_edit_stages::PortEditError::Store(StoreConflict::Duplicate)
+    );
+}
+
+#[tokio::test]
+async fn port_transport_rejects_invalid_stale_running_and_unknown_without_acceptance() {
+    use composenest_adapters::{
+        instance_edit::apply_instance_ports, port_edit_stages::PortEditError,
+    };
+    use composenest_application::{
+        RequestContext, instance_edit::EditInstancePortsRequest, operation_runner::OperationRunner,
+    };
+    let (root, db, _) = fixture();
+    let mut request = EditInstancePortsRequest {
+        context: RequestContext {
+            api_version: 1,
+            request_id: "new".into(),
+        },
+        instance_id: "instance".into(),
+        expected_revision: 2,
+        expected_spec_revision: 1,
+        ports: [("db".into(), 15433), ("metrics".into(), 19000)].into(),
+    };
+    let runner = OperationRunner::new();
+    assert_eq!(
+        apply_instance_ports(&db, None, root.path(), &runner, "scope", &request)
+            .await
+            .unwrap_err(),
+        PortEditError::Store(StoreConflict::StaleRevision)
+    );
+    request.expected_revision = 1;
+    for ports in [
+        [("db".into(), 80), ("metrics".into(), 19000)].into(),
+        [("db".into(), 19000), ("metrics".into(), 19000)].into(),
+        [("unknown".into(), 15433)].into(),
+    ] {
+        request.ports = ports;
+        assert_eq!(
+            apply_instance_ports(&db, None, root.path(), &runner, "scope", &request)
+                .await
+                .unwrap_err(),
+            PortEditError::Store(StoreConflict::InvalidInput)
+        );
+    }
+    request.ports = [("db".into(), 15433), ("metrics".into(), 19000)].into();
+    for runtime in ["running", "unknown"] {
+        db.write(move |db| {
+            db.execute(
+                "UPDATE runtime_observations SET runtime_state=?1",
+                [runtime],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            apply_instance_ports(&db, None, root.path(), &runner, "scope", &request)
+                .await
+                .unwrap_err(),
+            PortEditError::Store(StoreConflict::UnresolvedOperation)
+        );
+    }
+    assert!(db.receipt("scope", "new").unwrap().is_none());
+    assert_eq!(status(&db, 15433), None);
 }
 
 #[test]
@@ -252,4 +409,108 @@ fn create_and_clone_reproposal_keep_all_candidates_and_require_ready() {
             )
         );
     }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn durable_acceptance_precedes_application_and_only_one_retry_launches_work() {
+    use composenest_adapters::{
+        docker_target::DockerProbe,
+        instance_edit::{accept_instance_ports, view_instance_edit},
+        port_edit_stages::{PortEditError, run_accepted_port_edit_reserved},
+    };
+    use composenest_application::{
+        RequestContext, instance_edit::EditInstancePortsRequest, operation_runner::OperationRunner,
+    };
+    use std::{net::TcpListener, os::unix::fs::PermissionsExt, sync::Arc, time::Duration};
+    let instance = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let (root, db, _) = fixture_for(instance);
+    db.write(|db| {
+        db.execute(
+            "UPDATE runtime_targets SET endpoint='unix:///tmp/composenest-test.sock'",
+            [],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    let executable = root.path().join("docker");
+    fs::write(
+        &executable,
+        r#"#!/bin/sh
+shift 2
+printf '%s\n' "$*" >> calls
+case "$1" in
+info) printf '{"ID":"engine"}\n';;
+container|ps) exit 0;;
+*) exit 1;;
+esac
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+    let probe = DockerProbe {
+        executable,
+        directory: root.path().into(),
+        config_directory: root.path().into(),
+    };
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let request = EditInstancePortsRequest {
+        context: RequestContext {
+            api_version: 1,
+            request_id: "detached-edit".into(),
+        },
+        instance_id: instance.into(),
+        expected_revision: 1,
+        expected_spec_revision: 1,
+        ports: [("db".into(), port), ("metrics".into(), 19000)].into(),
+    };
+    let runner = Arc::new(OperationRunner::new());
+    let (first, retry) = tokio::join!(
+        accept_instance_ports(&db, Some(&probe), root.path(), &runner, "scope", &request),
+        accept_instance_ports(&db, Some(&probe), root.path(), &runner, "scope", &request),
+    );
+    let work = match (first.unwrap(), retry.unwrap()) {
+        (Some(work), None) | (None, Some(work)) => work,
+        _ => panic!("exactly one invocation must launch accepted work"),
+    };
+    let view = view_instance_edit(&db, "scope", instance).unwrap();
+    assert_eq!(view.state.operation_status.as_deref(), Some("Accepted"));
+    assert_eq!(view.spec_revision, 1);
+    assert_eq!(status(&db, port).as_deref(), Some("held"));
+    assert_eq!(status(&db, 15432).as_deref(), Some("committed"));
+    assert!(!root.path().join("artifacts").exists());
+    let calls = fs::read_to_string(root.path().join("calls")).unwrap();
+    assert!(!calls.lines().any(|line| line.starts_with("compose ")));
+    // Accepted work retains capacity and remains retryable even after shutdown starts.
+    assert!(!runner.shutdown(Duration::ZERO));
+    assert!(
+        accept_instance_ports(&db, None, root.path(), &runner, "scope", &request)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let result = run_accepted_port_edit_reserved(
+        &db,
+        &probe,
+        root.path(),
+        &runner,
+        &work.request,
+        work.reservation,
+    )
+    .await;
+    // This minimal fixture has no construction files: the worker fails after durable acceptance.
+    assert_eq!(result, Err(PortEditError::Store(StoreConflict::Missing)));
+    assert!(runner.shutdown(Duration::ZERO));
+    assert_eq!(
+        view_instance_edit(&db, "scope", instance)
+            .unwrap()
+            .state
+            .operation_status
+            .as_deref(),
+        Some("OutcomeUnknown")
+    );
+    assert_eq!(status(&db, port).as_deref(), Some("held"));
+    assert_eq!(status(&db, 15432).as_deref(), Some("committed"));
 }

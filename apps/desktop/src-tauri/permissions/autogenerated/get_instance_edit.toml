@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-instance-edit"
+description = "Enables the get_instance_edit command without any pre-configured scope."
+commands.allow = ["get_instance_edit"]
+
+[[permission]]
+identifier = "deny-get-instance-edit"
+description = "Denies the get_instance_edit command without any pre-configured scope."
+commands.deny = ["get_instance_edit"]

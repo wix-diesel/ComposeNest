@@ -19,14 +19,14 @@ use tauri::State;
 pub async fn list_instances(
     request: RequestContext,
     state: State<'_, Arc<CreateBackend>>,
-) -> ResponseEnvelope<Vec<InstanceListView>> {
+) -> Result<ResponseEnvelope<Vec<InstanceListView>>, ()> {
     if let Err(error) = request.validate() {
-        return ResponseEnvelope::failure(request.request_id, *error);
+        return Ok(ResponseEnvelope::failure(request.request_id, *error));
     }
     let result = QueryService::new(&*state.database)
         .list_instances(&state.scope)
         .map(|views| views.into_iter().map(InstanceListView::from).collect());
-    envelope(request, result)
+    Ok(envelope(request, result))
 }
 
 pub(super) fn envelope<T>(

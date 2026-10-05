@@ -9,6 +9,7 @@ use std::path::Path;
 use composenest_application::state_store::StateStore;
 use composenest_application::template_catalog::{CatalogEntry, CatalogError, register_packages};
 use composenest_application::template_catalog::{TemplateOrigin, TemplatePackage};
+use composenest_application::template_diagnostics::format_template_error;
 use composenest_domain::template::parse_manifest;
 
 #[cfg(unix)]
@@ -163,7 +164,7 @@ fn read_package(
         .read("template.yaml", &mut total)
         .map_err(|error| (error, None))?;
     let manifest = parse_manifest(&display, &manifest_file.contents)
-        .map_err(|error| (invalid(&error.to_string()), None))?;
+        .map_err(|error| (invalid(&format_template_error(&error)), None))?;
     let identity = (manifest.id.clone(), manifest.template_version.clone());
     let mut files = Vec::with_capacity(manifest.versions.len() + 1);
     files.push(manifest_file);

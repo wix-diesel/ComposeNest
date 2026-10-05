@@ -5,6 +5,7 @@ use composenest_application::{
     state_store::StateStore,
     template_catalog::CatalogError,
     template_catalog_view::{TemplateCatalogView, TemplateLoadResult, project_card},
+    template_diagnostics::format_template_error,
 };
 use std::{io, path::Path};
 
@@ -23,7 +24,7 @@ pub fn reload_results(
             let (revision_id, error) = match entry.result {
                 Ok(revision) => (Some(revision.id), None),
                 Err(error) => (None, Some(match error {
-                    CatalogError::Template(error) => format!("Version {}: {}: {}: {}", error.version.as_deref().unwrap_or("—"), error.file, error.path, error.message),
+                    CatalogError::Template(error) => format_template_error(&error),
                     CatalogError::InvalidPackage(reason) => reason,
                     CatalogError::AmbiguousRevision => "同じID・Template版のパッケージが重複しています。".into(),
                     CatalogError::Store(_) => "登録できません。登録済みの同じTemplate版と内容が異なる場合は、Template版を更新してください。".into(),

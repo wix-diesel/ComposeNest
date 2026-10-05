@@ -22,8 +22,8 @@ try {
       { revisionId: "example.pg:1.0.0:exact&hash", templateId: "example.pg", name: "PostgreSQL", description: "<b>Plain text</b>", templateVersion: "1.0.0", versions: ["18", "17"], storageMethods: ["bind", "volume"], origin: "bundled", loaded: true },
       { revisionId: "example.cache:1.0.0:hash", templateId: "example.cache", name: "Custom cache", description: "Local", templateVersion: "1.0.0", versions: ["8.2"], storageMethods: [], origin: "local", loaded: false },
     ], results: [
-      { package: "postgresql", origin: "bundled", revisionId: "example.pg:1.0.0:exact&hash", error: null, warnings: [] },
-      { package: "cache", origin: "local", revisionId: null, error: "Version 8.2: versions/8.2.yaml: $.service.unknown: unknown field", warnings: ["unlisted version file was ignored: versions/unused.yaml"] },
+      { package: "postgresql", origin: "bundled", revisionId: "example.pg:1.0.0:exact&hash", error: null, warnings: ["Version 17: versions/17.yaml: $.inputs.note: この値はコンテナ設定に反映されません。serviceから参照するか、不要な入力を削除してください。"] },
+      { package: "cache", origin: "local", revisionId: null, error: "Version 8.2: versions/8.2.yaml (4行・12列): $.service.unknown: 未知の項目です。項目名の綴りを修正してください。", warnings: ["unlisted version file was ignored: versions/unused.yaml"] },
     ] };
     window.__TAURI_INTERNALS__ = { invoke: async (command, { request }) => {
       window.calls.push({ command, request });
@@ -49,7 +49,8 @@ try {
   assert.equal(await page.locator(".template-card b").count(), 0);
   assert.deepEqual(await page.locator(".template-results dd").allTextContents(), ["1 件", "1 件"]);
   await page.getByText("既存登録版（今回の読込みでは未登録）", { exact: true }).waitFor();
-  await page.getByText("Version 8.2: versions/8.2.yaml: $.service.unknown: unknown field", { exact: true }).waitFor();
+  await page.getByText("Version 8.2: versions/8.2.yaml (4行・12列): $.service.unknown: 未知の項目です。項目名の綴りを修正してください。", { exact: true }).waitFor();
+  await page.getByText("Version 17: versions/17.yaml: $.inputs.note: この値はコンテナ設定に反映されません。serviceから参照するか、不要な入力を削除してください。", { exact: true }).waitFor();
   await page.getByText("C:\\ProgramData\\ComposeNest\\templates\\local", { exact: true }).waitFor();
   assert.equal(await page.getByText("実機検証状態：未確認", { exact: true }).count(), 2);
   for (const theme of ["ダーク", "ライト"]) {

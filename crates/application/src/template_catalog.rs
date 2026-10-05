@@ -64,7 +64,7 @@ pub struct CatalogEntry {
     pub package: String,
     /// Registered immutable revision or a package-specific error.
     pub result: Result<TemplateRevision, CatalogError>,
-    /// Warnings from package discovery, including unlisted version files.
+    /// Discovery and semantic warnings, including unlisted files and unused inputs.
     pub warnings: Vec<String>,
 }
 
@@ -80,15 +80,11 @@ pub fn register_packages(
         .into_iter()
         .map(|package| {
             let name = package.name.clone();
-            let warnings = package.warnings.clone();
+            let mut warnings = package.warnings.clone();
             let identity = package_identity(&package);
-            (
-                name,
-                warnings,
-                identity,
-                package.origin,
-                prepare_revision(package),
-            )
+            let origin = package.origin;
+            let result = prepare_revision_with_warnings(package, &mut warnings);
+            (name, warnings, identity, origin, result)
         })
         .collect();
     let mut counts = HashMap::new();
@@ -130,6 +126,13 @@ fn package_identity(package: &TemplatePackage) -> Option<(String, String)> {
 
 /// Converts one already captured package to a validated, immutable revision.
 pub fn prepare_revision(package: TemplatePackage) -> Result<TemplateRevision, CatalogError> {
+    prepare_revision_with_warnings(package, &mut Vec::new())
+}
+
+fn prepare_revision_with_warnings(
+    package: TemplatePackage,
+    warnings: &mut Vec<String>,
+) -> Result<TemplateRevision, CatalogError> {
     if package.files.is_empty() || package.files.len() > 33 {
         return Err(CatalogError::InvalidPackage(
             "package must contain 1–33 documents".into(),
@@ -172,6 +175,16 @@ pub fn prepare_revision(package: TemplatePackage) -> Result<TemplateRevision, Ca
         ordered_files.push((**file).clone());
     }
     let resolved = resolve_template(manifest, &definitions).map_err(CatalogError::Template)?;
+    for ((_, file), version) in resolved.manifest.versions.iter().zip(&resolved.versions) {
+        for warning in &version.warnings {
+            warnings.push(format!(
+                "Version {}: {file}: {}: {}",
+                warning.version,
+                warning.path,
+                crate::template_diagnostics::japanese_reason(&warning.message)
+            ));
+        }
+    }
     let canonical_json = canonical_json(&resolved);
     let semantic_hash = format!("{:x}", Sha256::digest(canonical_json.as_bytes()));
     let id = format!(

@@ -27,6 +27,7 @@ try {
       await route.fulfill({ response, headers: { ...response.headers(), "content-security-policy": csp } });
     });
     await context.addInitScript(({ mode, seed }) => {
+      if (location.origin !== "http://127.0.0.1:4177") return;
       if (!sessionStorage.getItem("seeded")) {
         if (localStorage.length === 0) for (const [key, value] of Object.entries(seed)) localStorage.setItem(key, value);
         sessionStorage.setItem("seeded", "true");
@@ -117,6 +118,7 @@ try {
       const style = getComputedStyle(input); return { text: style.color, background: style.backgroundColor };
     });
     assert.equal(palette.background, value === "dark" ? "rgb(37, 53, 44)" : "rgb(255, 255, 255)");
+    assert.equal(palette.text, value === "dark" ? "rgb(225, 233, 228)" : "rgb(37, 54, 47)");
     assert.notEqual(palette.text, palette.background);
     for (const selector of [".log", ".compose-preview"]) {
       assert.equal(await page.locator(selector).evaluate((element) => getComputedStyle(element).backgroundColor), value === "dark" ? "rgb(16, 26, 21)" : "rgb(35, 53, 45)");

@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import type { InstanceActionView } from "../generated/template-form";
 import type { ApplicationClient } from "../ipc/ApplicationClient";
+import { operationPhaseLabel } from "./operationPhase";
 import { InstanceEdit } from "./InstanceEdit";
 import "./instance-actions.css";
 
 const runtime: Record<string, string> = { ready: "利用可能", stopped: "停止中", absent: "コンテナ不在", preparing: "準備中", unhealthy: "異常", unknown: "未確認" };
 const operation: Record<string, string> = { Accepted: "受付済み", Executing: "実行中", Succeeded: "完了", Failed: "失敗・未解決", OutcomeUnknown: "結果不明", AwaitingDecision: "判断待ち", Abandoned: "解決済み" };
-const phase: Record<string, string> = { inspect: "状態確認", storage: "データ確認", artifact: "設定確認", recreate: "コンテナ再作成", start: "起動中", stop: "停止中", restart: "再起動中", ready: "利用可能か確認", running: "実行状態を確認", stopped: "停止を確認", absent: "不在を確認", reconcile: "結果の確認が必要", start_required: "起動を選択", done: "完了" };
 const actionLabel: Record<string, string> = { start: "起動", stop: "停止", restart: "再起動", create: "作成", clone: "複製", rename: "名前変更" };
 function failure(error: unknown): string {
   const code = typeof error === "object" && error !== null && "code" in error ? error.code : null;
@@ -100,7 +100,7 @@ function InstanceHeader({ client, instanceId }: { client: ApplicationClient; ins
       <dl className="instance-state"><div><dt>実行状態</dt><dd><span className="badge" data-runtime={view?.runtimeStatus}>{runtime[view?.runtimeStatus ?? "unknown"] ?? "未確認"}</span></dd></div>
         <div><dt>直前の処理</dt><dd aria-live="polite">{view?.operationId ? `${actionLabel[view.operationKind ?? ""] ?? "処理"} · ${operation[view.operationStatus ?? ""] ?? "未確認"}` : "なし"}</dd></div>
         <div><dt>版</dt><dd>{view?.revision ?? "未確認"}</dd></div></dl>
-      {view?.operationId && <p className="operation-link">処理ID: <code>{view.operationId}</code> · 段階: {phase[view.operationPhase ?? ""] ?? "確認中"}</p>}
+      {view?.operationId && <p className="operation-link">処理ID: <code>{view.operationId}</code> · 段階: {operationPhaseLabel(view.operationPhase)}</p>}
       <button className="btn small" disabled={busy} onClick={() => void refresh()}>{uncertain ? "受付を再確認" : "現在の状態を再確認"}</button>
     </section>
 

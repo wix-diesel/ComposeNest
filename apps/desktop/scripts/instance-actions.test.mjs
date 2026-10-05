@@ -100,11 +100,14 @@ try {
   assert.equal(await page.locator(".badge").textContent(), "利用可能");
 
   for (const [mode, text] of [["duplicate", "同じ環境名が使用されています。別の名前を入力してください。"], ["stale", "環境が更新されています。現在の状態を再確認し、変更内容を確認し直してください。"]]) {
-    await open(true); await page.evaluate((mode) => { window.mode = mode; }, mode); await rename();
+    await open(true); await page.locator("#edit-port-db").fill("15435"); await page.evaluate((mode) => { window.mode = mode; }, mode); await rename();
     await page.getByText(text, { exact: true }).waitFor();
-    assert.equal(await page.locator("#edit-name").isDisabled(), true);
+    assert.equal(await page.locator("#edit-name").isDisabled(), mode === "stale");
+    assert.equal(await page.locator("#edit-port-db").inputValue(), "15435");
     await page.getByRole("button", { name: "現在の状態を再確認", exact: true }).click();
-    assert.equal(await page.locator("#edit-name").inputValue(), "開発用データベース");
+    await page.waitForFunction(() => !document.querySelector("#edit-name").disabled);
+    assert.equal(await page.locator("#edit-name").inputValue(), "変更した名前", "refresh preserves the unaccepted draft");
+    assert.equal(await page.locator("#edit-port-db").inputValue(), "15435");
   }
   for (const action of ["停止", "再起動"]) {
     await open();
@@ -143,14 +146,32 @@ try {
   await confirmPorts(); await page.evaluate(() => { window.mode = "port_conflict"; }); await applyPorts();
   await page.getByText("新しいポートを利用できません。ポートとDockerの接続を確認してください。", { exact: true }).waitFor();
   assert.equal(await page.getByText("環境名を変更しました。", { exact: true }).count(), 1, "rename success is separate from the port failure");
+  assert.equal(await page.locator("#edit-port-db").isDisabled(), false, "a definitive conflict leaves the draft editable");
+  assert.equal(await page.locator("#edit-port-db").inputValue(), "15433");
+  await page.locator("#edit-name").fill("未送信の名前");
+  await page.getByRole("button", { name: "現在の状態を再確認", exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector("#edit-name").disabled);
+  assert.equal(await page.locator("#edit-name").inputValue(), "未送信の名前");
+  assert.equal(await page.locator("#edit-port-db").inputValue(), "15433", "refresh preserves both independent drafts");
   const separate = (await calls("edit_instance_ports"))[0].request;
   assert.equal(separate.expectedRevision, 4); assert.equal(separate.expectedSpecRevision, 1);
   assert.deepEqual(separate.ports, { db: 15433, metrics: 19000 }); assert.equal("name" in separate, false);
+  await confirmPorts("15434"); await page.evaluate(() => { window.mode = "normal"; }); await applyPorts();
+  await page.getByText("ポート変更: 受付済み・未適用。", { exact: true }).waitFor();
+  const corrected = (await calls("edit_instance_ports"))[1].request;
+  assert.equal(corrected.ports.db, 15434);
+  assert.notEqual(corrected.context.requestId, separate.context.requestId);
+  assert.equal(await page.locator(".operation-link").textContent(), "処理ID: port-operation · コンテナ再作成");
+  await page.evaluate(() => { window.view.operationPhase = "future_phase"; });
+  await page.waitForFunction(() => document.querySelector(".operation-link").textContent.endsWith("確認中"));
+
 
   await open(true); await confirmPorts();
   await page.evaluate(() => { window.mode = "fresh_running"; }); await applyPorts();
   await page.getByText("停止またはコンテナ不在を新しく確認できなかったため、ポート変更は受け付けていません。", { exact: true }).waitFor();
   assert.equal((await calls("edit_instance_ports")).length, 0, "fresh running state blocks sending the request");
+  assert.equal(await page.locator("#edit-name").isDisabled(), false);
+  assert.equal(await page.locator("#edit-port-db").isDisabled(), true);
   await open(true); await page.evaluate(() => { window.view.runtimeStatus = "unknown"; });
   await page.waitForFunction(() => document.querySelector("#edit-port-db").disabled);
   assert.equal(await page.locator("#edit-name").isDisabled(), false, "unknown runtime does not prohibit independent rename");
@@ -160,6 +181,7 @@ try {
   await confirmPorts(); await page.evaluate(() => { window.mode = "delay"; });
   await page.getByRole("button", { name: "ポート変更を適用", exact: true }).evaluate((button) => { button.click(); button.click(); });
   await page.waitForFunction(() => typeof window.finishChange === "function");
+  await page.getByText("変更の開始準備中です。", { exact: true }).waitFor();
   assert.equal((await calls("edit_instance_ports")).length, 1);
   assert.equal(await page.locator("#edit-name").isDisabled(), true);
   await page.evaluate(() => window.finishChange());

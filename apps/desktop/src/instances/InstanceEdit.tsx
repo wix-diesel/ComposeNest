@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { InstanceEditView } from "../generated/template-form";
 import type { ApplicationClient } from "../ipc/ApplicationClient";
+import { operationPhaseLabel } from "./operationPhase";
 import { ConfirmDialog } from "../shell/ConfirmDialog";
 import "../templates/template-form.css";
 import "./instance-actions.css";
@@ -81,6 +82,7 @@ export function InstanceEdit({ client, instanceId }: { client: ApplicationClient
     try {
       // Re-read immediately before sending. Core also performs a fresh Docker observation.
       const fresh = await client.getInstanceEdit(instanceId);
+      if (mounted.current) setView(fresh);
       if (fresh.state.revision !== revision.current || fresh.specRevision !== specRevision.current) throw { code: "INSTANCE_STALE" };
       if (kind === "ports" && (!fresh.canEditPorts || !["stopped", "absent"].includes(fresh.state.runtimeStatus))) throw { code: "PORT_EDIT_REJECTED" };
       const state = kind === "rename"
@@ -93,24 +95,31 @@ export function InstanceEdit({ client, instanceId }: { client: ApplicationClient
       const current = await client.getInstanceEdit(instanceId);
       if (!mounted.current) return;
       setView(current); specRevision.current = current.specRevision; setStale(false);
-      if (kind === "ports") setPorts(Object.fromEntries(current.ports.map((port) => [port.slot, String(port.committedPort)])));
+      if (kind === "ports" && current.state.operationStatus === "Succeeded") setPorts(Object.fromEntries(current.ports.map((port) => [port.slot, String(port.committedPort)])));
     } catch (error) {
-      if (mounted.current) { setMessage(failure(error, kind)); setUncertain(client.hasInstanceChange(instanceId)); setStale(!client.hasInstanceChange(instanceId)); }
+      if (mounted.current) { setMessage(failure(error, kind)); setUncertain(client.hasInstanceChange(instanceId)); setStale(typeof error === "object" && error !== null && "code" in error && error.code === "INSTANCE_STALE"); }
     } finally { gate.current = false; if (mounted.current) setBusy(false); }
   }
   async function refresh() {
     if (gate.current) return;
     gate.current = true; epoch.current++; setBusy(true);
     try {
+      const pendingName = client.getPendingInstanceName(instanceId);
+      const pendingPorts = client.getPendingInstancePorts(instanceId);
       if (client.hasInstanceChange(instanceId)) await client.retryInstanceChange(instanceId);
       const current = await client.getInstanceEdit(instanceId);
       if (!mounted.current) return;
-      setView(current); drafts(current); setStale(false); setUncertain(false); setMessage(null);
+      setView(current); revision.current = current.state.revision; specRevision.current = current.specRevision;
+      // Rebase local drafts for a new confirmation; only replace a confirmed request's field.
+      if (pendingName !== null) setName(current.state.name);
+      if (pendingPorts !== null && current.state.operationStatus === "Succeeded") setPorts(Object.fromEntries(current.ports.map((port) => [port.slot, String(port.committedPort)])));
+      setStale(false); setUncertain(false); setMessage(null);
     } catch (error) { if (mounted.current) { setMessage(failure(error, null)); setUncertain(client.hasInstanceChange(instanceId)); } }
     finally { gate.current = false; if (mounted.current) setBusy(false); }
   }
   return <div className="instance-actions template-form instance-edit">
     <h2>{view?.state.name ?? "環境を確認中"}</h2>
+    {busy && <p role="status">変更の開始準備中です。</p>}
     {message && <p role="alert" className="notice">{message}</p>}
     {uncertain && <p className="notice">受付結果の確認が必要です。別の変更は実行できません。</p>}
     {stale && <p className="notice">表示していた版が古くなりました。現在の状態を再確認してください。</p>}
@@ -139,7 +148,7 @@ export function InstanceEdit({ client, instanceId }: { client: ApplicationClient
       <div><dt>構成の適用版</dt><dd>{view ? `保存 r${view.specRevision} / 適用 ${view.appliedSpecRevision === null ? "未確認" : `r${view.appliedSpecRevision}`}` : "未確認"}</dd></div>
       <div><dt>外部構成の照合</dt><dd>適用時に再確認</dd></div>
       <div><dt>直前の処理</dt><dd>{view?.state.operationId ? operation[view.state.operationStatus ?? ""] ?? "未確認" : "なし"}</dd></div>
-    </dl>{view?.state.operationId && <p className="operation-link">処理ID: <code>{view.state.operationId}</code> · {view.state.operationPhase}</p>}
+    </dl>{view?.state.operationId && <p className="operation-link">処理ID: <code>{view.state.operationId}</code> · {operationPhaseLabel(view.state.operationPhase)}</p>}
       <button className="btn small" disabled={busy} onClick={() => void refresh()}>{uncertain ? "受付を再確認" : "現在の状態を再確認"}</button>
     </section><section className="panel"><h2>ポート割当て</h2>{view?.ports.map((port) => <dl className="summary-list" key={port.slot}><div><dt>{port.slot} · 確定ポート</dt><dd>{port.committedPort}</dd></div><div><dt>元のポート / 予約</dt><dd>{port.oldPort} · {reservation[port.oldReservation] ?? "未確認"}</dd></div>{port.candidatePort !== null && <div><dt>変更候補 / 予約</dt><dd>{port.candidatePort} · {reservation[port.candidateReservation ?? "unknown"] ?? "未確認"}</dd></div>}</dl>)}</section>
       <div className="notice"><strong>ポート割当ては停止中も保持</strong><p>変更の適用を確認するまでは元の予約も保持します。途中失敗・結果不明の間は旧新予約を保持し、別の変更は実行できません。</p></div>

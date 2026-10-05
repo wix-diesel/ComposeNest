@@ -4,13 +4,13 @@ use composenest_application::{
     instance_actions::InstanceActionView,
     instance_edit::{EditInstancePortsRequest, EditPortView, EditSettingView, InstanceEditView},
     operation_journal::{OperationJournal, RequestReceipt},
-    operation_runner::OperationRunner,
+    operation_runner::{OperationReservation, OperationRunner},
     port_edit::PortEditRequest,
     state_store::{PortAllocation, StoreConflict},
 };
 use rusqlite::{OptionalExtension, params};
 use sha2::{Digest, Sha256};
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 
 /// Reads settings and reservations in one database snapshot, without exposing secrets or paths.
 pub fn view_instance_edit(
@@ -150,6 +150,56 @@ fn candidate(
         old_spec_revision: request.expected_spec_revision,
         ports,
     })
+}
+
+/// Work and reserved capacity transferred once to the detached port worker.
+pub struct AcceptedPortEdit {
+    /// Complete durably accepted candidate and receipt.
+    pub request: PortEditRequest,
+    /// Capacity held until external application has finished.
+    pub reservation: OperationReservation,
+}
+
+/// Returns known acceptance without another worker, or accepts a fresh stopped edit.
+/// Capacity is reserved before fresh external checks and held across the worker handoff.
+pub async fn accept_instance_ports(
+    database: &DatabaseWorker,
+    probe: Option<&crate::docker_target::DockerProbe>,
+    management_root: &Path,
+    runner: &Arc<OperationRunner>,
+    scope: &str,
+    request: &EditInstancePortsRequest,
+) -> Result<Option<AcceptedPortEdit>, crate::port_edit_stages::PortEditError> {
+    use crate::port_edit_stages::{PortEditError, accept_port_edit};
+    if prior(database, scope, request).map_err(PortEditError::Store)? {
+        return Ok(None);
+    }
+    let reservation = runner.reserve().map_err(PortEditError::Runner)?;
+    let accepted = async {
+        let view = view_instance_edit(database, scope, &request.instance_id)
+            .map_err(PortEditError::Store)?;
+        let candidate = candidate(&view, scope, request).map_err(PortEditError::Store)?;
+        let probe = probe.ok_or(PortEditError::Rejected)?;
+        let receipt = accept_port_edit(database, probe, management_root, &candidate).await?;
+        // Only the invocation whose generated operation ID was persisted launches a worker.
+        Ok::<_, PortEditError>(
+            (receipt.operation_id == candidate.receipt.operation_id).then_some(candidate),
+        )
+    }
+    .await;
+    match accepted {
+        Ok(Some(request)) => Ok(Some(AcceptedPortEdit {
+            request,
+            reservation,
+        })),
+        Ok(None) => Ok(None),
+        Err(error) => {
+            if prior(database, scope, request).map_err(PortEditError::Store)? {
+                return Ok(None);
+            }
+            Err(error)
+        }
+    }
 }
 
 /// Looks up prior acceptance before taking capacity, then rechecks under the instance gate.

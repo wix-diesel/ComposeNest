@@ -1,8 +1,8 @@
 //! Local-only edit transport; external work survives a screen leaving the request.
 use crate::create_commands::CreateBackend;
 use composenest_adapters::{
-    instance_edit::{apply_instance_ports, view_instance_edit},
-    port_edit_stages::PortEditError,
+    instance_edit::{AcceptedPortEdit, accept_instance_ports, view_instance_edit},
+    port_edit_stages::{PortEditError, run_accepted_port_edit_reserved},
 };
 use composenest_application::{
     ErrorDto, RequestContext, ResponseEnvelope, Retryability,
@@ -79,7 +79,36 @@ pub async fn get_instance_edit(
     ))
 }
 
-/// Applies only host-port changes after fresh stopped/absent inspection; never starts containers.
+fn execute(backend: Arc<CreateBackend>, work: AcceptedPortEdit) {
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| PortEditError::OutcomeUnknown)
+            .and_then(|runtime| {
+                let probe = backend
+                    .probe
+                    .as_ref()
+                    .ok_or(PortEditError::OutcomeUnknown)?;
+                runtime.block_on(run_accepted_port_edit_reserved(
+                    &backend.database,
+                    probe,
+                    backend.database.management_root(),
+                    &backend.runner,
+                    &work.request,
+                    work.reservation,
+                ))
+            });
+        if result.is_err() {
+            let _ = backend.database.write(move |db| {
+                db.execute("UPDATE operations SET status='OutcomeUnknown', phase='reconcile' WHERE id=?1 AND status IN ('Accepted','Executing')", [&work.request.receipt.operation_id])?;
+                Ok(())
+            });
+        }
+    });
+}
+
+/// Returns durable acceptance before applying ports in a detached worker; never starts containers.
 #[tauri::command]
 pub async fn edit_instance_ports(
     request: EditInstancePortsRequest,
@@ -98,14 +127,20 @@ pub async fn edit_instance_ports(
             .enable_all()
             .build()
             .map_err(|_| PortEditError::OutcomeUnknown)?;
-        runtime.block_on(apply_instance_ports(
+        let work = runtime.block_on(accept_instance_ports(
             &backend.database,
             backend.probe.as_ref(),
             backend.database.management_root(),
             &backend.runner,
             &backend.scope,
             &request,
-        ))
+        ))?;
+        // Launch from this surviving task before replying, even if the caller has left the screen.
+        if let Some(work) = work {
+            execute(Arc::clone(&backend), work);
+        }
+        view_instance_edit(&backend.database, &backend.scope, &request.instance_id)
+            .map_err(PortEditError::Store)
     })
     .await
     .unwrap_or(Err(PortEditError::OutcomeUnknown));

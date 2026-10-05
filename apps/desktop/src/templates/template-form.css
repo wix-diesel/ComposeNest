@@ -33,7 +33,7 @@
 .clone-diff { max-width: 100%; overflow-x: auto; }
 .clone-diff table { border-collapse: collapse; width: 100%; min-width: 660px; font-size: 12px; }
 .clone-diff th, .clone-diff td { padding: 14px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; overflow-wrap: anywhere; }
-.clone-diff thead { background: var(--form-soft, #f3f7f2); }
+.clone-diff thead { background: var(--notice-bg); }
 .clone-diff th:first-child { width: 15%; }
 .clone-diff td:nth-child(2) { width: 16%; }
 .clone-diff td:nth-child(3) { width: 42%; }

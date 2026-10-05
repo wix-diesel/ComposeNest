@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import type { InstanceActionView } from "../generated/template-form";
 import type { ApplicationClient } from "../ipc/ApplicationClient";
-import { ConfirmDialog } from "../shell/ConfirmDialog";
+import { operationPhaseLabel } from "./operationPhase";
+import { InstanceEdit } from "./InstanceEdit";
 import "./instance-actions.css";
 
 const runtime: Record<string, string> = { ready: "利用可能", stopped: "停止中", absent: "コンテナ不在", preparing: "準備中", unhealthy: "異常", unknown: "未確認" };
 const operation: Record<string, string> = { Accepted: "受付済み", Executing: "実行中", Succeeded: "完了", Failed: "失敗・未解決", OutcomeUnknown: "結果不明", AwaitingDecision: "判断待ち", Abandoned: "解決済み" };
-const phase: Record<string, string> = { inspect: "状態確認", storage: "データ確認", artifact: "設定確認", recreate: "コンテナ再作成", start: "起動中", stop: "停止中", restart: "再起動中", ready: "利用可能か確認", running: "実行状態を確認", stopped: "停止を確認", absent: "不在を確認", reconcile: "結果の確認が必要", start_required: "起動を選択", done: "完了" };
 const actionLabel: Record<string, string> = { start: "起動", stop: "停止", restart: "再起動", create: "作成", clone: "複製", rename: "名前変更" };
 function failure(error: unknown): string {
   const code = typeof error === "object" && error !== null && "code" in error ? error.code : null;
@@ -21,15 +21,17 @@ function failure(error: unknown): string {
   }
 }
 
-/** Mock-aligned header actions and a separate name-only editor using committed Core state. */
+/** Routes edit requests to the stopped-port editor and retains the detail header actions. */
 export function InstanceActions({ client, instanceId, edit = false }: { client: ApplicationClient; instanceId: string; edit?: boolean }) {
+  return edit ? <InstanceEdit client={client} instanceId={instanceId} /> : <InstanceHeader client={client} instanceId={instanceId} />;
+}
+
+function InstanceHeader({ client, instanceId }: { client: ApplicationClient; instanceId: string }) {
   const [view, setView] = useState<InstanceActionView | null>(null);
-  const [name, setName] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [uncertain, setUncertain] = useState(client.hasInstanceChange(instanceId));
   const [stale, setStale] = useState(false);
-  const [confirm, setConfirm] = useState<"rename" | null>(null);
   const gate = useRef(false);
   const epoch = useRef(0);
   const mounted = useRef(false);
@@ -46,7 +48,7 @@ export function InstanceActions({ client, instanceId, edit = false }: { client: 
         if (!active) return;
         if (readingEpoch !== epoch.current || gate.current) { timer = setTimeout(read, 1000); return; }
         setView(current);
-        if (draftRevision.current === null) { draftRevision.current = current.revision; setName(client.getPendingInstanceName(instanceId) ?? current.name); }
+        if (draftRevision.current === null) draftRevision.current = current.revision;
         else if (current.revision !== draftRevision.current) setStale(true);
       } catch (error) { if (active && readingEpoch === epoch.current && !gate.current) { setMessage(failure(error)); setView(null); } }
       if (active) timer = setTimeout(read, 1000);
@@ -59,12 +61,9 @@ export function InstanceActions({ client, instanceId, edit = false }: { client: 
     if (gate.current || !view || client.hasInstanceChange(instanceId) || stale) return;
     gate.current = true; epoch.current++; setBusy(true); setMessage(null);
     try {
-      const current = action === "rename"
-        ? await client.renameInstance(instanceId, draftRevision.current ?? view.revision, name)
-        : await client.changeInstance(instanceId, view.revision, action);
+      const current = await client.changeInstance(instanceId, view.revision, action);
       if (!mounted.current) return;
       setView(current); draftRevision.current = current.revision; setStale(false);
-      if (action === "rename") { setName(current.name); setMessage("環境名を変更しました。"); }
     } catch (error) {
       if (mounted.current) { setMessage(failure(error)); setUncertain(client.hasInstanceChange(instanceId)); setStale(!client.hasInstanceChange(instanceId)); }
     } finally { gate.current = false; if (mounted.current) setBusy(false); }
@@ -75,7 +74,7 @@ export function InstanceActions({ client, instanceId, edit = false }: { client: 
     try {
       const current = await client.retryInstanceChange(instanceId);
       if (!mounted.current) return;
-      setView(current); draftRevision.current = current.revision; setName(current.name);
+      setView(current); draftRevision.current = current.revision;
       setStale(false); setUncertain(false); setMessage(null);
     } catch (error) { if (mounted.current) { setMessage(failure(error)); setUncertain(client.hasInstanceChange(instanceId)); } }
     finally { gate.current = false; if (mounted.current) setBusy(false); }
@@ -85,12 +84,12 @@ export function InstanceActions({ client, instanceId, edit = false }: { client: 
   const unresolved = view?.operationStatus !== null && view?.operationStatus !== undefined && !["Succeeded", "Abandoned"].includes(view.operationStatus);
   return <div className="instance-actions">
     <div className="page-heading"><div><h2>{view?.name ?? "環境を確認中"}</h2></div>
-      {!edit && <div className="actions">
+      <div className="actions">
         <button className="btn" disabled={locked || unresolved} onClick={() => client.navigate({ page: "instance-clone", instanceId })}>設定を複製</button>
         <button className="btn" disabled={!available("rename")} onClick={() => client.navigate({ page: "instance-edit", instanceId })}>編集</button>
         <button className="btn" disabled={!available(view?.actions.includes("start") ? "start" : "stop")} onClick={() => void submit(view?.actions.includes("start") ? "start" : "stop")}>{view?.actions.includes("start") ? "起動" : "停止"}</button>
         <button className="btn" disabled={!available("restart")} onClick={() => void submit("restart")}>再起動</button>
-      </div>}
+      </div>
     </div>
     {message && <p role="alert" className="notice">{message}</p>}
     {(uncertain || client.hasInstanceChange(instanceId)) && <p className="notice">受付結果の確認が必要です。別の変更は実行できません。</p>}
@@ -101,14 +100,9 @@ export function InstanceActions({ client, instanceId, edit = false }: { client: 
       <dl className="instance-state"><div><dt>実行状態</dt><dd><span className="badge" data-runtime={view?.runtimeStatus}>{runtime[view?.runtimeStatus ?? "unknown"] ?? "未確認"}</span></dd></div>
         <div><dt>直前の処理</dt><dd aria-live="polite">{view?.operationId ? `${actionLabel[view.operationKind ?? ""] ?? "処理"} · ${operation[view.operationStatus ?? ""] ?? "未確認"}` : "なし"}</dd></div>
         <div><dt>版</dt><dd>{view?.revision ?? "未確認"}</dd></div></dl>
-      {view?.operationId && <p className="operation-link">処理ID: <code>{view.operationId}</code> · 段階: {phase[view.operationPhase ?? ""] ?? "確認中"}</p>}
+      {view?.operationId && <p className="operation-link">処理ID: <code>{view.operationId}</code> · 段階: {operationPhaseLabel(view.operationPhase)}</p>}
       <button className="btn small" disabled={busy} onClick={() => void refresh()}>{uncertain ? "受付を再確認" : "現在の状態を再確認"}</button>
     </section>
-    {edit && <form onSubmit={(event) => { event.preventDefault(); if (available("rename")) setConfirm("rename"); }}><section className="panel">
-      <h2>変更できる設定</h2><div className="field"><label htmlFor="edit-name">環境名</label><input id="edit-name" required value={name} disabled={!available("rename")} onChange={(event) => setName(event.target.value)} /></div>
-      <p className="subtitle">環境名だけを変更します。実行中でも変更でき、接続ポートやコンテナには影響しません。</p>
-      <div className="actions"><button className="btn primary" disabled={!available("rename") || name.trim() === "" || name === view?.name}>変更内容を確認</button></div>
-    </section></form>}
-    {confirm && <ConfirmDialog title="環境名の変更を確認" onClose={() => setConfirm(null)} onConfirm={() => void submit("rename")} confirmLabel="名前変更を適用" confirmDisabled={!available("rename")}><p>{view?.name} → {name}</p><p>接続ポートと実行状態は変更しません。</p></ConfirmDialog>}
+
   </div>;
 }

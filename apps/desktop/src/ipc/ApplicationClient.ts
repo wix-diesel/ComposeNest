@@ -1,4 +1,5 @@
 import type { ChangeInstanceRequest, InstanceActionView, RenameInstanceRequest } from "../generated/template-form";
+import type { EditInstancePortsRequest, InstanceEditView } from "../generated/template-form";
 import type { CloneEdit, ClonePlanView, ConfirmCloneRequest, ConfirmCreateRequest, CreatePlanView, CreateReceipt, PlanEdit } from "../generated/template-form";
 import { invoke } from "@tauri-apps/api/core";
 import { parseRoute, routeHash, type AppRoute } from "../navigation";
@@ -93,7 +94,21 @@ export class ApplicationClient {
     return this.createCall("discard_clone_plan", { context: this.context(), planId } as import("../generated/template-form").CreatePlanRequest);
   }
 
-  private instanceChanges = new Map<string, { command: string; request: ChangeInstanceRequest | RenameInstanceRequest; readBack?: boolean; promise?: Promise<InstanceActionView> }>();
+  private instanceChanges = new Map<string, { command: string; request: ChangeInstanceRequest | RenameInstanceRequest | EditInstancePortsRequest; readBack?: boolean; promise?: Promise<InstanceActionView> }>();
+
+  /** Reads immutable masked settings and durable old/candidate reservations. */
+  getInstanceEdit(instanceId: string): Promise<InstanceEditView> {
+    return this.createCall("get_instance_edit", { context: this.context(), instanceId } as import("../generated/template-form").InstanceActionRequest);
+  }
+  /** Restores an uncertain port draft across navigation without creating another request. */
+  getPendingInstancePorts(instanceId: string): Record<string, number> | null {
+    const request = this.instanceChanges.get(instanceId)?.request;
+    return request && "ports" in request ? { ...request.ports } : null;
+  }
+  /** Changes ports separately from the display name with a stable request identity. */
+  editInstancePorts(instanceId: string, expectedRevision: number, expectedSpecRevision: number, ports: Record<string, number>): Promise<InstanceActionView> {
+    return this.beginInstanceChange("edit_instance_ports", { context: this.context(), instanceId, expectedRevision, expectedSpecRevision, ports: { ...ports } });
+  }
 
   /** Reads committed state and available actions without optimistic status changes. */
   getInstanceActions(instanceId: string): Promise<InstanceActionView> {
@@ -132,11 +147,13 @@ export class ApplicationClient {
     const pending = this.instanceChanges.get(instanceId);
     if (!pending) return this.getInstanceActions(instanceId);
     if (pending.promise) return pending.promise;
-    const call = pending.readBack && "name" in pending.request
-      ? this.reconcileRename(pending.request) : this.createCall<InstanceActionView>(pending.command, pending.request);
+    const call = pending.command === "edit_instance_ports"
+      ? this.createCall<InstanceEditView>(pending.command, pending.request).then((view) => view.state)
+      : pending.readBack && "name" in pending.request
+        ? this.reconcileRename(pending.request) : this.createCall<InstanceActionView>(pending.command, pending.request);
     pending.promise = call.then((view) => { this.instanceChanges.delete(instanceId); return view; }).catch((error: unknown) => {
       const code = typeof error === "object" && error !== null && "code" in error ? error.code : null;
-      if (["NAME_OR_REQUEST_CONFLICT", "INSTANCE_STALE", "INSTANCE_MISSING", "INSTANCE_INPUT_INVALID", "INSTANCE_ACTION_UNAVAILABLE"].includes(String(code)))
+      if (["NAME_OR_REQUEST_CONFLICT", "INSTANCE_STALE", "INSTANCE_MISSING", "INSTANCE_INPUT_INVALID", "INSTANCE_ACTION_UNAVAILABLE", "PORT_EDIT_REJECTED", "PORT_EDIT_CONFLICT", "PORT_EDIT_NOT_ACCEPTED"].includes(String(code)))
         this.instanceChanges.delete(instanceId);
       else if (pending.command === "rename_instance") pending.readBack = true;
       throw error;
@@ -146,7 +163,7 @@ export class ApplicationClient {
   /** Reconciles the original request and releases a rename only after its name/version agree. */
   retryInstanceChange(instanceId: string): Promise<InstanceActionView> { return this.sendInstanceChange(instanceId); }
 
-  private beginInstanceChange(command: string, request: ChangeInstanceRequest | RenameInstanceRequest): Promise<InstanceActionView> {
+  private beginInstanceChange(command: string, request: ChangeInstanceRequest | RenameInstanceRequest | EditInstancePortsRequest): Promise<InstanceActionView> {
     if (this.hasInstanceChange(request.instanceId)) return Promise.reject(new Error("instance_change_pending"));
     this.instanceChanges.set(request.instanceId, { command, request });
     return this.sendInstanceChange(request.instanceId);

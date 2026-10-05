@@ -1,4 +1,6 @@
-/* Common light shell from ui-mockups/assets/styles.css; themes belong to issue #58. */
+@import "./appearance.css";
+
+/* Shared shell spacing and typography follow ui-mockups/assets/styles.css. */
 :root {
   font-family: Inter, "Segoe UI", "Yu Gothic UI", Meiryo, sans-serif;
   color: #25362f; background: #f6f8f6; font-size: 14px; line-height: 1.6;
@@ -7,10 +9,11 @@
 * { box-sizing: border-box; }
 body { margin: 0; }
 button { font: inherit; color: inherit; cursor: pointer; }
-button:focus-visible, a:focus-visible { outline: 2px solid var(--green); outline-offset: 4px; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--green); outline-offset: 4px; }
 button:hover:not(:disabled) { filter: brightness(.97); }
-h1, h2, p { margin: 0; }
+h1, h2, h3, p { margin: 0; }
 h1 { font-size: 28px; letter-spacing: -1px; font-weight: 650; }
+h3 { font-size: 15px; }
 h2 { font-size: 17px; font-weight: 650; }
 p { color: #748077; }
 small { color: var(--muted); }

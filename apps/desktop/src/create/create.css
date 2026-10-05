@@ -8,5 +8,3 @@
 .create-summary dd { margin: 0; text-align: right; overflow-wrap: anywhere; min-width: 0; }
 .create-consent { display: flex; align-items: start; gap: 10px; font-size: 12px; margin-top: 20px; }
 .create-consent input { margin-top: 4px; accent-color: var(--green); }
-[data-theme="dark"] .create-screen { color: #e1e9e4; --green: #84cba2; --muted: #a5b5ab; --line: #435b4b; }
-[data-theme="dark"] .dialog { background: #1e2a23; color: #e1e9e4; --line: #435b4b; }

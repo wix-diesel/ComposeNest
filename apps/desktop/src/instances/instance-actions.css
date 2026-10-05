@@ -4,18 +4,13 @@
 .instance-state { display: flex; flex-wrap: wrap; gap: 24px; margin: 0 0 20px; font-size: 12px; }
 .instance-state dt { color: var(--muted); margin-bottom: 8px; }
 .instance-state dd { margin: 0; }
-.instance-actions .badge { display: inline-block; padding: 5px 9px; border-radius: 20px; background: #eef1eb; }
-.instance-actions .badge[data-runtime="ready"] { background: #dfeadd; color: #276b49; }
+.instance-actions .badge { display: inline-block; padding: 5px 9px; border-radius: 20px; background: var(--soft); }
+.instance-actions .badge[data-runtime="ready"] { background: var(--active-bg); color: var(--active-text); }
 .instance-actions .operation-link, .instance-actions h2 { overflow-wrap: anywhere; }
 .instance-actions .operation-link { font-size: 11px; margin-bottom: 16px; }
 .instance-actions .field { display: grid; gap: 8px; margin: 20px 0; font-size: 12px; }
-.instance-actions input { width: 100%; min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 7px; font: inherit; }
+.instance-actions input { width: 100%; min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 7px; font: inherit; background: var(--input-bg); color: var(--text); }
 .instance-actions form .actions { justify-content: flex-end; margin-top: 20px; }
-[data-theme="dark"] .instance-actions { color: #e1e9e4; --muted: #a5b5ab; --line: #435b4b; }
-[data-theme="dark"] .instance-actions .panel, [data-theme="dark"] .instance-actions input, [data-theme="dark"] .instance-actions .btn { background: #1e2a23; color: #e1e9e4; }
-[data-theme="dark"] .instance-actions { background: #1e2a23; padding: 20px; border-radius: 10px; }
-[data-theme="dark"] .instance-actions .badge { background: #435b4b; color: #e1e9e4; }
-[data-theme="dark"] .instance-actions .badge[data-runtime="ready"] { background: #294f39; color: #a8e0bd; }
 .instance-actions p { color: var(--muted); }
 .instance-edit h2 { margin-bottom: 18px; }
 .instance-edit .summary-list { font-size: 12px; }

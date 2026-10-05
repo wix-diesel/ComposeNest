@@ -26,4 +26,8 @@ export const ja = {
   retry: "再確認", cancel: "キャンセル", close: "閉じる", confirm: "確認", dismiss: "通知を閉じる",
   target: "対象ID", operationId: "処理ID", templateId: "テンプレートID",
   footer: "ローカル開発を、もっと身近に。", version: "v1", skip: "画面の内容へ移動",
+  theme: "テーマ", light: "ライト", dark: "ダーク", design: "デザイン",
+  listView: "環境一覧の表示形式", cards: "カード", grid: "DataGrid",
+  displayOnly: "テーマと一覧の表示形式を保存します。",
+  displaySaveFailed: "表示設定はこの画面内で適用しました。保存できないため、再起動すると元に戻ります。",
 } as const;

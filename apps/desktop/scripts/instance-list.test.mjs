@@ -27,7 +27,7 @@ try {
       { ...base, id: "stopped", name: "キャッシュ", templateId: "redis", runtimeStatus: "stopped", storageMethod: "volume" },
       { ...base, id: "unknown", name: "未確認の環境", templateId: "custom", runtimeStatus: "unknown", observation: null },
       { ...base, id: "failed", name: "要確認の環境", templateId: "redis", runtimeStatus: "ready", needsAttention: true },
-    ];
+    ].map((row) => structuredClone(row));
     window.__TAURI_INTERNALS__ = { invoke: async (command, { request }) => {
       const response = (result) => ({ apiVersion: window.mode === "bad-version" && command === "list_instances" ? 2 : 1,
         requestId: (request.context ?? request).requestId, error: null, result });

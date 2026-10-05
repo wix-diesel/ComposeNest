@@ -4,6 +4,17 @@ import { readFile } from "node:fs/promises";
 import { chromium } from "playwright";
 
 const clone = process.argv.includes("--clone");
+function contrastRatio(first, second) {
+  function luminance(color) {
+    const channels = color.match(/\d+/g).slice(0, 3).map((value) => {
+      const channel = Number(value) / 255;
+      return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+    });
+    return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+  }
+  const a = luminance(first), b = luminance(second);
+  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+}
 const fixture = JSON.parse(await readFile("test-results/template-form-plans.json", "utf8"))[clone ? "clone" : "create"];
 const server = spawn(process.execPath, ["node_modules/vite/bin/vite.js", "--host", "127.0.0.1", "--port", "4175", "--strictPort"], { stdio: "pipe" });
 let browser;
@@ -110,9 +121,21 @@ try {
   assert.equal(await page.getByRole("button", { name: "作成・起動を確定" }).isDisabled(), true);
   assert.match(await page.getByRole("dialog").textContent(), /127\.0\.0\.1:12789/);
   assert.doesNotMatch(await page.getByRole("dialog").textContent(), /OnlyUserEnteredSecret/);
-  for (const [theme, width] of [["light", 1280], ["dark", 390]]) {
+  for (const [theme, width] of [["light", 1280], ["light", 390], ["dark", 1280], ["dark", 390]]) {
     await page.setViewportSize({ width, height: 1000 });
     await page.evaluate((theme) => { document.documentElement.dataset.theme = theme; }, theme);
+    if (clone) {
+      const header = page.getByRole("dialog").locator(".clone-diff thead");
+      const palette = await header.evaluate((element) => ({
+        background: getComputedStyle(element).backgroundColor,
+        text: getComputedStyle(element.querySelector("th")).color,
+        insideForm: element.closest(".template-form") !== null,
+      }));
+      assert.equal(palette.insideForm, false, "review must test the table outside the form's variable scope");
+      assert.equal(palette.background, theme === "dark" ? "rgb(38, 59, 44)" : "rgb(243, 247, 242)");
+      assert.equal(await page.locator(".template-form .clone-diff thead").evaluate((element) => getComputedStyle(element).backgroundColor), palette.background);
+      assert.ok(contrastRatio(palette.text, palette.background) >= 4.5, `${theme} review header must remain readable`);
+    }
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     await page.screenshot({ path: `test-results/create-review-${theme}-${width}.png`, fullPage: true });
   }

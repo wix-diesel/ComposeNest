@@ -15,6 +15,8 @@ mod port_commands;
 use port_commands::*;
 mod clone_commands;
 use clone_commands::*;
+mod template_commands;
+use template_commands::*;
 
 /// Returns the non-sensitive state required to initialize the desktop UI.
 #[tauri::command]
@@ -62,10 +64,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 app.path().home_dir()?,
             )?;
             app.manage(Arc::new(backend));
+            app.manage(TemplateBackend {
+                bundled: app
+                    .path()
+                    .resolve("templates", tauri::path::BaseDirectory::Resource)?,
+                results: tokio::sync::Mutex::new(None),
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             get_bootstrap,
+            list_templates,
+            reload_templates,
             list_instances,
             get_instance_actions,
             rename_instance,

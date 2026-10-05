@@ -20,7 +20,8 @@ pub enum TemplateOrigin {
 }
 
 impl TemplateOrigin {
-    fn as_str(self) -> &'static str {
+    /// Returns the application-assigned source label.
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Bundled => "bundled",
             Self::Local => "local",
@@ -57,6 +58,8 @@ pub enum CatalogError {
 /// Outcome for one package, including failures that leave existing revisions intact.
 #[derive(Debug)]
 pub struct CatalogEntry {
+    /// Source assigned by discovery, including failed registrations.
+    pub origin: TemplateOrigin,
     /// Source package name.
     pub package: String,
     /// Registered immutable revision or a package-specific error.
@@ -79,18 +82,24 @@ pub fn register_packages(
             let name = package.name.clone();
             let warnings = package.warnings.clone();
             let identity = package_identity(&package);
-            (name, warnings, identity, prepare_revision(package))
+            (
+                name,
+                warnings,
+                identity,
+                package.origin,
+                prepare_revision(package),
+            )
         })
         .collect();
     let mut counts = HashMap::new();
-    for (_, _, identity, _) in &prepared {
+    for (_, _, identity, _, _) in &prepared {
         if let Some(identity) = identity {
             *counts.entry(identity.clone()).or_insert(0usize) += 1;
         }
     }
     prepared
         .drain(..)
-        .map(|(package, warnings, _, result)| {
+        .map(|(package, warnings, _, origin, result)| {
             let result = result.and_then(|revision| {
                 if counts[&(revision.template_id.clone(), revision.version.clone())] > 1 {
                     return Err(CatalogError::AmbiguousRevision);
@@ -101,6 +110,7 @@ pub fn register_packages(
                 Ok(revision)
             });
             CatalogEntry {
+                origin,
                 package,
                 result,
                 warnings,

@@ -24,6 +24,8 @@ const PACKAGE_LIMIT: usize = 8 * 1024 * 1024;
 /// A package-specific read error; other packages can still be loaded.
 #[derive(Debug)]
 pub struct PackageReadFailure {
+    /// Application-assigned source of the failed package.
+    pub origin: TemplateOrigin,
     /// Immediate package directory name.
     pub package: String,
     /// Safe diagnostic without document contents.
@@ -69,6 +71,7 @@ pub fn reload_catalog(
     for package in packages {
         let Some(manifest_file) = package.files.first() else {
             failures.push(ReloadEntry::Registration(CatalogEntry {
+                origin: package.origin,
                 package: package.name,
                 warnings: package.warnings,
                 result: Err(CatalogError::InvalidPackage("manifest is missing".into())),
@@ -79,6 +82,7 @@ pub fn reload_catalog(
             Ok(manifest) => manifest,
             Err(error) => {
                 failures.push(ReloadEntry::Registration(CatalogEntry {
+                    origin: package.origin,
                     package: package.name,
                     warnings: package.warnings,
                     result: Err(CatalogError::Template(error)),
@@ -88,6 +92,7 @@ pub fn reload_catalog(
         };
         if failed_identities.contains(&(manifest.id, manifest.template_version)) {
             failures.push(ReloadEntry::Registration(CatalogEntry {
+                origin: package.origin,
                 package: package.name,
                 warnings: package.warnings,
                 result: Err(CatalogError::AmbiguousRevision),
@@ -121,6 +126,7 @@ pub fn read_packages(
             Ok(metadata) => metadata,
             Err(error) => {
                 results.push(Err(PackageReadFailure {
+                    origin,
                     package: display,
                     reason: error.to_string(),
                     identity: None,
@@ -133,6 +139,7 @@ pub fn read_packages(
         }
         let result =
             read_package(root, &name, origin).map_err(|(error, identity)| PackageReadFailure {
+                origin,
                 package: display,
                 reason: error.to_string(),
                 identity,
@@ -160,12 +167,15 @@ fn read_package(
     let identity = (manifest.id.clone(), manifest.template_version.clone());
     let mut files = Vec::with_capacity(manifest.versions.len() + 1);
     files.push(manifest_file);
-    for (_, relative) in manifest.versions {
-        files.push(
-            handle
-                .read(&relative, &mut total)
-                .map_err(|error| (error, Some(identity.clone())))?,
-        );
+    for (version, relative) in manifest.versions {
+        files.push(handle.read(&relative, &mut total).map_err(|error| {
+            (
+                invalid(&format!(
+                    "Version {version}: {relative}: $.versions.{version}: {error}"
+                )),
+                Some(identity.clone()),
+            )
+        })?);
     }
     let listed: HashSet<&str> = files
         .iter()

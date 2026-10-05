@@ -21,6 +21,7 @@
   },
   "bundle": {
     "active": false,
+    "resources": { "../../../resources/templates/": "templates/" },
     "icon": ["icons/icon.ico"],
     "macOS": {
       "minimumSystemVersion": "15.0"

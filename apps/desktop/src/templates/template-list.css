@@ -1,0 +1,23 @@
+/* Service cards follow templates.html using the shared theme palette. */
+.template-list { min-width: 0; }
+.template-hero, .template-add { display: flex; gap: 14px; padding: 22px; border-radius: 10px; background: var(--notice-bg); border: 1px solid var(--line); margin-bottom: 24px; }
+.template-hero > svg { color: var(--green); width: 26px; height: 26px; }
+.template-hero p, .template-add p { font-size: 12px; margin-top: 5px; }
+.template-add { margin-top: 24px; }
+.template-add > div { min-width: 0; }
+.template-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; }
+.template-card { padding: 26px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); min-width: 0; overflow-wrap: anywhere; }
+.template-card-top, .template-bottom { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.template-service { width: 46px; height: 46px; background: var(--soft); border-radius: 12px; display: grid; place-items: center; color: var(--green); }
+.template-card h2 { font-size: 22px; margin: 17px 0 7px; }
+.template-card p, .template-results p { font-size: 12px; }
+.template-tags { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0; }
+.template-list .badge { padding: 3px 8px; background: var(--soft); border-radius: 5px; font-size: 10px; }
+.template-list dl { margin: 18px 0; font-size: 12px; }
+.template-list dl > div { display: flex; justify-content: space-between; gap: 16px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.template-list dt { color: var(--muted); }
+.template-list dd { margin: 0; text-align: right; overflow-wrap: anywhere; min-width: 0; }
+.template-bottom { margin-top: 22px; }
+.template-result { border-top: 1px solid var(--line); padding: 12px 0; overflow-wrap: anywhere; }
+.template-results .template-error { color: var(--error); white-space: pre-wrap; }
+@media (max-width: 1000px) { .template-cards { grid-template-columns: minmax(0, 1fr); } }

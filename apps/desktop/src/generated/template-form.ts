@@ -4,6 +4,32 @@ import type { RequestContext } from "./ipc";
 
 export type JsonValue = null | boolean | number | string | Array<JsonValue> | { [key: string]: JsonValue };
 
+export interface TemplateCard {
+  revisionId: string;
+  templateId: string;
+  name: string;
+  description: string;
+  templateVersion: string;
+  versions: Array<string>;
+  storageMethods: Array<StorageMethod>;
+  origin: string;
+  loaded: boolean;
+}
+
+export interface TemplateLoadResult {
+  package: string;
+  origin: string;
+  revisionId: string | null;
+  error: string | null;
+  warnings: Array<string>;
+}
+
+export interface TemplateCatalogView {
+  localRoot: string;
+  templates: Array<TemplateCard>;
+  results: Array<TemplateLoadResult>;
+}
+
 export interface PortView {
   slot: string;
   hostIp: string;

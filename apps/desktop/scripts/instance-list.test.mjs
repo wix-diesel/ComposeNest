@@ -24,9 +24,9 @@ try {
       observation: { runtimeState: "running", health: "healthy", observedAt: "2026-10-05 08:00:00", freshness: "fresh" } };
     window.rows = [
       { ...base, id: "ready & one", name: "開発用データベース", templateId: "postgresql", runtimeStatus: "ready" },
-      { ...base, id: "stopped", name: "キャッシュ", templateId: "redis", runtimeStatus: "stopped", storageMethod: "volume" },
-      { ...base, id: "unknown", name: "未確認の環境", templateId: "custom", runtimeStatus: "unknown", observation: null },
-      { ...base, id: "failed", name: "要確認の環境", templateId: "redis", runtimeStatus: "ready", needsAttention: true },
+      { ...base, id: "stopped", name: "キャッシュ", templateId: "redis", runtimeStatus: "stopped", storageMethod: "volume", ports: [{ hostIp: "127.0.0.1", hostPort: 80 }] },
+      { ...base, id: "unknown", name: "未確認の環境", templateId: "custom", runtimeStatus: "unknown", observation: null, ports: [{ hostIp: "::1", hostPort: 9 }] },
+      { ...base, id: "failed", name: "要確認の環境", templateId: "redis", runtimeStatus: "ready", needsAttention: true, ports: [{ hostIp: "127.0.0.1", hostPort: 10000 }] },
     ].map((row) => structuredClone(row));
     window.__TAURI_INTERNALS__ = { invoke: async (command, { request }) => {
       const response = (result) => ({ apiVersion: window.mode === "bad-version" && command === "list_instances" ? 2 : 1,
@@ -70,6 +70,86 @@ try {
       await page.screenshot({ path: `test-results/instance-list-${theme === "ダーク" ? "dark" : "light"}-${width}.png`, fullPage: true });
     }
   }
+  const gridChoice = page.getByRole("button", { name: "DataGrid", exact: true });
+  const cardChoice = page.getByRole("button", { name: "カード", exact: true });
+  const grid = page.getByRole("table", { name: "環境一覧", exact: true });
+  const rowNames = () => grid.locator("tbody .environment-name").allTextContents();
+  const calls = await page.evaluate(() => window.listCalls);
+  await tabs.getByRole("button", { name: "停止中" }).click(); await search.fill("Redis");
+  await gridChoice.focus(); await page.keyboard.press("Enter");
+  assert.equal(await gridChoice.getAttribute("aria-pressed"), "true");
+  assert.equal(await cardChoice.getAttribute("aria-pressed"), "false");
+  assert.equal(await page.locator(".instance-card").count(), 0);
+  assert.deepEqual(await rowNames(), ["キャッシュ"]);
+  await cardChoice.click(); assert.deepEqual(await page.locator(".instance-card h3").allTextContents(), ["キャッシュ"]);
+  await gridChoice.click(); assert.equal(await search.inputValue(), "Redis");
+  assert.equal(await tabs.getByRole("button", { name: "停止中" }).getAttribute("aria-pressed"), "true");
+  assert.equal(await page.evaluate(() => window.listCalls), calls, "view changes reuse the same snapshot");
+  await search.fill("missing"); await page.getByText("条件に一致する環境はありません。", { exact: true }).waitFor();
+  assert.equal(await grid.count(), 0);
+  await search.fill(""); await tabs.getByRole("button", { name: "すべて" }).click();
+  const nameSort = grid.getByRole("button", { name: "環境名", exact: true });
+  const portSort = grid.getByRole("button", { name: "接続先", exact: true });
+  const stateSort = grid.getByRole("button", { name: "状態", exact: true });
+  const namesAscending = [...await rowNames()].sort((a, b) => a.localeCompare(b, "ja"));
+  await nameSort.focus(); await page.keyboard.press("Enter");
+  assert.deepEqual(await rowNames(), namesAscending);
+  assert.equal(await nameSort.locator("..").getAttribute("aria-sort"), "ascending");
+  await page.keyboard.press("Space"); assert.deepEqual(await rowNames(), [...namesAscending].reverse());
+  assert.equal(await nameSort.locator("..").getAttribute("aria-sort"), "descending");
+  await portSort.click();
+  assert.deepEqual(await rowNames(), ["未確認の環境", "キャッシュ", "開発用データベース", "要確認の環境"]);
+  assert.equal(await nameSort.locator("..").getAttribute("aria-sort"), "none");
+  await portSort.click();
+  assert.deepEqual(await rowNames(), ["要確認の環境", "開発用データベース", "キャッシュ", "未確認の環境"]);
+  for (const direction of ["ascending", "descending"]) {
+    await stateSort.click();
+    const values = await grid.locator("tbody .badge").allTextContents();
+    const ascending = [...values].sort((a, b) => a.localeCompare(b, "ja"));
+    assert.deepEqual(values, direction === "ascending" ? ascending : ascending.reverse());
+    assert.equal(await stateSort.locator("..").getAttribute("aria-sort"), direction);
+    assert.equal(await portSort.locator("..").getAttribute("aria-sort"), "none");
+  }
+  await portSort.click();
+  await cardChoice.click(); await gridChoice.click();
+  assert.equal(await portSort.locator("..").getAttribute("aria-sort"), "ascending");
+  await page.reload();
+  await page.getByText("環境を読み込み中…", { exact: true }).waitFor();
+  await page.evaluate(() => { window.mode = "normal"; window.releaseList(); });
+  await grid.waitFor(); assert.equal(await gridChoice.getAttribute("aria-pressed"), "true");
+  await page.evaluate(() => {
+    window.savedRows = window.rows;
+    window.rows = Array.from({ length: 500 }, (_, index) => ({ ...window.savedRows[0], id: `row-${index}`, name: `環境 ${index}` }));
+  });
+  await refresh.click(); await page.getByText("500 / 500 環境", { exact: true }).waitFor();
+  assert.equal(await grid.locator("tbody tr").count(), 500);
+  const region = page.getByRole("region", { name: "環境一覧の表（縦・横スクロール可能）", exact: true });
+  for (const theme of ["ダーク", "ライト"]) {
+    await page.locator(".topbar").getByRole("button", { name: theme, exact: true }).click();
+    for (const width of [1280, 800, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      assert.equal(await region.evaluate((element) => element.scrollHeight > element.clientHeight), true);
+      await page.screenshot({ path: `test-results/instance-grid-${theme === "ダーク" ? "dark" : "light"}-${width}.png`, fullPage: true });
+    }
+  }
+  await region.focus(); await page.keyboard.press("ArrowDown");
+  await page.waitForFunction(() => document.querySelector(".grid-panel").scrollTop > 0);
+  await page.keyboard.press("ArrowRight");
+  await page.waitForFunction(() => document.querySelector(".grid-panel").scrollLeft > 0);
+  await grid.locator("tbody button").last().focus();
+  assert.equal(await grid.locator("tbody button").last().evaluate((element) => document.activeElement === element), true);
+  assert.equal(await region.evaluate((element) => element.scrollTop > element.clientHeight), true);
+  const headerBox = await grid.locator("th").first().boundingBox();
+  const panelBox = await region.boundingBox();
+  assert.ok(Math.abs(headerBox.y - panelBox.y - 1) < 2, "header stays at the top of the scrolled table");
+  await page.evaluate(() => { window.rows = window.savedRows; }); await refresh.click();
+  await page.getByText("4 / 4 環境", { exact: true }).waitFor();
+  await grid.getByRole("button", { name: "開発用データベースの詳細", exact: true }).click();
+  await page.getByRole("heading", { level: 1, name: "環境の詳細", exact: true }).waitFor();
+  assert.match(page.url(), /instanceId=ready\+%26\+one/);
+  await page.getByRole("button", { name: "戻る", exact: true }).click(); await grid.waitFor();
+  await cardChoice.click();
   await page.evaluate(() => { window.rows[0].name = "更新後の環境"; window.rows[0].observation.observedAt = "2026-10-05 09:00:00"; window.rows[0].ports[0].hostPort = 15432; });
   await refresh.click(); await page.getByRole("heading", { name: "更新後の環境", exact: true }).waitFor();
   await page.getByText("最終観測 2026-10-05 09:00:00 UTC", { exact: true }).waitFor();
@@ -80,9 +160,11 @@ try {
   await page.getByRole("button", { name: "戻る", exact: true }).click();
   await page.getByText("4 / 4 環境", { exact: true }).waitFor();
   for (const mode of ["failure", "bad-version"]) {
+    await gridChoice.click();
     await page.evaluate((mode) => { window.mode = mode; }, mode); await refresh.click();
     await page.getByText("環境一覧の取得に失敗しました。更新して再確認してください。", { exact: true }).waitFor();
     assert.equal(await page.locator(".instance-card").count(), 0);
+    assert.equal(await grid.count(), 0);
   }
   await page.evaluate(() => { window.mode = "normal"; window.rows = []; }); await refresh.click();
   await page.getByText("0 / 0 環境", { exact: true }).waitFor();
@@ -90,5 +172,5 @@ try {
   await page.getByRole("button", { name: "環境を作成", exact: true }).click();
   await page.getByRole("heading", { level: 1, name: "テンプレート", exact: true }).waitFor();
   assert.deepEqual(errors, []);
-  console.log("Instance list: loading, counts, search/filter, refresh, timestamps, detail identity, errors/retry, empty state and responsive themes passed.");
+  console.log("Instance list: cards/grid, search/filter, numeric sorting, keyboard/ARIA, reload persistence, 500-row scrolling/sticky headers, responsive themes, detail identity, loading/errors/empty states passed.");
 } finally { await browser?.close(); server.kill(); }

@@ -92,6 +92,13 @@ fn saved_list_and_detail_use_committed_ports_and_mask_secrets() {
     let json = serde_json::to_string(view).unwrap();
     assert!(!json.contains("top-secret"));
     assert!(!json.contains("different-secret"));
+    let card = composenest_application::query_service::InstanceListView::from(view.clone());
+    let card_json = serde_json::to_string(&card).unwrap();
+    assert_eq!(card.ports, view.ports);
+    assert_eq!(card.observation, view.observation);
+    assert!(!card_json.contains("inputs"));
+    assert!(!card_json.contains("top-secret"));
+    assert!(!card_json.contains("projectName"));
 }
 
 #[test]

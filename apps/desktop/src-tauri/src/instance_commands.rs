@@ -2,17 +2,32 @@
 use crate::create_commands::CreateBackend;
 use composenest_adapters::{SystemRandom, lifecycle_stages::run_confirmed_lifecycle_reserved};
 use composenest_application::{
-    ErrorDto, ResponseEnvelope, Retryability,
+    ErrorDto, RequestContext, ResponseEnvelope, Retryability,
     instance_actions::{
         self, ChangeInstanceRequest, InstanceActionRequest, InstanceActionView,
         RenameInstanceRequest,
     },
     operation_journal::OperationJournal,
-    query_service::QueryService,
+    query_service::{InstanceListView, QueryService},
     state_store::StoreConflict,
 };
 use std::sync::Arc;
 use tauri::State;
+
+/// Reloads saved, scoped list data without contacting Docker or changing observations.
+#[tauri::command]
+pub async fn list_instances(
+    request: RequestContext,
+    state: State<'_, Arc<CreateBackend>>,
+) -> Result<ResponseEnvelope<Vec<InstanceListView>>, ()> {
+    if let Err(error) = request.validate() {
+        return Ok(ResponseEnvelope::failure(request.request_id, *error));
+    }
+    let result = QueryService::new(&*state.database)
+        .list_instances(&state.scope)
+        .map(|views| views.into_iter().map(InstanceListView::from).collect());
+    Ok(envelope(request, result))
+}
 
 pub(super) fn envelope<T>(
     context: composenest_application::RequestContext,
@@ -166,6 +181,7 @@ mod tests {
         let mut context: tauri::Context<tauri::Wry> = tauri::generate_context!();
         let authority = context.runtime_authority_mut();
         for command in [
+            "list_instances",
             "get_instance_actions",
             "rename_instance",
             "change_instance",

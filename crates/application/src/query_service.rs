@@ -135,6 +135,52 @@ pub struct InstanceView {
     pub needs_attention: bool,
 }
 
+/// Saved display data shared by instance cards and grids, without input values.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct InstanceListView {
+    /// Stable instance identity used for navigation.
+    pub id: String,
+    /// Validated display name.
+    pub name: String,
+    /// Service identity from the private snapshot.
+    pub template_id: String,
+    /// Committed service version.
+    pub selected_version: String,
+    /// Confirmed endpoints, including stopped instances.
+    pub ports: Vec<PortView>,
+    /// Committed storage method.
+    pub storage_method: String,
+    /// Committed configuration revision.
+    pub spec_revision: u64,
+    /// Last applied configuration revision; this does not prove absence of drift.
+    pub applied_spec_revision: Option<u64>,
+    /// Saved runtime classification, including unknown observations.
+    pub runtime_status: String,
+    /// Core's attention flag across saved state axes.
+    pub needs_attention: bool,
+    /// Original observation time and freshness, never the list retrieval time.
+    pub observation: Option<ObservationView>,
+}
+
+impl From<InstanceView> for InstanceListView {
+    fn from(view: InstanceView) -> Self {
+        Self {
+            id: view.id,
+            name: view.name,
+            template_id: view.template_id,
+            selected_version: view.selected_version,
+            ports: view.ports,
+            storage_method: view.storage_method,
+            spec_revision: view.spec_revision,
+            applied_spec_revision: view.applied_spec_revision,
+            runtime_status: view.runtime_status,
+            needs_attention: view.needs_attention,
+            observation: view.observation,
+        }
+    }
+}
+
 /// Read-only persistence boundary for consistent masked instance views.
 pub trait QueryStore {
     /// Lists active instances in one saved-state view.

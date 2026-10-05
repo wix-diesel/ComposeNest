@@ -66,6 +66,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .invoke_handler(tauri::generate_handler![
             get_bootstrap,
+            list_instances,
             get_instance_actions,
             rename_instance,
             change_instance,

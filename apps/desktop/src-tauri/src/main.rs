@@ -19,6 +19,8 @@ mod template_commands;
 use template_commands::*;
 mod diagnostic_commands;
 use diagnostic_commands::*;
+mod settings_commands;
+use settings_commands::*;
 
 /// Returns the non-sensitive state required to initialize the desktop UI.
 #[tauri::command]
@@ -76,6 +78,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .invoke_handler(tauri::generate_handler![
             get_bootstrap,
+            get_settings,
+            save_settings,
             diagnose_runtime,
             list_templates,
             reload_templates,

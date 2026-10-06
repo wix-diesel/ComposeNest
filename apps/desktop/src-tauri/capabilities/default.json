@@ -7,6 +7,8 @@
   ],
   "permissions": [
     "allow-get-bootstrap",
+    "allow-get-settings",
+    "allow-save-settings",
     "allow-diagnose-runtime",
     "allow-list-templates",
     "allow-reload-templates",

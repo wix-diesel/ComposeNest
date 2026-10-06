@@ -47,6 +47,27 @@ export class ApplicationClient {
 
   private context() { return { apiVersion: API_VERSION, requestId: crypto.randomUUID() }; }
 
+  /** Reads the backend default and OS-resolved root without runtime operations. */
+  getSettings(): Promise<import("../generated/template-form").SettingsView> {
+    return this.settingsCall("get_settings", this.context());
+  }
+
+  /** Persists only the scoped default, accepting success after validated readback. */
+  async saveSettings(storageMethod: import("../generated/template-form").StorageMethod): Promise<import("../generated/template-form").SettingsView> {
+    const result = await this.settingsCall("save_settings", { context: this.context(), storageMethod });
+    if (result.storageMethod !== storageMethod) throw new Error("settings_save_unconfirmed");
+    return result;
+  }
+
+  private async settingsCall(command: string, request: import("../generated/ipc").RequestContext | import("../generated/template-form").SaveSettingsRequest): Promise<import("../generated/template-form").SettingsView> {
+    const context = "context" in request ? request.context : request;
+    const response = await invoke<ResponseEnvelope<import("../generated/template-form").SettingsView>>(command, { request });
+    if (response.apiVersion !== API_VERSION || response.requestId !== context.requestId || response.error !== null
+      || response.result === null || !["bind", "volume"].includes(response.result.storageMethod)
+      || typeof response.result.managementRoot !== "string" || !response.result.managementRoot.trim()) throw new Error("settings_unavailable");
+    return response.result;
+  }
+
   /** Observes fixed runtime prerequisites without registering or changing a target. */
   async diagnoseRuntime(): Promise<import("../generated/template-form").RuntimeDiagnosis> {
     const request = this.context();

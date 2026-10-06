@@ -88,6 +88,7 @@ try {
   await emit(10, "completed"); await settled(); assert.equal(await ready().count(), 0, "completion hint alone is insufficient");
   stored.instance.runtimeStatus = "ready"; stored.completedAt = "2026-10-06 15:00:09";
   await update("ready", 10, "Succeeded", "completed"); await ready().waitFor();
+  assert.equal(await page.getByRole("button", { name: /完了の表示例|失敗の表示例|再試行/ }).count(), 0);
   assert.equal(await page.locator(".operation-check.done").count(), 5);
   assert.equal(await page.getByText("Database:", { exact: false }).count(), 1);
   const count = calls.length; await emit(99, "completed", "other"); await emit(99, "completed", "op", "other");
@@ -111,6 +112,8 @@ try {
   assert.equal(await ready().count(), 0, "historical success does not claim current availability");
   stored.instance.lastOperation.id = "op"; stored.instance.runtimeStatus = "unknown"; await emit(10); await settled();
   assert.equal(await ready().count(), 0, "stale runtime observation does not claim readiness");
+  await update("ready", 11); stored.operation.status = "Succeeded"; stored.instance.runtimeStatus = "ready";
+  await ready().waitFor({ timeout: 5000 }); await settled();
   await update("image", 1); mode = "delay"; await emit(2);
   await page.waitForFunction(() => document.querySelector(".operation-screen")?.getAttribute("aria-busy") === "true");
   await waitPending();
@@ -123,9 +126,8 @@ try {
   await page.waitForFunction(() => document.querySelector(".operation-screen")?.getAttribute("aria-busy") === "true");
   await waitPending(); await page.getByRole("button", { name: "閉じる", exact: true }).click(); mode = "normal";
   pending.splice(0).forEach((resolve) => resolve()); await page.waitForURL(/#\/instances$/);
-  assert.equal(await page.locator(".operation-screen").count(), 0);
+  await page.locator(".operation-screen").waitFor({ state: "detached" });
   assert.equal(await page.getByText("private-backend-secret", { exact: false }).count(), 0);
-  assert.equal(await page.getByRole("button", { name: /完了の表示例|失敗の表示例|再試行/ }).count(), 0);
   assert.deepEqual(errors, []);
   console.log("Operation: durable stages/results, events/gaps, polling, invalid responses, delayed reads, remount, cleanup and themes passed.");
 } finally { await browser?.close(); server.kill(); }

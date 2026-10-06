@@ -3,7 +3,8 @@
 use composenest_application::{
     query_service::{
         ConnectionView, InputView, InstanceDetailView, InstanceView, ObservationView,
-        OperationProgressView, OperationView, PortView, QueryStore, StorageLocationView, StorageView,
+        OperationProgressView, OperationView, PortView, QueryStore, StorageLocationView,
+        StorageView,
     },
     state_store::StoreConflict,
 };

@@ -132,7 +132,10 @@ fn operation_lookup_is_scoped_historical_masked_and_read_only() {
     }
     for status in ["Executing", "Failed", "OutcomeUnknown", "AwaitingDecision"] {
         db.write(move |db| {
-            db.execute("UPDATE operations SET status=?1 WHERE id='pending'", [status])?;
+            db.execute(
+                "UPDATE operations SET status=?1 WHERE id='pending'",
+                [status],
+            )?;
             Ok(())
         })
         .unwrap();

@@ -73,7 +73,7 @@ try {
     stored.operation.phase = phase; stored.operation.status = result; stored.sequence = sequence;
     await emit(sequence, kind); await settled();
   };
-  await page.goto(route); await status("受付済み").waitFor(); await settled();
+  await page.goto(route); await page.locator(".operation-screen .badge").filter({ hasText: "受付済み" }).waitFor(); await settled();
   assert.equal(await ready().count(), 0);
   for (const [phase, index] of [["storage", 1], ["image", 2], ["artifact", 3], ["config", 3], ["create", 3], ["inspect_created", 3], ["start", 4], ["ready", 4]]) {
     await update(phase, index);
@@ -85,10 +85,11 @@ try {
   assert.ok(calls.length > reads, "periodic lookup recovers a missing notification");
   assert.equal(await ready().count(), 0, "elapsed time and ready phase are insufficient");
   await update("ready", 10); assert.equal(await ready().count(), 0, "sequence gap restores saved progress");
+  await emit(10, "completed"); await settled(); assert.equal(await ready().count(), 0, "completion hint alone is insufficient");
   stored.instance.runtimeStatus = "ready"; stored.completedAt = "2026-10-06 15:00:09";
   await update("ready", 10, "Succeeded", "completed"); await ready().waitFor();
   assert.equal(await page.locator(".operation-check.done").count(), 5);
-  assert.equal(await status("Database:").count(), 1);
+  assert.equal(await page.getByText("Database:", { exact: false }).count(), 1);
   const count = calls.length; await emit(99, "completed", "other"); await emit(99, "completed", "op", "other");
   assert.equal(calls.length, count, "ignores unrelated operation and target notifications");
   for (const [theme, width] of [["ライト", 1280], ["ダーク", 390]]) {

@@ -38,7 +38,12 @@ try {
         if (window.mode === "failure") throw new Error("Unavailable");
         return response(structuredClone(window.rows));
       }
-      if (command === "get_instance_actions") return response({ id: request.instanceId, name: "開発用データベース", revision: 1, runtimeStatus: "ready", actions: [], observedAt: null });
+      if (command === "get_instance_detail") {
+        const row = window.rows.find((item) => item.id === request.instanceId);
+        return response({ state: { ...row, revision: 1, actions: [], observedAt: null, operationId: null },
+          instance: { ...row, connections: [], storage: [], inputs: [], templateVersion: "1" },
+          locations: [], creationStartedAt: null, cloneSourceId: null });
+      }
       throw new Error(`Unexpected command ${command}`);
     } };
   });
@@ -146,7 +151,7 @@ try {
   await page.evaluate(() => { window.rows = window.savedRows; }); await refresh.click();
   await page.getByText("4 / 4 環境", { exact: true }).waitFor();
   await grid.getByRole("button", { name: "開発用データベースの詳細", exact: true }).click();
-  await page.getByRole("heading", { level: 1, name: "環境の詳細", exact: true }).waitFor();
+  await page.getByRole("heading", { level: 1, name: "開発用データベース", exact: true }).waitFor();
   assert.match(page.url(), /instanceId=ready\+%26\+one/);
   await page.getByRole("button", { name: "戻る", exact: true }).click(); await grid.waitFor();
   await cardChoice.click();
@@ -155,7 +160,7 @@ try {
   await page.getByText("最終観測 2026-10-05 09:00:00 UTC", { exact: true }).waitFor();
   assert.equal(await page.getByText("127.0.0.1:15432", { exact: true }).count(), 1);
   await page.getByRole("button", { name: "更新後の環境の詳細", exact: true }).click();
-  await page.getByRole("heading", { level: 1, name: "環境の詳細", exact: true }).waitFor();
+  await page.getByRole("heading", { level: 1, name: "更新後の環境", exact: true }).waitFor();
   assert.match(page.url(), /instanceId=ready\+%26\+one/);
   await page.getByRole("button", { name: "戻る", exact: true }).click();
   await page.getByText("4 / 4 環境", { exact: true }).waitFor();

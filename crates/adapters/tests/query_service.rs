@@ -102,6 +102,74 @@ fn saved_list_and_detail_use_committed_ports_and_mask_secrets() {
 }
 
 #[test]
+fn desktop_detail_is_scoped_masked_and_uses_saved_metadata() {
+    use composenest_adapters::query_service::view_instance_detail;
+    let (root, db) = fixture();
+    db.write(|db| {
+        db.execute(
+            "UPDATE operations SET started_at='2026-08-02 03:04:05' WHERE id='create'",
+            [],
+        )?;
+        db.execute(
+            "UPDATE instances SET clone_source_id='one' WHERE id='one'",
+            [],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    let detail = view_instance_detail(&db, "scope", "one").unwrap();
+    assert_eq!(detail.state.id, "one");
+    assert_eq!(
+        detail.state.observed_at.as_deref(),
+        Some("2026-09-01 00:00:00")
+    );
+    assert_eq!(
+        detail.creation_started_at.as_deref(),
+        Some("2026-08-02 03:04:05")
+    );
+    assert_eq!(detail.clone_source_id.as_deref(), Some("one"));
+    assert_eq!(
+        detail.locations[0].location,
+        root.path().join("data/one/data").to_string_lossy()
+    );
+    assert!(
+        !serde_json::to_string(&detail)
+            .unwrap()
+            .contains("top-secret")
+    );
+    assert!(matches!(
+        view_instance_detail(&db, "other", "one"),
+        Err(StoreConflict::Missing)
+    ));
+    assert!(matches!(
+        view_instance_detail(&db, "scope", "missing"),
+        Err(StoreConflict::Missing)
+    ));
+    db.write(|db| {
+        db.execute(
+            "UPDATE storage_allocations SET method='volume', resource_identity='saved-volume'",
+            [],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    let volume = view_instance_detail(&db, "scope", "one").unwrap();
+    assert_eq!(volume.locations[0].location, "saved-volume");
+    db.write(|db| {
+        db.execute(
+            "UPDATE instances SET lifecycle='retired' WHERE id='one'",
+            [],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    assert!(matches!(
+        view_instance_detail(&db, "scope", "one"),
+        Err(StoreConflict::Missing)
+    ));
+}
+
+#[test]
 fn rename_checks_revision_duplicates_and_unresolved_operations() {
     let (_root, db) = fixture();
     let query = QueryService::new(&db);

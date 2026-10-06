@@ -77,6 +77,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             list_templates,
             reload_templates,
             list_instances,
+            get_instance_detail,
             get_instance_actions,
             rename_instance,
             change_instance,

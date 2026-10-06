@@ -37,11 +37,62 @@ export interface PortView {
   containerPort: number;
 }
 
+export interface StorageView {
+  slot: string;
+  method: string;
+  presence: string;
+  initialization: string;
+}
+
+export interface SavedInputView {
+  slot: string;
+  secret: boolean;
+  value: JsonValue | null;
+}
+
+export interface ConnectionView {
+  slot: string;
+  label: string;
+  port: PortView;
+  inputSlots: Array<string>;
+}
+
 export interface ObservationView {
   runtimeState: string;
   health: string | null;
   observedAt: string;
   freshness: string;
+}
+
+export interface OperationView {
+  id: string;
+  kind: string;
+  status: string;
+  phase: string;
+  startedAt: string;
+}
+
+export interface InstanceView {
+  id: string;
+  name: string;
+  revision: number;
+  lifecycle: string;
+  projectName: string;
+  templateId: string;
+  templateVersion: string;
+  selectedVersion: string;
+  image: string | null;
+  storageMethod: string;
+  specRevision: number;
+  appliedSpecRevision: number | null;
+  ports: Array<PortView>;
+  storage: Array<StorageView>;
+  inputs: Array<SavedInputView>;
+  connections: Array<ConnectionView>;
+  observation: ObservationView | null;
+  runtimeStatus: string;
+  lastOperation: OperationView | null;
+  needsAttention: boolean;
 }
 
 export interface InstanceListView {
@@ -56,6 +107,19 @@ export interface InstanceListView {
   runtimeStatus: string;
   needsAttention: boolean;
   observation: ObservationView | null;
+}
+
+export interface StorageLocationView {
+  slot: string;
+  location: string;
+}
+
+export interface InstanceDetailView {
+  instance: InstanceView;
+  state: InstanceActionView;
+  locations: Array<StorageLocationView>;
+  creationStartedAt: string | null;
+  cloneSourceId: string | null;
 }
 
 export interface EditInstancePortsRequest {

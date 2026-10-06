@@ -86,7 +86,7 @@ export function App({ client = applicationClient }: { client?: ApplicationClient
           </div>
         </header>
         <div className="workspace">
-          <div className="page-heading"><div>
+          {route.page !== "instance-detail" && <div className="page-heading"><div>
             <div className="eyebrow">{route.page === "settings" ? ja.application : ja.workspace}</div>
             <h1 id="screen" ref={heading} tabIndex={-1}>{ja.pages[route.page]}</h1>
             <p className="subtitle">{ja.subtitles[route.page]}</p>
@@ -96,13 +96,13 @@ export function App({ client = applicationClient }: { client?: ApplicationClient
             {route.page === "templates" && <button className="btn" disabled={templateLoading} onClick={() => setTemplateRefresh((value) => value + 1)}><Icon name="refresh" />再読込み</button>}
             {parent && <button className="btn" onClick={() => client.navigate(parent)}>{ja.back}</button>}
             <button className="btn" onClick={() => setAbout(true)}>{ja.about}</button>
-          </div></div>
+          </div></div>}
           {saveFailed && <p className="notice warning" role="status">{ja.displaySaveFailed}</p>}
           {route.page === "instances" ? <InstanceList key={hash} client={client} refresh={listRefresh} loadingChanged={setListLoading} listView={preferences.listView} changeView={(view) => update("listView", view)} /> : route.page === "templates" ? <TemplateList key={hash} client={client} refresh={templateRefresh} loadingChanged={setTemplateLoading} /> : route.page === "settings" ? <section className="panel display-settings" aria-label={ja.design}>
             <h2>{ja.design}</h2><p>{ja.displayOnly}</p>
             <div><h3>{ja.theme}</h3><ThemeChoices value={preferences.theme} onChange={(value) => update("theme", value)} /></div>
             <div><h3>{ja.listView}</h3><ListViewChoices value={preferences.listView} onChange={(value) => update("listView", value)} /></div>
-          </section> : route.page === "instance-create" ? <CreateScreen key={hash} client={client} templateId={route.templateId} returnTo={route.returnTo} /> : route.page === "instance-clone" ? <CloneScreen key={hash} client={client} sourceId={route.instanceId} /> : route.page === "instance-detail" || route.page === "instance-edit" ? <InstanceActions key={hash} client={client} instanceId={route.instanceId} edit={route.page === "instance-edit"} /> : <section className="panel" aria-label={ja.pages[route.page]} key={hash}>
+          </section> : route.page === "instance-create" ? <CreateScreen key={hash} client={client} templateId={route.templateId} returnTo={route.returnTo} /> : route.page === "instance-clone" ? <CloneScreen key={hash} client={client} sourceId={route.instanceId} /> : route.page === "instance-detail" || route.page === "instance-edit" ? <InstanceActions key={hash} client={client} instanceId={route.instanceId} edit={route.page === "instance-edit"} headingRef={heading} onAbout={() => setAbout(true)} /> : <section className="panel" aria-label={ja.pages[route.page]} key={hash}>
             <p>{ja.unimplemented}</p>
             {"instanceId" in route && route.instanceId && <p>{ja.target}: <code>{route.instanceId}</code></p>}
             {"operationId" in route && <p>{ja.operationId}: <code>{route.operationId}</code></p>}

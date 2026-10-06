@@ -2,8 +2,8 @@
 
 use composenest_application::{
     query_service::{
-        ConnectionView, InputView, InstanceView, ObservationView, OperationView, PortView,
-        QueryStore, StorageView,
+        ConnectionView, InputView, InstanceDetailView, InstanceView, ObservationView,
+        OperationView, PortView, QueryStore, StorageLocationView, StorageView,
     },
     state_store::StoreConflict,
 };
@@ -14,6 +14,40 @@ use crate::{
     sqlite::{DatabaseError, DatabaseWorker},
     state_store::map_error,
 };
+
+/// Reads detail metadata and masked settings in one scoped, read-only database snapshot.
+pub fn view_instance_detail(
+    database: &DatabaseWorker,
+    scope: &str,
+    id: &str,
+) -> Result<InstanceDetailView, StoreConflict> {
+    database.read(|db| {
+        let clone_source_id = db.query_row(
+            "SELECT clone_source_id FROM instances WHERE id=?1 AND scope_id=?2 AND lifecycle!='retired'",
+            params![id, scope], |row| row.get::<_, Option<String>>(0),
+        ).optional()?.ok_or(DatabaseError::Missing)?;
+        let instance = read_instance(db, scope, id)?;
+        let creation_started_at = db.query_row(
+            "SELECT MIN(started_at) FROM operations WHERE instance_id=?1 AND kind IN ('create','clone')",
+            [id], |row| row.get(0),
+        )?;
+        let mut query = db.prepare("SELECT slot, method, resource_identity FROM storage_allocations WHERE instance_id=?1 ORDER BY slot")?;
+        let locations = query.query_map([id], |row| {
+            let method: String = row.get(1)?;
+            let identity: String = row.get(2)?;
+            Ok(StorageLocationView {
+                slot: row.get(0)?,
+                location: if method == "bind" {
+                    database.management_root().join(identity).to_string_lossy().into_owned()
+                } else { identity },
+            })
+        })?.collect::<Result<Vec<_>, _>>()?;
+        Ok(InstanceDetailView {
+            state: composenest_application::instance_actions::InstanceActionView::from(instance.clone()),
+            instance, locations, creation_started_at, clone_source_id,
+        })
+    }).map_err(map_error)
+}
 
 impl QueryStore for DatabaseWorker {
     fn list_instances(&self, scope_id: &str) -> Result<Vec<InstanceView>, StoreConflict> {

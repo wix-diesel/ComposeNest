@@ -8,7 +8,7 @@ use composenest_application::{
         RenameInstanceRequest,
     },
     operation_journal::OperationJournal,
-    query_service::{InstanceListView, QueryService},
+    query_service::{InstanceDetailView, InstanceListView, QueryService},
     state_store::StoreConflict,
 };
 use std::sync::Arc;
@@ -27,6 +27,28 @@ pub async fn list_instances(
         .list_instances(&state.scope)
         .map(|views| views.into_iter().map(InstanceListView::from).collect());
     Ok(envelope(request, result))
+}
+
+/// Reads masked details for the requested local instance without contacting Docker.
+#[tauri::command]
+pub async fn get_instance_detail(
+    request: InstanceActionRequest,
+    state: State<'_, Arc<CreateBackend>>,
+) -> Result<ResponseEnvelope<InstanceDetailView>, ()> {
+    if let Err(error) = request.context.validate() {
+        return Ok(ResponseEnvelope::failure(
+            request.context.request_id,
+            *error,
+        ));
+    }
+    Ok(envelope(
+        request.context,
+        composenest_adapters::query_service::view_instance_detail(
+            &state.database,
+            &state.scope,
+            &request.instance_id,
+        ),
+    ))
 }
 
 pub(super) fn envelope<T>(
@@ -182,6 +204,7 @@ mod tests {
         let authority = context.runtime_authority_mut();
         for command in [
             "list_instances",
+            "get_instance_detail",
             "get_instance_actions",
             "rename_instance",
             "change_instance",

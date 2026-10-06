@@ -10,6 +10,7 @@
     "allow-list-templates",
     "allow-reload-templates",
     "allow-list-instances",
+    "allow-get-instance-detail",
     "allow-prepare-create",
     "allow-update-create-plan",
     "allow-view-create-plan",

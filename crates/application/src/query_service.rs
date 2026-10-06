@@ -163,6 +163,32 @@ pub struct InstanceListView {
     pub observation: Option<ObservationView>,
 }
 
+/// Recorded storage destination for display only; reading it does not verify presence.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageLocationView {
+    /// Template storage slot.
+    pub slot: String,
+    /// Saved bind path or named volume identity.
+    pub location: String,
+}
+
+/// Scoped detail snapshot with masked inputs and separate Core action availability.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstanceDetailView {
+    /// Committed configuration, connections and saved observation.
+    pub instance: InstanceView,
+    /// Actions derived from the same database snapshot.
+    pub state: crate::instance_actions::InstanceActionView,
+    /// Recorded storage destinations; these are not executable frontend paths.
+    pub locations: Vec<StorageLocationView>,
+    /// Original create or clone acceptance time, if journaled.
+    pub creation_started_at: Option<String>,
+    /// Saved source identity for configuration-only clones.
+    pub clone_source_id: Option<String>,
+}
+
 impl From<InstanceView> for InstanceListView {
     fn from(view: InstanceView) -> Self {
         Self {

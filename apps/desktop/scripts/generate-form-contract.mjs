@@ -7,7 +7,7 @@ const sources = {
   settings: ["SettingsView", "SaveSettingsRequest"],
   runtime_diagnostics: ["DiagnosticCheck", "RuntimeDiagnosis"],
   template_catalog_view: ["TemplateCard", "TemplateLoadResult", "TemplateCatalogView"],
-  query_service: ["PortView", "StorageView", "InputView", "ConnectionView", "ObservationView", "OperationView", "InstanceView", "InstanceListView", "StorageLocationView", "InstanceDetailView"],
+  query_service: ["PortView", "StorageView", "InputView", "ConnectionView", "ObservationView", "OperationView", "OperationRequest", "OperationProgressView", "InstanceView", "InstanceListView", "StorageLocationView", "InstanceDetailView"],
   instance_edit: ["EditInstancePortsRequest", "EditSettingView", "EditPortView", "InstanceEditView"],
   instance_actions: ["InstanceActionRequest", "RenameInstanceRequest", "ChangeInstanceRequest", "InstanceActionView"],
   template_form: ["FormInput", "FormOption", "FormSlot", "FormConnection", "TemplateForm"],

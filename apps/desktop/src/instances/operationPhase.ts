@@ -2,5 +2,7 @@ const phase: Record<string, string> = { accepted: "受付済み", prepare: "準�
 
 /** Labels saved operation phases without exposing internal tokens. */
 export function operationPhaseLabel(value: string | null | undefined): string {
+  if (value === "create") return "コンテナ作成";
+  if (value === "inspect_created") return "作成した構成を照合";
   return phase[value ?? ""] ?? "確認中";
 }

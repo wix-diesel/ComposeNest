@@ -2,6 +2,7 @@ import type { ChangeInstanceRequest, InstanceActionView, RenameInstanceRequest }
 import type { EditInstancePortsRequest, InstanceEditView } from "../generated/template-form";
 import type { CloneEdit, ClonePlanView, ConfirmCloneRequest, ConfirmCreateRequest, CreatePlanView, CreateReceipt, PlanEdit } from "../generated/template-form";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type { InstanceListView } from "../generated/template-form";
 import { parseRoute, routeHash, type AppRoute } from "../navigation";
 import {
@@ -13,6 +14,20 @@ import {
 
 /** Typed boundary between React features and the Tauri transport. */
 export class ApplicationClient {
+  /** Reads durable state; notifications and elapsed time never establish success. */
+  async getOperation(operationId: string): Promise<import("../generated/template-form").OperationProgressView> {
+    const view = await this.createCall<import("../generated/template-form").OperationProgressView>("get_operation", { context: this.context(), operationId } as import("../generated/template-form").OperationRequest);
+    if (!view?.operation || !view.instance || view.operation.id !== operationId || !view.instance.id
+      || !Array.isArray(view.instance.ports) || !Array.isArray(view.instance.connections)
+      || !Number.isSafeInteger(view.sequence) || view.sequence < 0) throw new Error("invalid_operation_response");
+    return view;
+  }
+
+  /** Registers non-sensitive invalidation hints; the caller releases the listener on close. */
+  subscribeOperation(listener: (event: import("../generated/ipc").OperationEvent) => void): Promise<() => void> {
+    return listen<import("../generated/ipc").OperationEvent>("operation-progress", ({ payload }) => listener(payload));
+  }
+
   /** Subscribes to local navigation, including browser back and forward. */
   subscribeNavigation = (listener: () => void): (() => void) => {
     window.addEventListener("hashchange", listener);

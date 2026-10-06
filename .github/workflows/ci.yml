@@ -174,6 +174,7 @@ jobs:
           pnpm run test:appearance
           pnpm run test:settings
           pnpm run test:retained
+          pnpm run test:operation
           pnpm run test:forms
           pnpm run test:create
           pnpm run test:clone

@@ -63,7 +63,7 @@ export function Settings({ client, preferences, update }: {
               <span>{storageLabels[method]}<small>{method === "bind" ? "bind mount · 管理ルート内に保存" : "named volume · 専用領域に保存"}</small></span>
             </label>)}</div>
           </fieldset>
-          <p className="settings-footnote">以降の新規作成に適用します。既存の環境のデータは移動しません。複製時は元環境の方式を使います。</p>
+          <p className="settings-footnote">以降の新規作成に適用します。既存の環境のデータは移動しません。複製時は元環境の方式を初期選択し、複製先では変更できます。</p>
           {failed && <p className="notice warning" role="alert">設定を取得できませんでした。管理ルートへのアクセスを確認し、再読込みしてください。</p>}
           <button type="button" className="btn small" disabled={loading || saving} onClick={() => setReload((value) => value + 1)}>保存済み設定を再読込み</button>
         </section>

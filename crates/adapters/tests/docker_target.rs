@@ -21,6 +21,7 @@ case "$1 $2" in
   'context inspect')
     if [ -n "$host" ]; then exit 1; fi
     printf '"unix:///tmp/docker-local.sock"\n' ;;
+  'context show') printf 'desktop-linux\n' ;;
   'info --format')
     if [ "$host" != 'unix:///tmp/docker-local.sock' ]; then exit 1; fi
     if [ -f engine-down ]; then exit 1; fi
@@ -103,6 +104,10 @@ async fn diagnosis_distinguishes_missing_stopped_and_changed_engine() {
     let (root, probe) = fixture();
     let diagnosis = probe.diagnose(None).await;
     assert!(diagnosis.is_ready());
+    assert_eq!(diagnosis.cli_version.as_deref(), Some("29.8.1"));
+    assert_eq!(diagnosis.compose_version.as_deref(), Some("5.5.1"));
+    assert_eq!(diagnosis.engine_version.as_deref(), Some("29.8.1"));
+    assert_eq!(diagnosis.context_name.as_deref(), Some("desktop-linux"));
     assert_eq!(
         diagnosis.resolved_endpoint.as_deref(),
         Some("unix:///tmp/docker-local.sock")
@@ -120,6 +125,7 @@ async fn diagnosis_distinguishes_missing_stopped_and_changed_engine() {
     fs::write(root.path().join("engine-id"), "engine-b").expect("change Engine");
     let changed = probe.diagnose(Some(&target)).await;
     assert_eq!(changed.engine, Check::Changed);
+    assert_eq!(changed.context_name, diagnosis.context_name);
     assert!(!changed.is_ready());
 
     fs::remove_file(&probe.executable).expect("remove CLI");
@@ -177,6 +183,7 @@ async fn old_cli_version_is_reported_as_unsupported() {
     );
     let report = probe.diagnose(None).await;
     assert_eq!(report.cli, Check::Unsupported);
+    assert_eq!(report.cli_version.as_deref(), Some("28.0.0"));
     assert_eq!(report.compose, Check::Ready);
     assert_eq!(report.engine, Check::Ready);
     assert!(!report.is_ready());
@@ -226,4 +233,26 @@ async fn registered_target_ignores_later_context_switch() {
         diagnosis.resolved_endpoint.as_deref(),
         Some(target.endpoint.as_str())
     );
+}
+
+#[tokio::test]
+async fn permissions_are_distinguished_without_exposing_stderr() {
+    let _guard = MOCK_EXECUTION.lock().await;
+    let (_root, probe) = fixture();
+    let script = fs::read_to_string(&probe.executable).unwrap();
+    for reason in ["permission denied", "Access is denied."] {
+        replace_executable(
+            &probe,
+            &script.replace(
+                "if [ -f engine-down ]; then exit 1; fi",
+                &format!("printf '{reason} secret-token' >&2; exit 1"),
+            ),
+        );
+        let report = probe.diagnose(None).await;
+        assert_eq!(report.engine, Check::PermissionDenied);
+        assert!(report.engine_id.is_none());
+        assert!(report.engine_version.is_none());
+        assert!(report.observed_platform.is_none());
+        assert!(!format!("{report:?}").contains("secret-token"));
+    }
 }

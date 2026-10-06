@@ -47,6 +47,16 @@ export class ApplicationClient {
 
   private context() { return { apiVersion: API_VERSION, requestId: crypto.randomUUID() }; }
 
+  /** Observes fixed runtime prerequisites without registering or changing a target. */
+  async diagnoseRuntime(): Promise<import("../generated/template-form").RuntimeDiagnosis> {
+    const request = this.context();
+    const response = await invoke<ResponseEnvelope<import("../generated/template-form").RuntimeDiagnosis>>("diagnose_runtime", { request });
+    if (response.apiVersion !== API_VERSION || response.requestId !== request.requestId || response.error !== null
+      || response.result === null || !Array.isArray(response.result.checks)
+      || !Number.isSafeInteger(response.result.observedAt)) throw new Error("runtime_diagnosis_failed");
+    return response.result;
+  }
+
   /** Reloads scoped saved list data, preserving its original observation timestamps. */
   async listInstances(): Promise<InstanceListView[]> {
     const request = this.context();

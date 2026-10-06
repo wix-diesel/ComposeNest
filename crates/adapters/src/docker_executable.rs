@@ -2,15 +2,23 @@
 
 use std::{
     ffi::OsStr,
+    io,
     path::{Path, PathBuf},
 };
 
 /// Finds an executable Docker CLI in absolute PATH entries or standard install locations.
 /// GUI launchers may omit Docker Desktop's directories from PATH.
+/// Returns `None` for any unusable installation; diagnostics use `discover_checked`.
 pub fn discover(home: &Path) -> Option<PathBuf> {
+    discover_checked(home).ok().flatten()
+}
+
+/// Finds a usable CLI, distinguishing missing installations from denied or failed inspection.
+/// A usable later candidate takes precedence over earlier inaccessible candidates.
+pub fn discover_checked(home: &Path) -> io::Result<Option<PathBuf>> {
     let paths = std::env::var_os("PATH");
     let program_files = std::env::var_os("ProgramFiles").map(PathBuf::from);
-    find_executable(candidates(
+    find_installation(candidates(
         paths.as_deref(),
         home,
         std::env::consts::OS,
@@ -55,31 +63,63 @@ fn candidates(
     candidates
 }
 
-fn find_executable(candidates: Vec<PathBuf>) -> Option<PathBuf> {
-    candidates
-        .into_iter()
-        .filter(|path| path.is_absolute())
-        .find_map(|path| {
-            let resolved = path.canonicalize().ok()?;
-            let metadata = resolved.metadata().ok()?;
-            if !metadata.is_file() {
-                return None;
+fn find_installation(candidates: Vec<PathBuf>) -> io::Result<Option<PathBuf>> {
+    let mut failure = None;
+    for path in candidates.into_iter().filter(|path| path.is_absolute()) {
+        let inspected = path
+            .canonicalize()
+            .and_then(|resolved| resolved.metadata().map(|metadata| (resolved, metadata)));
+        match inspected {
+            Ok((resolved, metadata)) => {
+                if !metadata.is_file() {
+                    continue;
+                }
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if metadata.permissions().mode() & 0o111 == 0 {
+                        failure = Some(io::Error::from(io::ErrorKind::PermissionDenied));
+                        continue;
+                    }
+                }
+                return Ok(Some(resolved));
             }
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                if metadata.permissions().mode() & 0o111 == 0 {
-                    return None;
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                if failure.is_none() || error.kind() == io::ErrorKind::PermissionDenied {
+                    failure = Some(error);
                 }
             }
-            Some(resolved)
-        })
+        }
+    }
+    failure.map_or(Ok(None), Err)
+}
+
+#[cfg(test)]
+fn find_executable(candidates: Vec<PathBuf>) -> Option<PathBuf> {
+    find_installation(candidates).ok().flatten()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+
+    #[cfg(unix)]
+    #[test]
+    fn non_executable_installation_is_denied_instead_of_missing() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        let docker = home.path().join("docker");
+        fs::write(&docker, "installed CLI").unwrap();
+        fs::set_permissions(&docker, fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            find_installation(vec![docker.clone()]).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        fs::remove_file(&docker).unwrap();
+        assert!(find_installation(vec![docker]).unwrap().is_none());
+    }
 
     fn executable(path: &Path) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();

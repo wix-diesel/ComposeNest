@@ -4,6 +4,24 @@ import type { RequestContext } from "./ipc";
 
 export type JsonValue = null | boolean | number | string | Array<JsonValue> | { [key: string]: JsonValue };
 
+export interface DiagnosticCheck {
+  name: string;
+  status: string;
+  version: string | null;
+}
+
+export interface RuntimeDiagnosis {
+  observedAt: number;
+  checks: Array<DiagnosticCheck>;
+  endpoint: string | null;
+  contextName: string | null;
+  platform: string | null;
+  engineId: string | null;
+  registeredEngineId: string | null;
+  targetStatus: string;
+  managementRoot: string;
+}
+
 export interface TemplateCard {
   revisionId: string;
   templateId: string;

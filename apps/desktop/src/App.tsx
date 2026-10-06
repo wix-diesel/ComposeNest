@@ -13,6 +13,7 @@ import { useDisplayPreferences } from "./appearance";
 import { ListViewChoices, ThemeChoices } from "./shell/DisplayChoices";
 
 import { TemplateList } from "./templates/TemplateList";
+import { Diagnostics, RuntimeNotice } from "./diagnostics/Diagnostics";
 
 const applicationClient = new ApplicationClient();
 
@@ -24,6 +25,7 @@ export function App({ client = applicationClient }: { client?: ApplicationClient
   const parent = parentRoute(route);
   const heading = useRef<HTMLHeadingElement>(null);
   const [title, setTitle] = useState("ComposeNest");
+  const [runtimeSummary, setRuntimeSummary] = useState<string>(ja.engineUnknown);
   const [connection, setConnection] = useState<"loading" | "ready" | "failed">("loading");
   const [retry, setRetry] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
@@ -69,7 +71,7 @@ export function App({ client = applicationClient }: { client?: ApplicationClient
         <nav aria-label={ja.menu}>{mainPages.slice(0, 4).map((page) => <div key={page}>{nav({ page })}</div>)}</nav>
         <div className="sidebar-bottom">
           {nav({ page: "settings" })}
-          <div className="engine-card">{ja.engineUnknown}<small>{ja.computer}</small></div>
+          <div className="engine-card">{runtimeSummary}<small>{ja.computer}</small></div>
           <div className="user"><span className="avatar"><Icon name="home" /></span><div>{ja.local}<br /><small>{ja.computer}</small></div></div>
         </div>
       </aside>
@@ -80,13 +82,13 @@ export function App({ client = applicationClient }: { client?: ApplicationClient
             {crumbs.map((item) => <span key={item.page}> / <button className="crumb-link" onClick={() => client.navigate(item)}>{ja.pages[item.page]}</button></span>)}
             <span aria-hidden="true">/</span><strong aria-current="page">{ja.pages[route.page]}</strong>
           </nav>
-          <div className="topbar-right"><span>{ja.engineUnknown}</span><span>{connection === "ready" ? ja.ready : connection === "loading" ? ja.loading : ja.bootstrapFailed}</span>
+          <div className="topbar-right"><span>{runtimeSummary}</span><span>{connection === "ready" ? ja.ready : connection === "loading" ? ja.loading : ja.bootstrapFailed}</span>
             {connection === "failed" && <button className="btn small" onClick={() => setRetry((value) => value + 1)}>{ja.retry}</button>}
             <ThemeChoices value={preferences.theme} onChange={(value) => update("theme", value)} />
           </div>
         </header>
         <div className="workspace">
-          {route.page !== "instance-detail" && <div className="page-heading"><div>
+          {route.page !== "instance-detail" && route.page !== "diagnostics" && <div className="page-heading"><div>
             <div className="eyebrow">{route.page === "settings" ? ja.application : ja.workspace}</div>
             <h1 id="screen" ref={heading} tabIndex={-1}>{ja.pages[route.page]}</h1>
             <p className="subtitle">{ja.subtitles[route.page]}</p>
@@ -98,7 +100,9 @@ export function App({ client = applicationClient }: { client?: ApplicationClient
             <button className="btn" onClick={() => setAbout(true)}>{ja.about}</button>
           </div></div>}
           {saveFailed && <p className="notice warning" role="status">{ja.displaySaveFailed}</p>}
-          {route.page === "instances" ? <InstanceList key={hash} client={client} refresh={listRefresh} loadingChanged={setListLoading} listView={preferences.listView} changeView={(view) => update("listView", view)} /> : route.page === "templates" ? <TemplateList key={hash} client={client} refresh={templateRefresh} loadingChanged={setTemplateLoading} /> : route.page === "settings" ? <section className="panel display-settings" aria-label={ja.design}>
+          {route.page !== "diagnostics" && <RuntimeNotice />}
+          {route.page === "diagnostics" ? <Diagnostics key={hash} client={client} headingRef={heading} summaryChanged={setRuntimeSummary} /> :
+          route.page === "instances" ? <InstanceList key={hash} client={client} refresh={listRefresh} loadingChanged={setListLoading} listView={preferences.listView} changeView={(view) => update("listView", view)} /> : route.page === "templates" ? <TemplateList key={hash} client={client} refresh={templateRefresh} loadingChanged={setTemplateLoading} /> : route.page === "settings" ? <section className="panel display-settings" aria-label={ja.design}>
             <h2>{ja.design}</h2><p>{ja.displayOnly}</p>
             <div><h3>{ja.theme}</h3><ThemeChoices value={preferences.theme} onChange={(value) => update("theme", value)} /></div>
             <div><h3>{ja.listView}</h3><ListViewChoices value={preferences.listView} onChange={(value) => update("listView", value)} /></div>

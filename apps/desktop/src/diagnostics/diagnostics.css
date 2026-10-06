@@ -1,0 +1,22 @@
+/* Diagnosis spacing follows diagnostics.html and the shared theme palette. */
+.runtime-notice { display: flex; gap: 11px; padding: 16px 18px; border: 1px solid var(--line); border-radius: 8px; background: var(--notice-bg); margin-bottom: 22px; font-size: 12px; }
+.runtime-notice p { margin: 3px 0 8px; font-size: 11px; }
+.runtime-notice.warning { border-color: var(--error); }
+.diagnostic-summary + p { font-size: 11px; }
+.diagnostic-columns { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 24px; }
+.diagnostics .panel-title { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+.diagnostics .panel-title small { font-size: 10px; }
+.diagnostic-row { display: flex; align-items: center; gap: 13px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.diagnostic-row:last-child { border-bottom: 0; }
+.diagnostic-row > div { min-width: 0; flex: 1; }
+.diagnostic-row h3 { font-size: 12px; }
+.diagnostic-row p { margin-top: 4px; font-size: 11px; overflow-wrap: anywhere; }
+.check-icon { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; flex-shrink: 0; background: var(--soft); color: var(--muted); }
+.diagnostic-badge { border: 1px solid var(--line); border-radius: 20px; padding: 3px 8px; font-size: 10px; white-space: nowrap; }
+.diagnostics .ready { background: var(--soft); color: var(--green); }
+.diagnostic-summary { margin: 0 0 18px; }
+.diagnostic-summary > div { display: grid; grid-template-columns: 105px minmax(0, 1fr); gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 11px; }
+.diagnostic-summary dt { color: var(--muted); }
+.diagnostic-summary dd { margin: 0; overflow-wrap: anywhere; }
+.diagnostics .btn:disabled { opacity: .55; cursor: default; }
+@media (max-width: 1100px) { .diagnostic-columns { grid-template-columns: minmax(0, 1fr); } }

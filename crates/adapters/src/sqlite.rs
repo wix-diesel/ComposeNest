@@ -117,6 +117,29 @@ impl DatabaseWorker {
         &self.management_root
     }
 
+    /// Checks protected directories and actual read/write access without changing saved data.
+    pub fn check_root_access(&self) -> Result<(), DatabaseError> {
+        for path in [
+            &self.management_root,
+            &self.management_root.join("state"),
+            &self.management_root.join("locks"),
+        ] {
+            check_directory(path)?;
+            fs::read_dir(path)?;
+        }
+        let mut nonce = [0_u8; 16];
+        getrandom::fill(&mut nonce)
+            .map_err(|_| io::Error::other("diagnostic nonce unavailable"))?;
+        let name: String = nonce.iter().map(|byte| format!("{byte:02x}")).collect();
+        let path = self.management_root.join(format!(".diagnosis-{name}"));
+        create_private_file(&path)?;
+        let read = fs::read(&path);
+        let removed = fs::remove_file(path);
+        read?;
+        removed?;
+        Ok(())
+    }
+
     /// Runs a short write operation on the dedicated database thread.
     /// External commands must finish before a transaction is started.
     pub fn write<T, F>(&self, operation: F) -> Result<T, DatabaseError>
@@ -386,6 +409,29 @@ fn private_permissions(_: &fs::Metadata, _: bool) -> bool {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn diagnosis_checks_root_access_and_leaves_no_probe_file() {
+        let root = management_root();
+        let database = DatabaseWorker::start(root.path()).unwrap();
+        database.check_root_access().unwrap();
+        assert!(!fs::read_dir(root.path()).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".diagnosis-")
+        }));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(root.path(), fs::Permissions::from_mode(0o755)).unwrap();
+            assert!(matches!(
+                database.check_root_access(),
+                Err(DatabaseError::UnsafePath(_))
+            ));
+        }
+    }
 
     fn management_root() -> TempDir {
         let root = tempfile::tempdir().unwrap();

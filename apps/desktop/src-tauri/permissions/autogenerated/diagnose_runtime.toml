@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-diagnose-runtime"
+description = "Enables the diagnose_runtime command without any pre-configured scope."
+commands.allow = ["diagnose_runtime"]
+
+[[permission]]
+identifier = "deny-diagnose-runtime"
+description = "Denies the diagnose_runtime command without any pre-configured scope."
+commands.deny = ["diagnose_runtime"]

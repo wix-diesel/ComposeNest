@@ -39,6 +39,8 @@ pub struct StorageView {
 pub struct InputView {
     /// Template input slot.
     pub slot: String,
+    /// Display label from the saved template, falling back to the slot if absent.
+    pub label: String,
     /// Whether the input is confidential.
     pub secret: bool,
     /// Saved non-secret value, or `None` for secrets.

@@ -46,6 +46,7 @@ export interface StorageView {
 
 export interface SavedInputView {
   slot: string;
+  label: string;
   secret: boolean;
   value: JsonValue | null;
 }

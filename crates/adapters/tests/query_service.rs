@@ -31,7 +31,7 @@ fn fixture() -> (TempDir, DatabaseWorker) {
             INSERT INTO template_snapshots (id, instance_id, template_id, template_version, selected_version,
                 schema_version, normalization, semantic_hash, canonical_json) VALUES
                 ('snapshot', 'one', 'postgresql', '17', '17', 1, 'template-normalization-v1', 'hash',
-                '{"versions":[{"key":"17","definition":{"image":"postgres:17","inputs":{"order":["username","password","mode"],"values":{"username":{"type":"string"},"password":{"type":"secret"},"mode":{"type":"select"}}},"connections":{"order":["database"],"values":{"database":{"label":"PostgreSQL","port":"database","inputs":["username","password"]}}}}}]}');
+                '{"versions":[{"key":"17","definition":{"image":"postgres:17","inputs":{"order":["username","password","mode"],"values":{"username":{"type":"string","label":"接続ユーザー"},"password":{"type":"secret","label":"認証用パスワード"},"mode":{"type":"select","label":"動作モード"}}},"connections":{"order":["database"],"values":{"database":{"label":"PostgreSQL","port":"database","inputs":["username","password"]}}}}}]}');
             INSERT INTO instance_specs (instance_id, revision, selected_version, storage_method, inputs_json)
                 VALUES ('one', 1, '17', 'bind', '{"username":"app","password":"top-secret","mode":"safe"}');
             INSERT INTO port_bindings (instance_id, spec_revision, slot, host_ip, host_port, container_port)
@@ -119,6 +119,19 @@ fn desktop_detail_is_scoped_masked_and_uses_saved_metadata() {
     .unwrap();
     let detail = view_instance_detail(&db, "scope", "one").unwrap();
     assert_eq!(detail.state.id, "one");
+    for (slot, label) in [
+        ("username", "接続ユーザー"),
+        ("password", "認証用パスワード"),
+        ("mode", "動作モード"),
+    ] {
+        let input = detail
+            .instance
+            .inputs
+            .iter()
+            .find(|input| input.slot == slot)
+            .unwrap();
+        assert_eq!(input.label, label);
+    }
     assert_eq!(
         detail.state.observed_at.as_deref(),
         Some("2026-09-01 00:00:00")

@@ -44,7 +44,7 @@ function Overview({ detail }: { detail: InstanceDetailView }) {
           <div><dt>ポート</dt><dd><code>{connection.port.hostPort}</code></dd></div>
           {connection.inputSlots.map((slot) => {
             const input = view.inputs.find((item) => item.slot === slot);
-            return <div key={slot}><dt>{slot}</dt><dd><span>{!input ? "未取得" : input.secret ? "••••••••（非表示）" : valueText(input.value)}</span>
+            return <div key={slot}><dt>{input?.label ?? slot}</dt><dd><span>{!input ? "未取得" : input.secret ? "••••••••（非表示）" : valueText(input.value)}</span>
               {input?.secret && <button className="btn small" disabled>表示</button>}</dd></div>;
           })}
         </dl></div>)}

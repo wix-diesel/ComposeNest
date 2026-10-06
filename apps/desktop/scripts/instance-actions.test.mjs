@@ -20,7 +20,7 @@ try {
     window.calls = []; window.mode = "normal";
     window.view = { id: "target", name: "開発用データベース", revision: 3, runtimeStatus: "stopped", observedAt: "2026-10-05 08:00:00", operationId: null, operationStatus: null, operationKind: null, operationPhase: null, actions: ["rename", "start", "stop", "restart"] };
     window.edit = { templateId: "generic-service", selectedVersion: "custom-17", storageMethod: "volume", specRevision: 1, appliedSpecRevision: 1,
-      inputs: [{ slot: "username", secret: false, value: "app-user" }, { slot: "password", secret: true, value: null }, { slot: "enabled", secret: false, value: false }],
+      inputs: [{ slot: "username", label: "接続ユーザー", secret: false, value: "app-user" }, { slot: "password", label: "認証用パスワード", secret: true, value: null }, { slot: "enabled", label: "機能を有効化", secret: false, value: false }],
       ports: [{ slot: "db", hostIp: "127.0.0.1", containerPort: 5432, oldPort: 15432, committedPort: 15432, candidatePort: null, oldReservation: "committed", candidateReservation: null }, { slot: "metrics", hostIp: "127.0.0.1", containerPort: 9000, oldPort: 19000, committedPort: 19000, candidatePort: null, oldReservation: "committed", candidateReservation: null }] };
     window.__TAURI_INTERNALS__ = { invoke: async (command, { request }) => {
       window.calls.push({ command, request: structuredClone(request) });
@@ -97,6 +97,10 @@ try {
   for (const value of ["generic-service custom-17", "app-user", "false", "/managed/data/target/data", "2.3.4", "source-id", "2026-10-01 05:15:00 UTC", "保存 r1 / 適用 r1", "外部構成は未確認"])
     assert.ok(await page.getByText(value, { exact: true }).count() > 0, value);
   assert.equal(await page.getByText("••••••••（非表示）", { exact: true }).count(), 2);
+  for (const label of ["接続ユーザー", "認証用パスワード", "機能を有効化"])
+    assert.equal(await page.locator(".detail-connection dt").filter({ hasText: label }).count(), 2, label);
+  for (const slot of ["username", "password", "enabled"])
+    assert.equal(await page.getByText(slot, { exact: true }).count(), 0, slot);
   const tabs = page.getByRole("tab");
   await tabs.nth(0).focus();
   for (const [key, selected] of [["ArrowRight", 1], ["End", 2], ["ArrowRight", 0], ["ArrowLeft", 2], ["Home", 0]]) {

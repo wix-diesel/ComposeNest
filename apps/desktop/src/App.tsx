@@ -10,10 +10,11 @@ import { CloneScreen, CreateScreen } from "./create/CreateScreen";
 import { InstanceActions } from "./instances/InstanceActions";
 import { InstanceList } from "./instances/InstanceList";
 import { useDisplayPreferences } from "./appearance";
-import { ListViewChoices, ThemeChoices } from "./shell/DisplayChoices";
+import { ThemeChoices } from "./shell/DisplayChoices";
 
 import { TemplateList } from "./templates/TemplateList";
 import { Diagnostics, RuntimeNotice } from "./diagnostics/Diagnostics";
+import { Settings } from "./settings/Settings";
 
 const applicationClient = new ApplicationClient();
 
@@ -102,11 +103,7 @@ export function App({ client = applicationClient }: { client?: ApplicationClient
           {saveFailed && <p className="notice warning" role="status">{ja.displaySaveFailed}</p>}
           {route.page !== "diagnostics" && <RuntimeNotice />}
           {route.page === "diagnostics" ? <Diagnostics key={hash} client={client} headingRef={heading} summaryChanged={setRuntimeSummary} /> :
-          route.page === "instances" ? <InstanceList key={hash} client={client} refresh={listRefresh} loadingChanged={setListLoading} listView={preferences.listView} changeView={(view) => update("listView", view)} /> : route.page === "templates" ? <TemplateList key={hash} client={client} refresh={templateRefresh} loadingChanged={setTemplateLoading} /> : route.page === "settings" ? <section className="panel display-settings" aria-label={ja.design}>
-            <h2>{ja.design}</h2><p>{ja.displayOnly}</p>
-            <div><h3>{ja.theme}</h3><ThemeChoices value={preferences.theme} onChange={(value) => update("theme", value)} /></div>
-            <div><h3>{ja.listView}</h3><ListViewChoices value={preferences.listView} onChange={(value) => update("listView", value)} /></div>
-          </section> : route.page === "instance-create" ? <CreateScreen key={hash} client={client} templateId={route.templateId} returnTo={route.returnTo} /> : route.page === "instance-clone" ? <CloneScreen key={hash} client={client} sourceId={route.instanceId} /> : route.page === "instance-detail" || route.page === "instance-edit" ? <InstanceActions key={hash} client={client} instanceId={route.instanceId} edit={route.page === "instance-edit"} headingRef={heading} onAbout={() => setAbout(true)} /> : <section className="panel" aria-label={ja.pages[route.page]} key={hash}>
+          route.page === "instances" ? <InstanceList key={hash} client={client} refresh={listRefresh} loadingChanged={setListLoading} listView={preferences.listView} changeView={(view) => update("listView", view)} /> : route.page === "templates" ? <TemplateList key={hash} client={client} refresh={templateRefresh} loadingChanged={setTemplateLoading} /> : route.page === "settings" ? <Settings key={hash} client={client} preferences={preferences} update={update} /> : route.page === "instance-create" ? <CreateScreen key={hash} client={client} templateId={route.templateId} returnTo={route.returnTo} /> : route.page === "instance-clone" ? <CloneScreen key={hash} client={client} sourceId={route.instanceId} /> : route.page === "instance-detail" || route.page === "instance-edit" ? <InstanceActions key={hash} client={client} instanceId={route.instanceId} edit={route.page === "instance-edit"} headingRef={heading} onAbout={() => setAbout(true)} /> : <section className="panel" aria-label={ja.pages[route.page]} key={hash}>
             <p>{ja.unimplemented}</p>
             {"instanceId" in route && route.instanceId && <p>{ja.target}: <code>{route.instanceId}</code></p>}
             {"operationId" in route && <p>{ja.operationId}: <code>{route.operationId}</code></p>}
@@ -116,6 +113,6 @@ export function App({ client = applicationClient }: { client?: ApplicationClient
       </main>
     </div>
     {notice && <Toast message={notice} kind="error" onDismiss={() => setNotice(null)} />}
-    {about && <ConfirmDialog title={ja.pages[route.page]} onClose={() => setAbout(false)}><p>{ja.unimplemented}</p></ConfirmDialog>}
+    {about && <ConfirmDialog title={ja.pages[route.page]} onClose={() => setAbout(false)}><p>{route.page === "settings" ? "新しい環境の既定保存方式を保存できます。既存の環境や複製元の方式は変わりません。表示設定は選択するとすぐに保存されます。" : ja.unimplemented}</p></ConfirmDialog>}
   </>;
 }

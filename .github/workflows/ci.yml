@@ -172,6 +172,7 @@ jobs:
           pnpm run test:shell
           pnpm run test:diagnostics
           pnpm run test:appearance
+          pnpm run test:settings
           pnpm run test:forms
           pnpm run test:create
           pnpm run test:clone

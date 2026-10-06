@@ -26,6 +26,7 @@ try {
   await page.addInitScript(() => {
     window.bootstrapCalls = 0;
     window.__TAURI_INTERNALS__ = { invoke: async (command, { request }) => {
+      if (command === "get_settings") return { apiVersion: 1, requestId: request.requestId, error: null, result: { storageMethod: "bind", managementRoot: "/managed" } };
       if (command === "diagnose_runtime") return { apiVersion: 1, requestId: request.requestId, error: null, result: { observedAt: 1, checks: [], targetStatus: "unverified" } };
       if (command === "list_templates") return { apiVersion: 1, requestId: request.requestId, error: null, result: { localRoot: "/managed/templates/local", templates: [], results: [] } };
       if (command === "list_instances") return { apiVersion: 1, requestId: request.requestId, error: null, result: [] };

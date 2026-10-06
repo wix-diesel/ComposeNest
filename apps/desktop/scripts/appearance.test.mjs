@@ -52,6 +52,7 @@ try {
         const context = request.context ?? request;
         let result = null;
         if (command === "get_bootstrap") result = { applicationTitle: "ComposeNest", startedAtUnixSeconds: 1 };
+        else if (command === "get_settings") result = { storageMethod: "bind", managementRoot: "/managed" };
         else if (command === "list_instances") result = [];
         else if (command === "prepare_create" || command === "view_create_plan") result = plan;
         else if (command === "update_create_plan") {

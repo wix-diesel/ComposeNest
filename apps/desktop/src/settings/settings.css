@@ -1,0 +1,25 @@
+/* Settings panels follow the settings.html mock and shared theme palette. */
+.settings-columns { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 24px; align-items: start; }
+.settings-columns > *, .settings-row > div { min-width: 0; }
+.settings-columns .panel > h2 { margin-bottom: 16px; }
+.settings-columns .panel > p, .settings-row p { font-size: 12px; }
+.settings-storage { border: 0; padding: 0; margin: 0; min-width: 0; }
+.settings-storage legend { font-size: 12px; margin-bottom: 9px; }
+.settings-options { display: flex; flex-wrap: wrap; gap: 12px; }
+.settings-options label { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 7px; padding: 13px; flex: 1 1 180px; font-size: 12px; }
+.settings-options input { accent-color: var(--green); }
+.settings-options small { display: block; font-size: 10px; }
+.settings-footnote { margin: 12px 0; font-size: 11px; }
+.settings-path { margin-top: 14px; padding: 12px; background: var(--soft); border-radius: 7px; overflow-wrap: anywhere; }
+.settings-row, .settings-summary > div { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.settings-row:last-child, .settings-summary > div:last-child { border-bottom: 0; padding-bottom: 0; }
+.settings-row h3 { font-size: 13px; }
+.settings-tag { border: 1px solid var(--line); border-radius: 6px; padding: 4px 9px; font-size: 11px; white-space: nowrap; }
+.settings-summary { margin: 0; font-size: 12px; }
+.settings-summary dt { color: var(--muted); }
+.settings-summary dd { margin: 0; }
+.settings-security { display: flex; align-items: start; gap: 10px; font-size: 12px; }
+.settings-security p { margin-top: 5px; }
+.settings-footer { display: flex; justify-content: space-between; align-items: center; gap: 14px; }
+@media (max-width: 1100px) { .settings-columns { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 540px) { .settings-footer, .settings-row { align-items: start; flex-direction: column; } }

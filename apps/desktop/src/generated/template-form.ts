@@ -4,6 +4,16 @@ import type { RequestContext } from "./ipc";
 
 export type JsonValue = null | boolean | number | string | Array<JsonValue> | { [key: string]: JsonValue };
 
+export interface SettingsView {
+  storageMethod: StorageMethod;
+  managementRoot: string;
+}
+
+export interface SaveSettingsRequest {
+  context: RequestContext;
+  storageMethod: StorageMethod;
+}
+
 export interface DiagnosticCheck {
   name: string;
   status: string;

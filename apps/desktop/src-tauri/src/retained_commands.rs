@@ -5,7 +5,6 @@ use composenest_application::{
     RequestContext, ResponseEnvelope,
     instance_actions::InstanceActionRequest,
     retained_storage::{RetainedInstance, RetainedStore},
-    state_store::StoreConflict,
 };
 use std::sync::Arc;
 use tauri::State;
@@ -37,17 +36,12 @@ pub async fn refresh_retained_storage(
             *error,
         ));
     }
-    let result = match &state.probe {
-        Some(probe) => {
-            composenest_adapters::delete_stages::refresh_retained_storage(
-                &state.database,
-                probe,
-                &state.scope,
-                &request.instance_id,
-            )
-            .await
-        }
-        None => Err(StoreConflict::Backend),
-    };
+    let result = composenest_adapters::delete_stages::refresh_retained_storage(
+        &state.database,
+        state.probe.as_ref(),
+        &state.scope,
+        &request.instance_id,
+    )
+    .await;
     Ok(envelope(request.context, result))
 }

@@ -30,3 +30,5 @@ Docker診断はCLI・Compose・Engineの実際の版、Linuxコンテナ・ア�
 初回起動時から、アプリを閉じても起動済みコンテナが停止しないことを案内します。診断画面の回帰テストは`pnpm --dir apps/desktop run test:diagnostics`で実行できます。
 
 保持データ画面は削除した環境の実パス・volume名、削除完了日時、保存された存在状態と最終観測を表示します。「状態を確認」でCoreの存在・所有検査を実行し、確認に失敗した環境には前回の観測を明示します。元の設定はデータベース・Snapshot ID・設定リビジョン、Compose生成物は記録された各所在を表示します。named volumeをフォルダーとして開く操作、復元・完全削除・再利用は提供しません。回帰テストは`pnpm --dir apps/desktop run test:retained`で実行できます。
+
+Docker CLIがない場合もbind mountはファイルシステムで再確認します。named volumeは確認不能（Unverified）として記録し、保持済みとは表示しません。

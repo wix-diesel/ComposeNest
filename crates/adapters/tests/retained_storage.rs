@@ -129,12 +129,17 @@ async fn fresh_checks_never_create_data_and_distinguish_never_materialized_from_
         StoragePresence::NotMaterialized
     );
     assert!(!root.path().join("data").exists());
+    let without_cli = refresh_retained_storage(&db, None, "scope", ID)
+        .await
+        .unwrap();
+    assert_eq!(without_cli.locations[0].storage.presence, "not_materialized");
+    assert!(!root.path().join("data").exists());
     let offline = DockerProbe {
         executable: root.path().join("missing-docker.exe"),
         directory: root.path().into(),
         config_directory: root.path().into(),
     };
-    let refreshed = refresh_retained_storage(&db, &offline, "scope", ID)
+    let refreshed = refresh_retained_storage(&db, Some(&offline), "scope", ID)
         .await
         .unwrap();
     assert_eq!(refreshed.locations[0].storage.presence, "not_materialized");
@@ -144,16 +149,9 @@ async fn fresh_checks_never_create_data_and_distinguish_never_materialized_from_
         inspect_saved_bind(root.path(), &entry),
         StoragePresence::Unverified
     );
-    db.update_retained_checks(
-        "scope",
-        ID,
-        3,
-        &[StorageCheck {
-            slot: "data".into(),
-            presence: StoragePresence::Unverified,
-        }],
-    )
-    .unwrap();
+    refresh_retained_storage(&db, None, "scope", ID)
+        .await
+        .unwrap();
     let view = db.list_retained_storage("scope").unwrap().remove(0);
     assert_eq!(view.locations[0].storage.presence, "unverified");
     assert!(!view.locations[0].ownership_verified);
@@ -162,8 +160,8 @@ async fn fresh_checks_never_create_data_and_distinguish_never_materialized_from_
     assert!(db.update_retained_checks("scope", ID, 3, &[]).is_err());
 }
 
-#[test]
-fn owned_bind_data_is_observed_again_and_missing_data_is_never_recreated() {
+#[tokio::test]
+async fn owned_bind_data_is_rechecked_without_cli_and_missing_data_is_never_recreated() {
     let (root, db) = fixture();
     let bind = BindStorage::new(root.path());
     let allocation = bind
@@ -174,15 +172,21 @@ fn owned_bind_data_is_observed_again_and_missing_data_is_never_recreated() {
         .unwrap()
         .remove(0);
     db.write(move |db| {
-        db.execute("UPDATE storage_allocations SET ownership_evidence=?1, presence='present' WHERE instance_id=?2", rusqlite::params![allocation.ownership_evidence, ID])?;
+        db.execute("UPDATE storage_allocations SET ownership_evidence=?1, presence='present', observed_at='2000-01-01 00:00:00' WHERE instance_id=?2", rusqlite::params![allocation.ownership_evidence, ID])?;
         Ok(())
     }).unwrap();
     let entry = db.storage_allocation(ID, "data").unwrap().unwrap();
     let data = root.path().join(&entry.allocation.resource_identity);
     std::fs::write(data.join("sentinel"), "keep").unwrap();
-    assert_eq!(
-        inspect_saved_bind(root.path(), &entry),
-        StoragePresence::Present
+    let present = refresh_retained_storage(&db, None, "scope", ID)
+        .await
+        .unwrap();
+    assert_eq!(present.locations[0].storage.presence, "present");
+    assert!(present.locations[0].ownership_verified);
+    assert!(present.locations[0].observed_at.is_some());
+    assert_ne!(
+        present.locations[0].observed_at.as_deref(),
+        Some("2000-01-01 00:00:00")
     );
     assert_eq!(
         std::fs::read_to_string(data.join("sentinel")).unwrap(),
@@ -190,9 +194,39 @@ fn owned_bind_data_is_observed_again_and_missing_data_is_never_recreated() {
     );
     std::fs::remove_file(data.join("sentinel")).unwrap();
     std::fs::remove_dir(&data).unwrap();
-    assert_eq!(
-        inspect_saved_bind(root.path(), &entry),
-        StoragePresence::Missing
-    );
+    let missing = refresh_retained_storage(&db, None, "scope", ID)
+        .await
+        .unwrap();
+    assert_eq!(missing.locations[0].storage.presence, "missing");
+    assert!(!missing.locations[0].ownership_verified);
     assert!(!data.exists());
+}
+
+#[tokio::test]
+async fn volume_without_cli_becomes_unverified_and_scope_is_still_enforced() {
+    let (root, db) = fixture();
+    let volume = format!("cn-{ID}-data");
+    let saved_volume = volume.clone();
+    db.write(move |db| {
+        db.execute("UPDATE instance_specs SET storage_method='volume' WHERE instance_id=?1", [ID])?;
+        db.execute("UPDATE storage_allocations SET method='volume', resource_identity=?1, presence='present', observed_at='2000-01-01 00:00:00' WHERE instance_id=?2", rusqlite::params![saved_volume, ID])?;
+        Ok(())
+    }).unwrap();
+    assert!(refresh_retained_storage(&db, None, "other", ID).await.is_err());
+    let saved = db.list_retained_storage("scope").unwrap().remove(0);
+    assert_eq!(saved.locations[0].storage.presence, "present");
+    let view = refresh_retained_storage(&db, None, "scope", ID)
+        .await
+        .unwrap();
+    assert_eq!(view.locations[0].storage.presence, "unverified");
+    assert!(!view.locations[0].ownership_verified);
+    assert_eq!(view.locations[0].location, volume);
+    assert!(view.locations[0].observed_at.is_some());
+    assert_ne!(view.locations[0].observed_at, saved.locations[0].observed_at);
+    assert_eq!(view.instance.revision, saved.instance.revision);
+    assert_eq!(view.instance.spec_revision, saved.instance.spec_revision);
+    assert_eq!(view.instance.inputs, saved.instance.inputs);
+    assert_eq!(view.instance.observation, saved.instance.observation);
+    assert_eq!(view.instance.last_operation, saved.instance.last_operation);
+    assert!(!root.path().join("data").exists());
 }

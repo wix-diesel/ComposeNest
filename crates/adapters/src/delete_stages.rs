@@ -66,7 +66,7 @@ fn context(database: &DatabaseWorker, scope: &str, id: &str) -> Result<Context, 
 
 struct Stages<'a> {
     database: &'a DatabaseWorker,
-    probe: &'a DockerProbe,
+    probe: Option<&'a DockerProbe>,
     scope: &'a str,
     id: &'a str,
 }
@@ -92,13 +92,16 @@ impl Stages<'_> {
             let presence = match entry.method {
                 StorageMethod::Bind => inspect_saved_bind(self.database.management_root(), entry),
                 StorageMethod::Volume => {
-                    let observed = match self.probe.bind(saved.target.clone()) {
-                        Ok(docker) => {
+                    let observed = match self
+                        .probe
+                        .and_then(|probe| probe.bind(saved.target.clone()).ok())
+                    {
+                        Some(docker) => {
                             DockerNamedVolumes::new(docker)
                                 .observe_saved_volume(entry, self.database)
                                 .await
                         }
-                        Err(_) => {
+                        None => {
                             Err(composenest_application::named_volumes::NamedVolumeError::Backend)
                         }
                     };
@@ -124,6 +127,7 @@ impl DeleteStages for Stages<'_> {
             .map_err(|_| LifecycleEffectError::OutcomeUnknown)?;
         let docker = self
             .probe
+            .ok_or(LifecycleEffectError::OutcomeUnknown)?
             .bind(saved.target.clone())
             .map_err(|_| LifecycleEffectError::OutcomeUnknown)?;
         remove_owned_runtime(&docker, self.database, receipt, &self.owner(&saved)).await
@@ -136,6 +140,7 @@ impl DeleteStages for Stages<'_> {
             .map_err(|_| LifecycleEffectError::OutcomeUnknown)?;
         let docker = self
             .probe
+            .ok_or(LifecycleEffectError::OutcomeUnknown)?
             .bind(saved.target.clone())
             .map_err(|_| LifecycleEffectError::OutcomeUnknown)?;
         verify_runtime_absent(&docker, &self.owner(&saved)).await
@@ -154,7 +159,7 @@ pub async fn run_delete(
 ) -> Result<RequestReceipt, DeleteError> {
     let stages = Stages {
         database,
-        probe,
+        probe: Some(probe),
         scope: &receipt.scope_id,
         id: &receipt.instance_id,
     };
@@ -168,10 +173,10 @@ pub async fn run_delete(
 }
 
 /// Refreshes every retained slot without creating resources or requiring Docker for bind data.
-/// An unavailable Engine is shown as unverified for volume data.
+/// An absent CLI or unavailable Engine is shown as unverified for volume data.
 pub async fn refresh_retained_storage(
     database: &DatabaseWorker,
-    probe: &DockerProbe,
+    probe: Option<&DockerProbe>,
     scope: &str,
     id: &str,
 ) -> Result<RetainedInstance, StoreConflict> {

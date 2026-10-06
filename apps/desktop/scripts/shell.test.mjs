@@ -30,6 +30,7 @@ try {
       if (command === "diagnose_runtime") return { apiVersion: 1, requestId: request.requestId, error: null, result: { observedAt: 1, checks: [], targetStatus: "unverified" } };
       if (command === "list_templates") return { apiVersion: 1, requestId: request.requestId, error: null, result: { localRoot: "/managed/templates/local", templates: [], results: [] } };
       if (command === "list_instances") return { apiVersion: 1, requestId: request.requestId, error: null, result: [] };
+      if (command === "list_retained_storage") return { apiVersion: 1, requestId: request.requestId, error: null, result: [] };
       if (command === "get_instance_detail") return { apiVersion: 1, requestId: request.context.requestId, error: null, result: {
         state: { id: request.instanceId, name: "対象の環境", revision: 1, runtimeStatus: "unknown", observedAt: null, operationId: null, actions: [] },
         instance: { id: request.instanceId, templateId: "custom", selectedVersion: "1", templateVersion: "1", specRevision: 1, appliedSpecRevision: null, connections: [], storage: [], observation: null },

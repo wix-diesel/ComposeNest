@@ -8,6 +8,8 @@ fn main() {
             "list_templates",
             "reload_templates",
             "list_instances",
+            "list_retained_storage",
+            "refresh_retained_storage",
             "get_instance_detail",
             "get_instance_actions",
             "rename_instance",

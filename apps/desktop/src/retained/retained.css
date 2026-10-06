@@ -1,0 +1,28 @@
+.retained-storage { min-width: 0; }
+.retained-storage .notice { display: flex; align-items: flex-start; gap: 12px; padding: 16px 20px; margin-bottom: 24px; border: 1px solid var(--line); border-radius: 8px; background: var(--notice-bg); font-size: 12px; }
+.retained-storage .notice svg { color: var(--green); }
+.retained-storage .notice p { margin-top: 3px; font-size: 11px; }
+.retained-storage .panel-title { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+.retained-storage .panel-title h2 { font-size: 14px; }
+.retained-storage .panel p { font-size: 12px; }
+.retained-storage .table-wrap { overflow-x: auto; }
+.retained-storage table { width: 100%; min-width: 900px; border-collapse: collapse; text-align: left; font-size: 11px; }
+.retained-storage th, .retained-storage td { border-bottom: 1px solid var(--line); padding: 14px 12px; vertical-align: top; }
+.retained-storage th { color: var(--muted); font-weight: 500; background: var(--notice-bg); }
+.retained-storage td:nth-child(3) { min-width: 230px; max-width: 340px; }
+.retained-storage td small, .retained-config small { display: block; margin-top: 5px; }
+.retained-storage .badge { display: inline-block; padding: 3px 8px; border-radius: 5px; background: var(--soft); color: var(--muted); font-size: 10px; }
+.retained-storage .badge.ready { background: var(--active-bg); color: var(--active-text); }
+.retained-storage .badge.warn { background: #fff4de; color: #946423; }
+.retained-storage .badge.danger { background: #fff0ed; color: var(--error); }
+.retained-storage .two-equal { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; align-items: start; }
+.retained-config { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 16px; }
+.retained-config dl { font-size: 11px; margin-bottom: 0; }
+.retained-config dt { margin-top: 10px; color: var(--muted); }
+.retained-config dd { margin: 0; overflow-wrap: anywhere; }
+.retained-storage .path { display: block; padding: 10px; background: var(--soft); border-radius: 6px; margin-top: 6px; }
+.retained-storage .footnote { margin-top: 16px; }
+.retained-storage .recheck-failed { color: var(--error); }
+[data-theme="dark"] .retained-storage .badge.warn { background: #3a3020; color: #e1c58a; }
+[data-theme="dark"] .retained-storage .badge.danger { background: #463029; }
+@media (max-width: 1000px) { .retained-storage .two-equal { grid-template-columns: minmax(0, 1fr); } }

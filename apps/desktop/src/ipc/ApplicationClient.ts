@@ -47,6 +47,24 @@ export class ApplicationClient {
 
   private context() { return { apiVersion: API_VERSION, requestId: crypto.randomUUID() }; }
 
+  /** Reads saved retained observations without inspecting resources. */
+  async listRetainedStorage(): Promise<import("../generated/template-form").RetainedInstance[]> {
+    const request = this.context();
+    const response = await invoke<ResponseEnvelope<import("../generated/template-form").RetainedInstance[]>>("list_retained_storage", { request });
+    if (response.apiVersion !== API_VERSION || response.requestId !== request.requestId || response.error !== null
+      || !Array.isArray(response.result)) throw new Error("retained_list_failed");
+    return response.result;
+  }
+
+  /** Rechecks the original allocation using only its scoped instance identity. */
+  async refreshRetainedStorage(instanceId: string): Promise<import("../generated/template-form").RetainedInstance> {
+    const request = { context: this.context(), instanceId };
+    const response = await invoke<ResponseEnvelope<import("../generated/template-form").RetainedInstance>>("refresh_retained_storage", { request });
+    if (response.apiVersion !== API_VERSION || response.requestId !== request.context.requestId || response.error !== null
+      || !response.result || response.result.instance.id !== instanceId) throw new Error("retained_refresh_failed");
+    return response.result;
+  }
+
   /** Reads the backend default and OS-resolved root without runtime operations. */
   getSettings(): Promise<import("../generated/template-form").SettingsView> {
     return this.settingsCall("get_settings", this.context());

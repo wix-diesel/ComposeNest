@@ -21,6 +21,8 @@ mod diagnostic_commands;
 use diagnostic_commands::*;
 mod settings_commands;
 use settings_commands::*;
+mod retained_commands;
+use retained_commands::*;
 
 /// Returns the non-sensitive state required to initialize the desktop UI.
 #[tauri::command]
@@ -84,6 +86,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             list_templates,
             reload_templates,
             list_instances,
+            list_retained_storage,
+            refresh_retained_storage,
             get_instance_detail,
             get_instance_actions,
             rename_instance,

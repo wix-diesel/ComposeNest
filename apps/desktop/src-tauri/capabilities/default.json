@@ -13,6 +13,8 @@
     "allow-list-templates",
     "allow-reload-templates",
     "allow-list-instances",
+    "allow-list-retained-storage",
+    "allow-refresh-retained-storage",
     "allow-get-instance-detail",
     "allow-prepare-create",
     "allow-update-create-plan",

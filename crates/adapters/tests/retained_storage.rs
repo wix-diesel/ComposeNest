@@ -132,7 +132,10 @@ async fn fresh_checks_never_create_data_and_distinguish_never_materialized_from_
     let without_cli = refresh_retained_storage(&db, None, "scope", ID)
         .await
         .unwrap();
-    assert_eq!(without_cli.locations[0].storage.presence, "not_materialized");
+    assert_eq!(
+        without_cli.locations[0].storage.presence,
+        "not_materialized"
+    );
     assert!(!root.path().join("data").exists());
     let offline = DockerProbe {
         executable: root.path().join("missing-docker.exe"),
@@ -212,7 +215,11 @@ async fn volume_without_cli_becomes_unverified_and_scope_is_still_enforced() {
         db.execute("UPDATE storage_allocations SET method='volume', resource_identity=?1, presence='present', observed_at='2000-01-01 00:00:00' WHERE instance_id=?2", rusqlite::params![saved_volume, ID])?;
         Ok(())
     }).unwrap();
-    assert!(refresh_retained_storage(&db, None, "other", ID).await.is_err());
+    assert!(
+        refresh_retained_storage(&db, None, "other", ID)
+            .await
+            .is_err()
+    );
     let saved = db.list_retained_storage("scope").unwrap().remove(0);
     assert_eq!(saved.locations[0].storage.presence, "present");
     let view = refresh_retained_storage(&db, None, "scope", ID)
@@ -222,7 +229,10 @@ async fn volume_without_cli_becomes_unverified_and_scope_is_still_enforced() {
     assert!(!view.locations[0].ownership_verified);
     assert_eq!(view.locations[0].location, volume);
     assert!(view.locations[0].observed_at.is_some());
-    assert_ne!(view.locations[0].observed_at, saved.locations[0].observed_at);
+    assert_ne!(
+        view.locations[0].observed_at,
+        saved.locations[0].observed_at
+    );
     assert_eq!(view.instance.revision, saved.instance.revision);
     assert_eq!(view.instance.spec_revision, saved.instance.spec_revision);
     assert_eq!(view.instance.inputs, saved.instance.inputs);

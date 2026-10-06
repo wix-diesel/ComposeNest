@@ -14,3 +14,6 @@ composenest-application = { path = "../../../crates/application" }
 tauri = "=2.11.6"
 
 tokio = { version = "1.53.1", features = ["rt", "time", "process", "sync", "io-util"] }
+
+[dev-dependencies]
+tempfile = "3"

@@ -41,13 +41,23 @@ try {
   await page.getByText("Dockerを利用できます", { exact: true }).waitFor();
   for (const text of ["30.1.4", "5.6.2", "linux/arm64", "same-context", "unix:///actual/docker.sock", "Engine ID一致", "/actual/management"]) assert.ok(await page.getByText(text, { exact: false }).count(), text);
   assert.equal(await page.locator(".diagnostic-row").count(), 7);
-  for (const [name, status, label] of [["cli", "missing", "未導入"], ["compose", "unsupported", "非対応"], ["engine", "unavailable", "確認不能"], ["engine", "permission_denied", "権限不足"], ["root", "permission_denied", "権限不足"], ["engine", "changed", "対象不一致"], ["linux", "unsupported", "非対応"], ["platform", "unsupported", "非対応"]]) {
+  for (const [name, status, label] of [["cli", "missing", "未導入"], ["cli", "permission_denied", "権限不足"], ["compose", "unsupported", "非対応"], ["engine", "unavailable", "確認不能"], ["engine", "permission_denied", "権限不足"], ["root", "permission_denied", "権限不足"], ["engine", "changed", "対象不一致"], ["linux", "unsupported", "非対応"], ["platform", "unsupported", "非対応"]]) {
     await page.evaluate(({ name, status }) => { window.report.checks.forEach((check) => { check.status = check.name === name ? status : "ready"; }); if (name === "engine" && status === "changed") { window.report.engineId = "another-engine"; window.report.targetStatus = "changed"; } }, { name, status });
     await refresh.click();
     await page.locator(".diagnostic-badge").filter({ hasText: label }).waitFor();
     assert.equal(await page.getByText("Dockerを利用できます", { exact: true }).count(), 0);
     assert.equal(await page.getByText("Engine ID一致", { exact: true }).count(), status === "changed" || name === "linux" || name === "platform" ? 0 : 1);
   }
+  await page.evaluate(() => {
+    window.report.targetStatus = "unverified"; window.report.registeredEngineId = null;
+    window.report.checks.forEach((check) => { check.status = check.name === "root" ? "unavailable" : "ready"; });
+  });
+  await refresh.click();
+  await page.locator(".diagnostic-row").filter({ hasText: "管理データの保存先" }).locator(".diagnostic-badge").filter({ hasText: "確認不能" }).waitFor();
+  assert.equal(await page.locator(".diagnostic-badge.ready").count(), 6);
+  assert.equal(await page.getByText("Dockerを利用できます", { exact: true }).count(), 0);
+  assert.equal(await page.getByText("Engine ID一致", { exact: true }).count(), 0);
+  assert.equal(await page.getByText("Engine停止・接続不能。起動と接続先を確認してください。", { exact: true }).count(), 0);
   await page.getByRole("button", { name: "保存済みの環境を見る", exact: true }).click();
   await page.getByText("保存済み環境", { exact: true }).waitFor();
   await page.locator(".sidebar").getByRole("button", { name: "Docker診断", exact: true }).click();

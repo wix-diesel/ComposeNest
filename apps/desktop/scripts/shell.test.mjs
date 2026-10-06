@@ -28,6 +28,10 @@ try {
     window.__TAURI_INTERNALS__ = { invoke: async (command, { request }) => {
       if (command === "list_templates") return { apiVersion: 1, requestId: request.requestId, error: null, result: { localRoot: "/managed/templates/local", templates: [], results: [] } };
       if (command === "list_instances") return { apiVersion: 1, requestId: request.requestId, error: null, result: [] };
+      if (command === "get_instance_detail") return { apiVersion: 1, requestId: request.context.requestId, error: null, result: {
+        state: { id: request.instanceId, name: "対象の環境", revision: 1, runtimeStatus: "unknown", observedAt: null, operationId: null, actions: [] },
+        instance: { id: request.instanceId, templateId: "custom", selectedVersion: "1", templateVersion: "1", specRevision: 1, appliedSpecRevision: null, connections: [], storage: [], observation: null },
+        locations: [], creationStartedAt: null, cloneSourceId: null } };
       if (command === "get_instance_actions") return { apiVersion: 1, requestId: request.context.requestId, error: null,
         result: { id: request.instanceId, name: "対象の環境", revision: 1, runtimeStatus: "unknown", observedAt: null,
           operationId: null, operationStatus: null, operationKind: null, operationPhase: null, actions: [] } };
@@ -50,16 +54,16 @@ try {
   await page.waitForFunction(() => document.querySelector("h1")?.textContent === "設定");
   for (const [path, parameter, value, heading, expected] of [
     ["instance-create", "templateId", "template", "環境を作成", "環境一覧"],
-    ["instance-detail", "instanceId", "target", "環境の詳細", "環境一覧"],
-    ["instance-clone", "instanceId", "target", "設定を複製", "環境の詳細"],
-    ["instance-edit", "instanceId", "target", "環境を編集", "環境の詳細"],
-    ["operation", "operationId", "operation", "処理状況", "環境の詳細"],
+    ["instance-detail", "instanceId", "target", "対象の環境", "環境一覧"],
+    ["instance-clone", "instanceId", "target", "設定を複製", "対象の環境"],
+    ["instance-edit", "instanceId", "target", "環境を編集", "対象の環境"],
+    ["operation", "operationId", "operation", "処理状況", "対象の環境"],
   ]) {
     await page.evaluate((hash) => { location.hash = hash; }, `#/${path}?${parameter}=${value}${path === "operation" ? "&instanceId=target" : ""}`);
     await page.getByRole("heading", { level: 1, name: heading, exact: true }).waitFor();
     await page.getByRole("button", { name: "戻る", exact: true }).click();
     await page.waitForFunction((text) => document.querySelector("h1")?.textContent === text, expected);
-    if (expected === "環境の詳細") assert.match(page.url(), /instanceId=target/);
+    if (expected === "対象の環境") assert.match(page.url(), /instanceId=target/);
   }
   const opener = page.getByRole("button", { name: "この画面について" });
   await opener.click();

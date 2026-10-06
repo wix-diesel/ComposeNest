@@ -20,12 +20,23 @@ try {
     window.calls = []; window.mode = "normal";
     window.view = { id: "target", name: "開発用データベース", revision: 3, runtimeStatus: "stopped", observedAt: "2026-10-05 08:00:00", operationId: null, operationStatus: null, operationKind: null, operationPhase: null, actions: ["rename", "start", "stop", "restart"] };
     window.edit = { templateId: "generic-service", selectedVersion: "custom-17", storageMethod: "volume", specRevision: 1, appliedSpecRevision: 1,
-      inputs: [{ slot: "username", secret: false, value: "app-user" }, { slot: "password", secret: true, value: null }, { slot: "enabled", secret: false, value: false }],
+      inputs: [{ slot: "username", label: "接続ユーザー", secret: false, value: "app-user" }, { slot: "password", label: "認証用パスワード", secret: true, value: null }, { slot: "enabled", label: "機能を有効化", secret: false, value: false }],
       ports: [{ slot: "db", hostIp: "127.0.0.1", containerPort: 5432, oldPort: 15432, committedPort: 15432, candidatePort: null, oldReservation: "committed", candidateReservation: null }, { slot: "metrics", hostIp: "127.0.0.1", containerPort: 9000, oldPort: 19000, committedPort: 19000, candidatePort: null, oldReservation: "committed", candidateReservation: null }] };
     window.__TAURI_INTERNALS__ = { invoke: async (command, { request }) => {
       window.calls.push({ command, request: structuredClone(request) });
       const response = (result, error = null) => ({ apiVersion: 1, requestId: (request.context ?? request).requestId, result, error });
       if (command === "get_bootstrap") return response({ applicationTitle: "ComposeNest", startedAtUnixSeconds: 1 });
+      if (command === "get_instance_detail") {
+        if (window.mode === "read_failure") throw new Error("Disconnected");
+        const state = structuredClone(window.view);
+        if (window.mode === "wrong_target") state.id = "another-instance";
+        return response({ state, creationStartedAt: "2026-10-01 05:15:00", cloneSourceId: "source-id", locations: [{ slot: "data", location: "/managed/data/target/data" }],
+          instance: { ...state, templateId: window.edit.templateId, selectedVersion: window.edit.selectedVersion, templateVersion: "2.3.4",
+            specRevision: window.edit.specRevision, appliedSpecRevision: window.edit.appliedSpecRevision, inputs: structuredClone(window.edit.inputs),
+            observation: state.observedAt ? { observedAt: state.observedAt, freshness: window.freshness ?? "fresh" } : null,
+            storage: [{ slot: "data", method: window.edit.storageMethod, presence: "present" }],
+            connections: window.edit.ports.map((port) => ({ slot: port.slot, label: port.slot, port: { ...port, hostPort: port.committedPort }, inputSlots: ["username", "password", "enabled"] })) } });
+      }
       if (command === "get_instance_actions") { if (window.mode === "read_failure") throw new Error("Disconnected"); return response(structuredClone(window.view)); }
       const editView = () => ({ ...structuredClone(window.edit), state: structuredClone(window.view), canEditPorts: ["stopped", "absent"].includes(window.view.runtimeStatus) && window.view.actions.includes("rename") });
       if (command === "get_instance_edit") {
@@ -72,7 +83,7 @@ try {
   async function open(edit = false) {
     await page.goto("about:blank");
     await page.goto(`http://127.0.0.1:4176/#/instance-${edit ? "edit" : "detail"}?instanceId=target`);
-    await page.locator(".instance-actions h2").filter({ hasText: "開発用データベース" }).waitFor();
+    await page.locator(".instance-actions h1, .instance-actions h2").filter({ hasText: "開発用データベース" }).waitFor();
   }
   const calls = (command) => page.evaluate((command) => window.calls.filter((call) => call.command === command), command);
   async function rename(name = "変更した名前") {
@@ -80,6 +91,54 @@ try {
     await page.getByRole("button", { name: "変更内容を確認", exact: true }).click();
     await page.getByRole("button", { name: "名前変更を適用", exact: true }).click();
   }
+  await open();
+  assert.equal(await page.getByRole("heading", { level: 1 }).textContent(), "開発用データベース");
+  assert.equal((await calls("get_instance_detail"))[0].request.instanceId, "target");
+  for (const value of ["generic-service custom-17", "app-user", "false", "/managed/data/target/data", "2.3.4", "source-id", "2026-10-01 05:15:00 UTC", "保存 r1 / 適用 r1", "外部構成は未確認"])
+    assert.ok(await page.getByText(value, { exact: true }).count() > 0, value);
+  assert.equal(await page.getByText("••••••••（非表示）", { exact: true }).count(), 2);
+  for (const label of ["接続ユーザー", "認証用パスワード", "機能を有効化"])
+    assert.equal(await page.locator(".detail-connection dt").filter({ hasText: label }).count(), 2, label);
+  for (const slot of ["username", "password", "enabled"])
+    assert.equal(await page.getByText(slot, { exact: true }).count(), 0, slot);
+  const tabs = page.getByRole("tab");
+  await tabs.nth(0).focus();
+  for (const [key, selected] of [["ArrowRight", 1], ["End", 2], ["ArrowRight", 0], ["ArrowLeft", 2], ["Home", 0]]) {
+    await page.keyboard.press(key);
+    assert.equal(await tabs.nth(selected).getAttribute("aria-selected"), "true");
+    assert.equal(await tabs.nth(selected).evaluate((button) => button === document.activeElement), true);
+    assert.equal(await page.getByRole("tabpanel").count(), 1);
+    assert.equal(await page.locator('[role="tab"][tabindex="0"]').count(), 1);
+  }
+  await tabs.nth(1).click();
+  await page.getByText("ログ購読は未接続です。ログは取得していません。", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "追従を開始", exact: true }).isDisabled(), true);
+  await tabs.nth(2).click();
+  assert.equal(await page.getByRole("button", { name: "原文を表示", exact: true }).isDisabled(), true);
+  assert.deepEqual((await page.evaluate(() => window.calls)).filter((call) => !["get_bootstrap", "get_instance_detail"].includes(call.command)), []);
+  await tabs.nth(0).click();
+  await page.evaluate(() => { window.freshness = "stale"; window.view.observedAt = "2026-09-30 06:05:04"; window.edit.appliedSpecRevision = null; });
+  await page.getByText("保存 r1 / 適用 未確認", { exact: true }).waitFor();
+  await page.getByText("最終観測（保存値） 2026-09-30 06:05:04 UTC（過去の観測）", { exact: true }).waitFor();
+  for (const [theme, width] of [["light", 1280], ["dark", 390]]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.evaluate((theme) => { document.documentElement.dataset.theme = theme; }, theme);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await mkdir("test-results", { recursive: true });
+    await page.screenshot({ path: `test-results/instance-detail-${theme}-${width}.png`, fullPage: true });
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.evaluate(() => { window.view.observedAt = null; });
+  await page.getByText("最終観測（保存値） 未確認", { exact: true }).waitFor();
+  await open();
+  await page.evaluate(() => { window.mode = "read_failure"; });
+  await page.getByRole("alert").waitFor();
+  assert.equal(await page.getByText("/managed/data/target/data", { exact: true }).count(), 0);
+  assert.equal(await page.getByRole("button", { name: "停止", exact: true }).isDisabled(), true);
+  await open(); await page.evaluate(() => { window.mode = "wrong_target"; });
+  await page.getByRole("alert").waitFor();
+  assert.equal(await page.getByText("/managed/data/target/data", { exact: true }).count(), 0);
+  assert.equal(await page.getByRole("button", { name: "編集", exact: true }).isDisabled(), true);
   await open();
   await page.evaluate(() => { window.mode = "delay"; });
   await page.getByRole("button", { name: "起動", exact: true }).evaluate((button) => { button.click(); button.click(); });

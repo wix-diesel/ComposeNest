@@ -139,6 +139,12 @@ export class ApplicationClient {
   getInstanceActions(instanceId: string): Promise<InstanceActionView> {
     return this.createCall("get_instance_actions", { context: this.context(), instanceId } as import("../generated/template-form").InstanceActionRequest);
   }
+  /** Reads masked detail data and available actions from one scoped saved snapshot. */
+  async getInstanceDetail(instanceId: string): Promise<import("../generated/template-form").InstanceDetailView> {
+    const detail = await this.createCall<import("../generated/template-form").InstanceDetailView>("get_instance_detail", { context: this.context(), instanceId } as import("../generated/template-form").InstanceActionRequest);
+    if (!detail || detail.instance.id !== instanceId || detail.state.id !== instanceId) throw new Error("invalid_instance_detail");
+    return detail;
+  }
   /** Reports an in-flight or uncertain change across screen navigation. */
   hasInstanceChange(instanceId: string): boolean { return this.instanceChanges.has(instanceId); }
 

@@ -9,6 +9,8 @@ export function Icon({ name }: { name: string }) {
     home: "m3 10 9-7 9 7M5 9v12h14V9M9 21v-8h6v8",
     refresh: "M20 7v5h-5M4 17v-5h5M6 6a8 8 0 0 1 13 2M5 16a8 8 0 0 0 13 2",
     plus: "M12 5v14M5 12h14",
+    copy: "M9 9h12v12H9zM5 15H3V3h12v2",
+    edit: "m15 3 6 6-11 11-7 1 1-7zM13 5l6 6",
     play: "m8 5 11 7-11 7z",
     stop: "M6 6h12v12H6z",
     info: "M12 11v6M12 7h.01M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18",

@@ -4,7 +4,7 @@ import { readFile, writeFile } from "node:fs/promises";
 // Fail closed on an unfamiliar Rust field type or Serde attribute.
 const sources = {
   template_catalog_view: ["TemplateCard", "TemplateLoadResult", "TemplateCatalogView"],
-  query_service: ["PortView", "ObservationView", "InstanceListView"],
+  query_service: ["PortView", "StorageView", "InputView", "ConnectionView", "ObservationView", "OperationView", "InstanceView", "InstanceListView", "StorageLocationView", "InstanceDetailView"],
   instance_edit: ["EditInstancePortsRequest", "EditSettingView", "EditPortView", "InstanceEditView"],
   instance_actions: ["InstanceActionRequest", "RenameInstanceRequest", "ChangeInstanceRequest", "InstanceActionView"],
   template_form: ["FormInput", "FormOption", "FormSlot", "FormConnection", "TemplateForm"],
@@ -13,14 +13,16 @@ const sources = {
   clone_session: ["PrepareCloneRequest", "UpdateCloneRequest", "ConfirmCloneRequest"],
   clone_plan: ["InputDiff", "ClonePlanView", "CloneEdit"],
 };
-const primitives = { String: "string", "&'static str": "string", bool: "boolean", u16: "number", u64: "number", Value: "JsonValue" };
+const primitives = { String: "string", "&'static str": "string", bool: "boolean", u16: "number", u64: "number", Value: "JsonValue", "serde_json::Value": "JsonValue" };
 const camel = (name) => name.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
-function typeOf(rust) {
+function typeOf(rust, file) {
+  if (file === "query_service" && rust === "InputView") return "SavedInputView";
+  if (rust === "crate::instance_actions::InstanceActionView") return "InstanceActionView";
   if (rust === "crate::template_form::TemplateForm") return "TemplateForm";
   if (rust === "RequestContext") return "RequestContext";
   if (primitives[rust]) return primitives[rust];
-  if (/^Option<(.+)>$/.test(rust)) return `${typeOf(rust.slice(7, -1))} | null`;
-  if (/^Vec<(.+)>$/.test(rust)) return `Array<${typeOf(rust.slice(4, -1))}>`;
+  if (/^Option<(.+)>$/.test(rust)) return `${typeOf(rust.slice(7, -1), file)} | null`;
+  if (/^Vec<(.+)>$/.test(rust)) return `Array<${typeOf(rust.slice(4, -1), file)}>`;
   const map = rust.match(/^BTreeMap<String, (.+)>$/);
   if (map) return `Record<string, ${typeOf(map[1])}>`;
   if ([...Object.values(sources).flat(), "StorageMethod", "ValueOrigin", "CloneAnswer"].includes(rust)) return rust;
@@ -35,12 +37,12 @@ for (const [file, names] of Object.entries(sources)) {
     const match = source.match(new RegExp(`#\\[serde\\(rename_all = "camelCase"(?:, deny_unknown_fields)?\\)\\]\\npub struct ${name} \\{([^}]+)\\}`, "s"));
     if (!match) throw new Error(`Missing camelCase DTO: ${name}`);
     const fields = match[1].split("\n").map((line) => line.trim()).filter(Boolean);
-    output += `export interface ${name} {\n`;
+    output += `export interface ${file === "query_service" && name === "InputView" ? "SavedInputView" : name} {\n`;
     for (const field of fields) {
       if (field.startsWith("///") || field === "#[serde(default)]") continue;
       const parsed = field.match(/^pub (\w+): (.+),$/);
       if (!parsed) throw new Error(`Unsupported DTO field: ${field}`);
-      output += `  ${camel(parsed[1])}: ${typeOf(parsed[2])};\n`;
+      output += `  ${camel(parsed[1])}: ${typeOf(parsed[2], file)};\n`;
     }
     output += "}\n\n";
   }

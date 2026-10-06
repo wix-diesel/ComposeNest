@@ -4,6 +4,31 @@ import type { RequestContext } from "./ipc";
 
 export type JsonValue = null | boolean | number | string | Array<JsonValue> | { [key: string]: JsonValue };
 
+export interface RetainedLocation {
+  storage: StorageView;
+  location: string;
+  ownership: string;
+  ownershipVerified: boolean;
+  observedAt: string | null;
+}
+
+export interface RetainedArtifact {
+  id: string;
+  specRevision: number;
+  placement: string;
+  directory: string | null;
+}
+
+export interface RetainedInstance {
+  instance: InstanceView;
+  serviceName: string;
+  deletedAt: string;
+  locations: Array<RetainedLocation>;
+  settingsDatabase: string;
+  snapshotId: string;
+  artifacts: Array<RetainedArtifact>;
+}
+
 export interface SettingsView {
   storageMethod: StorageMethod;
   managementRoot: string;

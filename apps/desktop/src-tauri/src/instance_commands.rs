@@ -204,6 +204,8 @@ mod tests {
         let authority = context.runtime_authority_mut();
         for command in [
             "list_instances",
+            "list_retained_storage",
+            "refresh_retained_storage",
             "get_instance_detail",
             "get_instance_actions",
             "rename_instance",

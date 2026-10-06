@@ -333,7 +333,7 @@ async fn docker_delete_preserves_bind_and_volume_data_and_rejects_foreign_networ
             fs::read_to_string(artifact.join("compose.yaml")).unwrap(),
             "# preserved"
         );
-        let retained = refresh_retained_storage(&db, &probe, "scope", &id)
+        let retained = refresh_retained_storage(&db, Some(&probe), "scope", &id)
             .await
             .unwrap();
         assert_eq!(retained.locations[0].storage.presence, "present");

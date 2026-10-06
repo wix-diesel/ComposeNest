@@ -15,6 +15,7 @@ import { ThemeChoices } from "./shell/DisplayChoices";
 import { TemplateList } from "./templates/TemplateList";
 import { Diagnostics, RuntimeNotice } from "./diagnostics/Diagnostics";
 import { Settings } from "./settings/Settings";
+import { RetainedStorage } from "./retained/RetainedStorage";
 
 const applicationClient = new ApplicationClient();
 
@@ -89,7 +90,7 @@ export function App({ client = applicationClient }: { client?: ApplicationClient
           </div>
         </header>
         <div className="workspace">
-          {route.page !== "instance-detail" && route.page !== "diagnostics" && <div className="page-heading"><div>
+          {route.page !== "instance-detail" && route.page !== "diagnostics" && route.page !== "retained" && <div className="page-heading"><div>
             <div className="eyebrow">{route.page === "settings" ? ja.application : ja.workspace}</div>
             <h1 id="screen" ref={heading} tabIndex={-1}>{ja.pages[route.page]}</h1>
             <p className="subtitle">{ja.subtitles[route.page]}</p>
@@ -103,6 +104,7 @@ export function App({ client = applicationClient }: { client?: ApplicationClient
           {saveFailed && <p className="notice warning" role="status">{ja.displaySaveFailed}</p>}
           {route.page !== "diagnostics" && <RuntimeNotice />}
           {route.page === "diagnostics" ? <Diagnostics key={hash} client={client} headingRef={heading} summaryChanged={setRuntimeSummary} /> :
+          route.page === "retained" ? <RetainedStorage key={hash} client={client} headingRef={heading} onAbout={() => setAbout(true)} /> :
           route.page === "instances" ? <InstanceList key={hash} client={client} refresh={listRefresh} loadingChanged={setListLoading} listView={preferences.listView} changeView={(view) => update("listView", view)} /> : route.page === "templates" ? <TemplateList key={hash} client={client} refresh={templateRefresh} loadingChanged={setTemplateLoading} /> : route.page === "settings" ? <Settings key={hash} client={client} preferences={preferences} update={update} /> : route.page === "instance-create" ? <CreateScreen key={hash} client={client} templateId={route.templateId} returnTo={route.returnTo} /> : route.page === "instance-clone" ? <CloneScreen key={hash} client={client} sourceId={route.instanceId} /> : route.page === "instance-detail" || route.page === "instance-edit" ? <InstanceActions key={hash} client={client} instanceId={route.instanceId} edit={route.page === "instance-edit"} headingRef={heading} onAbout={() => setAbout(true)} /> : <section className="panel" aria-label={ja.pages[route.page]} key={hash}>
             <p>{ja.unimplemented}</p>
             {"instanceId" in route && route.instanceId && <p>{ja.target}: <code>{route.instanceId}</code></p>}
@@ -113,6 +115,6 @@ export function App({ client = applicationClient }: { client?: ApplicationClient
       </main>
     </div>
     {notice && <Toast message={notice} kind="error" onDismiss={() => setNotice(null)} />}
-    {about && <ConfirmDialog title={ja.pages[route.page]} onClose={() => setAbout(false)}><p>{route.page === "settings" ? "新しい環境の既定保存方式を保存できます。既存の環境や複製元の方式は変わりません。表示設定は選択するとすぐに保存されます。" : ja.unimplemented}</p></ConfirmDialog>}
+    {about && <ConfirmDialog title={ja.pages[route.page]} onClose={() => setAbout(false)}><p>{route.page === "retained" ? "削除した環境の保存領域と元の設定の所在を確認します。状態確認はデータを作成・削除せず、実体と所有情報の観測を更新します。" : route.page === "settings" ? "新しい環境の既定保存方式を保存できます。既存の環境や複製元の方式は変わりません。表示設定は選択するとすぐに保存されます。" : ja.unimplemented}</p></ConfirmDialog>}
   </>;
 }

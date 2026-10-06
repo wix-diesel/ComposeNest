@@ -30,6 +30,21 @@ export class ApplicationClient {
     }
     window.location.hash = hash;
   }
+  /** Reads package cards and the latest actual reload results without runtime operations. */
+  listTemplates(): Promise<import("../generated/template-form").TemplateCatalogView> { return this.catalogCall("list_templates"); }
+
+  /** Reloads fixed trusted directories without pulling images or starting environments. */
+  reloadTemplates(): Promise<import("../generated/template-form").TemplateCatalogView> { return this.catalogCall("reload_templates"); }
+
+  private async catalogCall(command: string): Promise<import("../generated/template-form").TemplateCatalogView> {
+    const request = this.context();
+    const response = await invoke<ResponseEnvelope<import("../generated/template-form").TemplateCatalogView>>(command, { request });
+    if (response.apiVersion !== API_VERSION || response.requestId !== request.requestId
+      || response.error !== null || response.result === null || typeof response.result.localRoot !== "string"
+      || !Array.isArray(response.result.templates) || !Array.isArray(response.result.results)) throw new Error("template_catalog_failed");
+    return response.result;
+  }
+
   private context() { return { apiVersion: API_VERSION, requestId: crypto.randomUUID() }; }
 
   /** Reloads scoped saved list data, preserving its original observation timestamps. */

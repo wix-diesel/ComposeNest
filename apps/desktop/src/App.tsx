@@ -12,6 +12,8 @@ import { InstanceList } from "./instances/InstanceList";
 import { useDisplayPreferences } from "./appearance";
 import { ListViewChoices, ThemeChoices } from "./shell/DisplayChoices";
 
+import { TemplateList } from "./templates/TemplateList";
+
 const applicationClient = new ApplicationClient();
 
 /** Shared Japanese shell; each destination reserves content for its own feature issue. */
@@ -27,6 +29,8 @@ export function App({ client = applicationClient }: { client?: ApplicationClient
   const [notice, setNotice] = useState<string | null>(null);
   const [about, setAbout] = useState(false);
   const [listRefresh, setListRefresh] = useState(0);
+  const [templateRefresh, setTemplateRefresh] = useState(0);
+  const [templateLoading, setTemplateLoading] = useState(true);
   const [listLoading, setListLoading] = useState(true);
   const { preferences, update, saveFailed } = useDisplayPreferences();
 
@@ -89,11 +93,12 @@ export function App({ client = applicationClient }: { client?: ApplicationClient
           </div><div className="actions">
             {route.page === "instances" && <><button className="btn" disabled={listLoading} onClick={() => setListRefresh((value) => value + 1)}><Icon name="refresh" />更新</button>
               <button className="btn primary" onClick={() => client.navigate({ page: "templates" })}><Icon name="plus" />環境を作成</button></>}
+            {route.page === "templates" && <button className="btn" disabled={templateLoading} onClick={() => setTemplateRefresh((value) => value + 1)}><Icon name="refresh" />再読込み</button>}
             {parent && <button className="btn" onClick={() => client.navigate(parent)}>{ja.back}</button>}
             <button className="btn" onClick={() => setAbout(true)}>{ja.about}</button>
           </div></div>
           {saveFailed && <p className="notice warning" role="status">{ja.displaySaveFailed}</p>}
-          {route.page === "instances" ? <InstanceList key={hash} client={client} refresh={listRefresh} loadingChanged={setListLoading} listView={preferences.listView} changeView={(view) => update("listView", view)} /> : route.page === "settings" ? <section className="panel display-settings" aria-label={ja.design}>
+          {route.page === "instances" ? <InstanceList key={hash} client={client} refresh={listRefresh} loadingChanged={setListLoading} listView={preferences.listView} changeView={(view) => update("listView", view)} /> : route.page === "templates" ? <TemplateList key={hash} client={client} refresh={templateRefresh} loadingChanged={setTemplateLoading} /> : route.page === "settings" ? <section className="panel display-settings" aria-label={ja.design}>
             <h2>{ja.design}</h2><p>{ja.displayOnly}</p>
             <div><h3>{ja.theme}</h3><ThemeChoices value={preferences.theme} onChange={(value) => update("theme", value)} /></div>
             <div><h3>{ja.listView}</h3><ListViewChoices value={preferences.listView} onChange={(value) => update("listView", value)} /></div>

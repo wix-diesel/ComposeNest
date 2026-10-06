@@ -7,6 +7,8 @@
   ],
   "permissions": [
     "allow-get-bootstrap",
+    "allow-list-templates",
+    "allow-reload-templates",
     "allow-list-instances",
     "allow-prepare-create",
     "allow-update-create-plan",

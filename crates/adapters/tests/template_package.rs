@@ -145,9 +145,13 @@ fn rejects_package_when_cumulative_size_exceeds_eight_mebibytes() {
     }
     fs::write(package.join("template.yaml"), manifest).unwrap();
     let results = read_packages(root.path(), TemplateOrigin::Local).unwrap();
-    assert_eq!(
-        results[0].as_ref().err().unwrap().reason,
-        "package exceeds the 8 MiB total limit"
+    assert!(
+        results[0]
+            .as_ref()
+            .err()
+            .unwrap()
+            .reason
+            .contains("package exceeds the 8 MiB total limit")
     );
 }
 

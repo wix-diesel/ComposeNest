@@ -65,4 +65,5 @@ pub mod retained_storage;
 pub mod sqlite;
 pub mod state_store;
 pub mod storage;
+pub mod template_catalog_view;
 pub mod template_package;

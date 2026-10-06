@@ -26,6 +26,7 @@ try {
   await page.addInitScript(() => {
     window.bootstrapCalls = 0;
     window.__TAURI_INTERNALS__ = { invoke: async (command, { request }) => {
+      if (command === "list_templates") return { apiVersion: 1, requestId: request.requestId, error: null, result: { localRoot: "/managed/templates/local", templates: [], results: [] } };
       if (command === "list_instances") return { apiVersion: 1, requestId: request.requestId, error: null, result: [] };
       if (command === "get_instance_actions") return { apiVersion: 1, requestId: request.context.requestId, error: null,
         result: { id: request.instanceId, name: "対象の環境", revision: 1, runtimeStatus: "unknown", observedAt: null,

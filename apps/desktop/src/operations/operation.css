@@ -1,0 +1,21 @@
+/* Timeline and target summary follow ui-mockups/operation.html. */
+.operation-columns { display: grid; grid-template-columns: minmax(0, 1.8fr) minmax(240px, 1fr); gap: 24px; }
+.operation-screen .panel-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 22px; }
+.operation-screen .badge { border-radius: 20px; background: var(--soft); color: var(--green); padding: 4px 10px; font-size: 11px; white-space: nowrap; }
+.operation-screen .badge.operation-failed { color: var(--error); }
+.operation-progress { height: 6px; background: var(--soft); border-radius: 8px; overflow: hidden; margin-bottom: 28px; }
+.operation-progress > div { height: 100%; background: var(--green); }
+.operation-timeline { list-style: none; padding: 0; margin: 0 0 22px; }
+.operation-timeline li { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.operation-timeline li > span:last-child { color: var(--muted); font-size: 11px; }
+.operation-timeline p, .operation-screen .notice p { font-size: 12px; }
+.operation-check { border: 1px solid var(--line); border-radius: 50%; width: 29px; height: 29px; display: grid; place-items: center; color: var(--muted); font-size: 12px; }
+.operation-check.done { background: var(--soft); color: var(--green); border-color: var(--green); }
+.operation-screen .notice { background: var(--notice-bg); border: 1px solid var(--line); padding: 16px; border-radius: 8px; margin-bottom: 20px; }
+.operation-screen .notice .btn { margin-top: 12px; white-space: normal; }
+.operation-summary { margin: 16px 0 0; font-size: 12px; }
+.operation-summary > div { display: flex; justify-content: space-between; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.operation-summary dt { color: var(--muted); flex-shrink: 0; }
+.operation-summary dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+@media (max-width: 1050px) { .operation-columns { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 540px) { .operation-timeline li { gap: 8px; } .operation-timeline h3 { font-size: 12px; } .operation-screen .panel-title { flex-wrap: wrap; } }

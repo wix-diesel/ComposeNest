@@ -102,6 +102,55 @@ fn saved_list_and_detail_use_committed_ports_and_mask_secrets() {
 }
 
 #[test]
+fn operation_lookup_is_scoped_historical_masked_and_read_only() {
+    use composenest_adapters::query_service::view_operation;
+    let (_root, db) = fixture();
+    db.write(|db| {
+        db.execute_batch("INSERT INTO operation_steps (operation_id, sequence, attempt, command_kind, resource_id, expected_result, outcome, observed_at) VALUES ('create', 7, 1, 'observe', 'private-resource', 'state_observed', 'succeeded', CURRENT_TIMESTAMP);
+            INSERT INTO operations (id, instance_id, kind, status, phase, expected_instance_revision) VALUES ('pending', 'one', 'start', 'Executing', 'ready', 1);")?;
+        Ok(())
+    })
+    .unwrap();
+    let historical = view_operation(&db, "scope", "create").unwrap();
+    assert_eq!(historical.operation.id, "create");
+    assert_eq!(historical.operation.status, "Succeeded");
+    assert_eq!(historical.sequence, 7);
+    assert!(historical.completed_at.is_some());
+    assert_eq!(
+        historical.instance.last_operation.as_ref().unwrap().id,
+        "pending"
+    );
+    let json = serde_json::to_string(&historical).unwrap();
+    for secret in ["top-secret", "different-secret", "private-resource"] {
+        assert!(!json.contains(secret));
+    }
+    for (scope, id) in [("other", "create"), ("scope", "missing")] {
+        assert!(matches!(
+            view_operation(&db, scope, id),
+            Err(StoreConflict::Missing)
+        ));
+    }
+    for status in ["Executing", "Failed", "OutcomeUnknown", "AwaitingDecision"] {
+        db.write(move |db| {
+            db.execute(
+                "UPDATE operations SET status=?1 WHERE id='pending'",
+                [status],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let pending = view_operation(&db, "scope", "pending").unwrap();
+        assert_eq!(pending.operation.status, status);
+        assert_eq!(pending.sequence, 0);
+        assert!(pending.completed_at.is_none());
+        assert_eq!(
+            pending.instance.observation.unwrap().observed_at,
+            "2026-09-01 00:00:00"
+        );
+    }
+}
+
+#[test]
 fn desktop_detail_is_scoped_masked_and_uses_saved_metadata() {
     use composenest_adapters::query_service::view_instance_detail;
     let (root, db) = fixture();

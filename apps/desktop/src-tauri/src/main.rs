@@ -23,6 +23,8 @@ mod settings_commands;
 use settings_commands::*;
 mod retained_commands;
 use retained_commands::*;
+mod operation_commands;
+use operation_commands::*;
 
 /// Returns the non-sensitive state required to initialize the desktop UI.
 #[tauri::command]
@@ -80,6 +82,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .invoke_handler(tauri::generate_handler![
             get_bootstrap,
+            get_operation,
             get_settings,
             save_settings,
             diagnose_runtime,

@@ -3,7 +3,8 @@
 use composenest_application::{
     query_service::{
         ConnectionView, InputView, InstanceDetailView, InstanceView, ObservationView,
-        OperationView, PortView, QueryStore, StorageLocationView, StorageView,
+        OperationProgressView, OperationView, PortView, QueryStore, StorageLocationView,
+        StorageView,
     },
     state_store::StoreConflict,
 };
@@ -14,6 +15,31 @@ use crate::{
     sqlite::{DatabaseError, DatabaseWorker},
     state_store::map_error,
 };
+
+/// Restores a requested operation without contacting Docker or changing its journal.
+pub fn view_operation(
+    database: &DatabaseWorker,
+    scope: &str,
+    id: &str,
+) -> Result<OperationProgressView, StoreConflict> {
+    database.read(|db| {
+        let (operation, instance_id, completed_at) = db.query_row(
+            "SELECT o.id, o.kind, o.status, o.phase, o.started_at, o.instance_id, o.completed_at FROM operations o JOIN instances i ON i.id=o.instance_id WHERE o.id=?1 AND i.scope_id=?2",
+            params![id, scope], |row| Ok((OperationView {
+                id: row.get(0)?, kind: row.get(1)?, status: row.get(2)?,
+                phase: row.get(3)?, started_at: row.get(4)?,
+            }, row.get::<_, String>(5)?, row.get(6)?)),
+        ).optional()?.ok_or(DatabaseError::Missing)?;
+        let sequence: i64 = db.query_row(
+            "SELECT COALESCE(MAX(sequence), 0) FROM operation_steps WHERE operation_id=?1",
+            [id], |row| row.get(0),
+        )?;
+        Ok(OperationProgressView {
+            operation, instance: read_instance(db, scope, &instance_id)?,
+            sequence: positive(sequence)?, completed_at,
+        })
+    }).map_err(map_error)
+}
 
 /// Reads detail metadata and masked settings in one scoped, read-only database snapshot.
 pub fn view_instance_detail(

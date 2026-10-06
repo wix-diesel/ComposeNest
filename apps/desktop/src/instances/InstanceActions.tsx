@@ -108,7 +108,7 @@ function InstanceHeader({ client, instanceId, headingRef, onAbout }: { client: A
       <dl className="instance-state"><div><dt>実行状態</dt><dd><span className="badge" data-runtime={view?.runtimeStatus}>{runtime[view?.runtimeStatus ?? "unknown"] ?? "未確認"}</span></dd></div>
         <div><dt>直前の処理</dt><dd aria-live="polite">{!view ? "未取得" : view.operationId ? `${actionLabel[view.operationKind ?? ""] ?? "処理"} · ${operation[view.operationStatus ?? ""] ?? "未確認"}` : "なし"}</dd></div>
         <div><dt>構成の照合</dt><dd>外部構成は未確認</dd><dd>{detail ? `保存 r${detail.instance.specRevision} / 適用 ${detail.instance.appliedSpecRevision === null ? "未確認" : `r${detail.instance.appliedSpecRevision}`}` : "適用版は未取得"}</dd></div></dl>
-      {view?.operationId && <p className="operation-link">処理ID: <code>{view.operationId}</code> · 段階: {operationPhaseLabel(view.operationPhase)}</p>}
+      {view?.operationId && <p className="operation-link">処理ID: <code>{view.operationId}</code> · 段階: {operationPhaseLabel(view.operationPhase)} <button className="btn small" onClick={() => client.navigate({ page: "operation", operationId: view.operationId!, instanceId })}>処理状況を開く</button></p>}
       <button className="btn small" disabled={busy} onClick={() => void refresh()}>{uncertain ? "受付を再確認" : "現在の状態を再確認"}</button>
     </section>
     <InstanceDetailTabs detail={detail} />

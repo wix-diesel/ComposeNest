@@ -1,7 +1,9 @@
 //! Read models for instance cards, details, and connection information.
 
 use composenest_domain::identity::DisplayName;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+use crate::RequestContext;
 
 use crate::state_store::{StateStore, StoreConflict};
 
@@ -89,6 +91,30 @@ pub struct OperationView {
     pub phase: String,
     /// Start time in SQLite UTC format.
     pub started_at: String,
+}
+
+/// Reads one durable operation; the trusted scope is supplied by the backend.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OperationRequest {
+    /// Correlation and API version metadata.
+    pub context: RequestContext,
+    /// Stable identity from the acceptance receipt.
+    pub operation_id: String,
+}
+
+/// A scoped operation and masked target read in one saved database snapshot.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OperationProgressView {
+    /// Historical progress of the requested operation, not the latest operation.
+    pub operation: OperationView,
+    /// Current committed target settings and saved runtime observation.
+    pub instance: InstanceView,
+    /// Highest durable step sequence; events are only invalidation hints.
+    pub sequence: u64,
+    /// Actual completion time, absent until recorded by Core.
+    pub completed_at: Option<String>,
 }
 
 /// A single masked read model shared by list cards and instance details.

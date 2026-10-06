@@ -60,7 +60,6 @@ try {
     ["instance-detail", "instanceId", "target", "対象の環境", "環境一覧"],
     ["instance-clone", "instanceId", "target", "設定を複製", "対象の環境"],
     ["instance-edit", "instanceId", "target", "環境を編集", "対象の環境"],
-    ["operation", "operationId", "operation", "処理状況", "対象の環境"],
   ]) {
     await page.evaluate((hash) => { location.hash = hash; }, `#/${path}?${parameter}=${value}${path === "operation" ? "&instanceId=target" : ""}`);
     await page.getByRole("heading", { level: 1, name: heading, exact: true }).waitFor();
@@ -68,6 +67,12 @@ try {
     await page.waitForFunction((text) => document.querySelector("h1")?.textContent === text, expected);
     if (expected === "対象の環境") assert.match(page.url(), /instanceId=target/);
   }
+  await page.evaluate(() => { location.hash = "#/operation?operationId=operation&instanceId=target"; });
+  await page.getByRole("heading", { level: 1, name: "処理状況", exact: true }).waitFor();
+  await page.getByRole("button", { name: "閉じる", exact: true }).click();
+  await page.getByRole("heading", { level: 1, name: "環境一覧", exact: true }).waitFor();
+  await page.evaluate(() => { location.hash = "#/instance-detail?instanceId=target"; });
+  await page.getByRole("heading", { level: 1, name: "対象の環境", exact: true }).waitFor();
   const opener = page.getByRole("button", { name: "この画面について" });
   await opener.click();
   const dialog = page.getByRole("dialog");

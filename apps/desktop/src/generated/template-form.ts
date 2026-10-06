@@ -126,6 +126,18 @@ export interface OperationView {
   startedAt: string;
 }
 
+export interface OperationRequest {
+  context: RequestContext;
+  operationId: string;
+}
+
+export interface OperationProgressView {
+  operation: OperationView;
+  instance: InstanceView;
+  sequence: number;
+  completedAt: string | null;
+}
+
 export interface InstanceView {
   id: string;
   name: string;

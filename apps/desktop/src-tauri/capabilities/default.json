@@ -6,6 +6,9 @@
     "main"
   ],
   "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-get-operation",
     "allow-get-bootstrap",
     "allow-get-settings",
     "allow-save-settings",

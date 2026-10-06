@@ -84,7 +84,9 @@ try {
     assert.equal(await page.getByRole("status").count(), 0);
     assert.equal(await page.getByText("private-password-and-database-detail", { exact: false }).count(), 0);
     if (invalid === "failure") assert.equal(stored, before);
-    mode = "normal"; await reload.click(); await page.getByText(root, { exact: true }).waitFor();
+    mode = "normal"; await reload.click();
+    await page.getByRole("alert").filter({ hasText: "設定の保存を確認できませんでした" }).waitFor({ state: "detached" });
+    await page.getByText(root, { exact: true }).waitFor();
     assert.equal(await (stored === "bind" ? bind : volume).isChecked(), true);
   }
   for (const invalid of ["failure", "wrong_id", "wrong_version", "null", "invalid_method", "empty_root"]) {

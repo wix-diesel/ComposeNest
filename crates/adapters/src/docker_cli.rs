@@ -188,6 +188,18 @@ impl DockerCli {
         .await
     }
 
+    /// Reads the context name for display without using it as Engine identity evidence.
+    pub async fn current_context_name(&self) -> Result<CliOutcome, CliError> {
+        self.run_supervised(
+            CommandKind::Read,
+            &["context".into(), "show".into()],
+            Duration::from_secs(10),
+            false,
+            OUTPUT_LIMIT,
+        )
+        .await
+    }
+
     async fn run_supervised(
         &self,
         kind: CommandKind,

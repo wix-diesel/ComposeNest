@@ -24,6 +24,7 @@ pub struct CreateBackend {
     pub(super) database: Arc<DatabaseWorker>,
     pub(super) runner: Arc<OperationRunner>,
     pub(super) scope: String,
+    pub(super) home: PathBuf,
     session: Mutex<CreateSession>,
     pub(super) clones: Mutex<composenest_application::clone_session::CloneSession>,
     pub(super) probe: Option<DockerProbe>,
@@ -72,6 +73,7 @@ impl CreateBackend {
             )),
             scope,
             probe,
+            home,
         })
     }
 

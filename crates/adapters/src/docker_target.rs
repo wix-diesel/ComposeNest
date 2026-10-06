@@ -23,6 +23,8 @@ pub enum Check {
     Unsupported,
     /// The Engine differs from the one registered for this scope.
     Changed,
+    /// Access to the component was explicitly denied by the operating system.
+    PermissionDenied,
 }
 
 /// Independently reported Docker prerequisites; no raw CLI output is exposed.
@@ -46,6 +48,14 @@ pub struct DockerDiagnosis {
     pub engine_id: Option<String>,
     /// Observed Engine OS and architecture, if available.
     pub observed_platform: Option<String>,
+    /// Parsed CLI version, never raw command output.
+    pub cli_version: Option<String>,
+    /// Parsed Compose version, never raw command output.
+    pub compose_version: Option<String>,
+    /// Parsed Engine version from the observed server.
+    pub engine_version: Option<String>,
+    /// Current context name; informational only and never identity evidence.
+    pub context_name: Option<String>,
 }
 
 impl Default for DockerDiagnosis {
@@ -60,6 +70,10 @@ impl Default for DockerDiagnosis {
             resolved_endpoint: None,
             engine_id: None,
             observed_platform: None,
+            cli_version: None,
+            compose_version: None,
+            engine_version: None,
+            context_name: None,
         }
     }
 }
@@ -119,23 +133,39 @@ impl DockerProbe {
             Ok(cli) => cli,
             Err(_) => return report,
         };
-        report.cli = check_version(
+        (report.cli, report.cli_version) = check_version(
             &discovery,
             &["--version".into()],
             "Docker version",
             [29, 8, 1],
         )
         .await;
-        if matches!(report.cli, Check::Missing | Check::Unavailable) {
+        if matches!(
+            report.cli,
+            Check::Missing | Check::Unavailable | Check::PermissionDenied
+        ) {
             return report;
         }
-        report.compose = check_version(
+        (report.compose, report.compose_version) = check_version(
             &discovery,
             &["compose".into(), "version".into()],
             "Docker Compose version",
             [5, 5, 1],
         )
         .await;
+        report.context_name = discovery
+            .current_context_name()
+            .await
+            .ok()
+            .and_then(|outcome| {
+                (outcome.status.is_some_and(|status| status.success()) && !outcome.stdout.truncated)
+                    .then(|| String::from_utf8(outcome.stdout.bytes).ok())
+                    .flatten()
+                    .map(|name| name.trim().to_owned())
+                    .filter(|name| {
+                        !name.is_empty() && name.len() <= 256 && !name.chars().any(char::is_control)
+                    })
+            });
         let endpoint = match registered {
             Some(target) => target.endpoint.clone(),
             None => match read_context_endpoint(&discovery).await {
@@ -155,8 +185,12 @@ impl DockerProbe {
         let Ok(cli) = self.cli(OsString::from(endpoint)) else {
             return report;
         };
-        let Some(info) = engine_info(&cli).await else {
-            return report;
+        let info = match engine_info_checked(&cli).await {
+            Ok(info) => info,
+            Err(check) => {
+                report.engine = check;
+                return report;
+            }
         };
         let Some(id) = info
             .get("ID")
@@ -166,6 +200,11 @@ impl DockerProbe {
             return report;
         };
         report.engine_id = Some(id.to_owned());
+        report.engine_version = info
+            .get("ServerVersion")
+            .and_then(Value::as_str)
+            .and_then(|version| parse_version(version.as_bytes(), ""))
+            .map(version_text);
         report.engine = if registered.is_some_and(|target| target.engine_id != id) {
             Check::Changed
         } else if info
@@ -296,27 +335,44 @@ async fn check_version(
     args: &[OsString],
     prefix: &str,
     minimum: [u32; 3],
-) -> Check {
+) -> (Check, Option<String>) {
     match cli.run(CommandKind::Read, args, PROBE_TIMEOUT).await {
         Ok(outcome)
             if outcome.status.is_some_and(|status| status.success())
                 && !outcome.stdout.truncated =>
         {
-            if parse_version(&outcome.stdout.bytes, prefix)
-                .is_some_and(|version| version >= minimum)
-            {
-                Check::Ready
-            } else {
-                Check::Unsupported
-            }
+            let version = parse_version(&outcome.stdout.bytes, prefix);
+            (
+                if version.is_some_and(|version| version >= minimum) {
+                    Check::Ready
+                } else {
+                    Check::Unsupported
+                },
+                version.map(version_text),
+            )
         }
         Ok(outcome)
             if String::from_utf8_lossy(&outcome.stderr.bytes).contains("not a docker command") =>
         {
-            Check::Missing
+            (Check::Missing, None)
         }
-        _ => Check::Unavailable,
+        Ok(outcome) if permission_denied(&outcome.stderr.bytes) => (Check::PermissionDenied, None),
+        Err(CliError::Io(error)) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            (Check::PermissionDenied, None)
+        }
+        _ => (Check::Unavailable, None),
     }
+}
+
+fn version_text(version: [u32; 3]) -> String {
+    format!("{}.{}.{}", version[0], version[1], version[2])
+}
+
+fn permission_denied(output: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(output).to_ascii_lowercase();
+    ["permission denied", "access is denied", "access denied"]
+        .iter()
+        .any(|reason| text.contains(reason))
 }
 
 fn parse_version(output: &[u8], prefix: &str) -> Option<[u32; 3]> {
@@ -341,15 +397,28 @@ async fn read_context_endpoint(cli: &DockerCli) -> Option<String> {
 }
 
 async fn engine_info(cli: &DockerCli) -> Option<Value> {
+    engine_info_checked(cli).await.ok()
+}
+
+async fn engine_info_checked(cli: &DockerCli) -> Result<Value, Check> {
     let args = ["info".into(), "--format".into(), "{{json .}}".into()];
     let outcome = cli
         .run(CommandKind::Read, &args, PROBE_TIMEOUT)
         .await
-        .ok()?;
-    if !outcome.status?.success() || outcome.stdout.truncated {
-        return None;
+        .map_err(|error| match error {
+            CliError::Io(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                Check::PermissionDenied
+            }
+            _ => Check::Unavailable,
+        })?;
+    if !outcome.status.is_some_and(|status| status.success()) || outcome.stdout.truncated {
+        return Err(if permission_denied(&outcome.stderr.bytes) {
+            Check::PermissionDenied
+        } else {
+            Check::Unavailable
+        });
     }
-    serde_json::from_slice(&outcome.stdout.bytes).ok()
+    serde_json::from_slice(&outcome.stdout.bytes).map_err(|_| Check::Unavailable)
 }
 
 fn canonical_architecture(architecture: &str) -> &str {

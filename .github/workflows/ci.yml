@@ -170,6 +170,7 @@ jobs:
           pnpm run test:navigation
           pnpm exec playwright install --with-deps chromium
           pnpm run test:shell
+          pnpm run test:diagnostics
           pnpm run test:appearance
           pnpm run test:forms
           pnpm run test:create

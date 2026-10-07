@@ -253,6 +253,9 @@ export class ApplicationClient {
     if (!detail || detail.instance.id !== instanceId || detail.state.id !== instanceId) throw new Error("invalid_instance_detail");
     return detail;
   }
+  /** Writes explicit plain-text copies through the native clipboard on every desktop OS. */
+  copyText(value: string): Promise<void> { return invoke("plugin:clipboard-manager|write_text", { text: value }); }
+
   /** Reads an actual secret only for explicit reveal/copy of a saved connection slot. */
   async getInstanceSecret(instanceId: string, expectedSpecRevision: number, slot: string): Promise<string> {
     const view = await this.createCall<import("../generated/template-form").InstanceSecretView>("get_instance_secret", { context: this.context(), instanceId, expectedSpecRevision, slot } as import("../generated/template-form").InstanceSecretRequest);

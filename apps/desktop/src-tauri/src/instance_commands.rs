@@ -232,6 +232,7 @@ mod tests {
         let mut context: tauri::Context<tauri::Wry> = tauri::generate_context!();
         let authority = context.runtime_authority_mut();
         for command in [
+            "plugin:clipboard-manager|write_text",
             "list_instances",
             "resolve_operation",
             "retry_operation",
@@ -270,6 +271,24 @@ mod tests {
                     )
                     .is_none(),
                 "{command}"
+            );
+        }
+        for command in [
+            "read_text",
+            "read_image",
+            "write_image",
+            "write_html",
+            "clear",
+        ] {
+            assert!(
+                authority
+                    .resolve_access(
+                        &format!("plugin:clipboard-manager|{command}"),
+                        "main",
+                        "main",
+                        &tauri::ipc::Origin::Local,
+                    )
+                    .is_none()
             );
         }
     }

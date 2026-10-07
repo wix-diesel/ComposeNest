@@ -24,7 +24,7 @@ export function ConnectionValue({ client, instanceId, revision, label, slot, tex
       const value = slot ? await client.getInstanceSecret(instanceId, revision, slot) : text ?? "";
       if (current !== epoch.current) return;
       if (copy) {
-        await navigator.clipboard.writeText(value);
+        await client.copyText(value);
         if (current === epoch.current) setMessage({ error: false, text: "コピーしました。" });
       } else setRevealed(value);
     } catch {

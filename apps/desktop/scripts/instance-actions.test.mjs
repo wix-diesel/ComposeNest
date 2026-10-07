@@ -20,16 +20,19 @@ try {
     window.calls = []; window.mode = "normal";
     window.secret = 'Actual-$ "quote" \\ 日本語';
     window.rawCompose = '# selected actual artifact\nservices:\n  main:\n    image: service@sha256:actual\n    command: ["--password", "Actual-$$ \\\"quote\\\" \\\\ 日本語"]\n';
-    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (value) => {
-      if (window.mode === "clipboard_failure") throw new Error(window.secret);
-      window.copied = value;
-    } } });
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
     window.view = { lifecycle: "managed", id: "target", name: "開発用データベース", revision: 3, runtimeStatus: "stopped", observedAt: "2026-10-05 08:00:00", operationId: null, operationStatus: null, operationKind: null, operationPhase: null, actions: ["rename", "start", "stop", "restart", "delete"] };
     window.edit = { templateId: "generic-service", selectedVersion: "custom-17", storageMethod: "volume", specRevision: 1, appliedSpecRevision: 1,
       inputs: [{ slot: "username", label: "接続ユーザー", secret: false, value: "app-user" }, { slot: "password", label: "認証用パスワード", secret: true, value: null }, { slot: "enabled", label: "機能を有効化", secret: false, value: false }],
       ports: [{ slot: "db", hostIp: "127.0.0.1", containerPort: 5432, oldPort: 15432, committedPort: 15432, candidatePort: null, oldReservation: "committed", candidateReservation: null }, { slot: "metrics", hostIp: "127.0.0.1", containerPort: 9000, oldPort: 19000, committedPort: 19000, candidatePort: null, oldReservation: "committed", candidateReservation: null }] };
     window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
-    window.__TAURI_INTERNALS__ = { transformCallback: () => 1, invoke: async (command, { request }) => {
+    window.__TAURI_INTERNALS__ = { transformCallback: () => 1, invoke: async (command, args) => {
+      if (command === "plugin:clipboard-manager|write_text") {
+        window.calls.push({ command });
+        if (window.mode === "clipboard_failure") throw new Error(window.secret);
+        window.copied = args.text; return null;
+      }
+      const { request } = args;
       window.calls.push({ command, request: structuredClone(request) });
       const response = (result, error = null) => ({ apiVersion: 1, requestId: (request.context ?? request).requestId, result, error });
       if (command === "get_bootstrap") return response({ applicationTitle: "ComposeNest", startedAtUnixSeconds: 1 });

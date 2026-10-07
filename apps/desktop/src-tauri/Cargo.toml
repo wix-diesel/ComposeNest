@@ -12,6 +12,7 @@ tauri-build = "=2.6.3"
 composenest-adapters = { path = "../../../crates/adapters" }
 composenest-application = { path = "../../../crates/application" }
 tauri = "=2.11.6"
+tauri-plugin-clipboard-manager = "=2.3.3"
 
 tokio = { version = "1.53.1", features = ["rt", "time", "process", "sync", "io-util"] }
 

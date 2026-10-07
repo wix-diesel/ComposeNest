@@ -253,6 +253,22 @@ export class ApplicationClient {
     if (!detail || detail.instance.id !== instanceId || detail.state.id !== instanceId) throw new Error("invalid_instance_detail");
     return detail;
   }
+  /** Writes explicit plain-text copies through the native clipboard on every desktop OS. */
+  copyText(value: string): Promise<void> { return invoke("plugin:clipboard-manager|write_text", { text: value }); }
+
+  /** Reads an actual secret only for explicit reveal/copy of a saved connection slot. */
+  async getInstanceSecret(instanceId: string, expectedSpecRevision: number, slot: string): Promise<string> {
+    const view = await this.createCall<import("../generated/template-form").InstanceSecretView>("get_instance_secret", { context: this.context(), instanceId, expectedSpecRevision, slot } as import("../generated/template-form").InstanceSecretRequest);
+    if (!view || view.instanceId !== instanceId || view.specRevision !== expectedSpecRevision || view.slot !== slot || typeof view.value !== "string") throw new Error("invalid_instance_secret");
+    return view.value;
+  }
+
+  /** Reads the backend-selected artifact, accepting raw content only when explicitly requested. */
+  async getInstanceCompose(instanceId: string, expectedSpecRevision: number, reveal: boolean): Promise<import("../generated/template-form").InstanceComposeView> {
+    const view = await this.createCall<import("../generated/template-form").InstanceComposeView>("get_instance_compose", { context: this.context(), instanceId, expectedSpecRevision, reveal } as import("../generated/template-form").InstanceComposeRequest);
+    if (!view || view.instanceId !== instanceId || view.specRevision !== expectedSpecRevision || view.masked !== !reveal || typeof view.content !== "string" || typeof view.path !== "string" || !view.path.trim()) throw new Error("invalid_instance_compose");
+    return view;
+  }
   /** Reports an in-flight or uncertain change across screen navigation. */
   hasInstanceChange(instanceId: string): boolean { return this.instanceChanges.has(instanceId) || this.recoveryChanges.has(instanceId); }
 

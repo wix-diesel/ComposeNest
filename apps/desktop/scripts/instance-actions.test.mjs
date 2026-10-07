@@ -18,15 +18,40 @@ try {
   const errors = []; page.on("pageerror", (error) => errors.push(error.message));
   await page.addInitScript(() => {
     window.calls = []; window.mode = "normal";
+    window.secret = 'Actual-$ "quote" \\ 日本語';
+    window.rawCompose = '# selected actual artifact\nservices:\n  main:\n    image: service@sha256:actual\n    command: ["--password", "Actual-$$ \\\"quote\\\" \\\\ 日本語"]\n';
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
     window.view = { lifecycle: "managed", id: "target", name: "開発用データベース", revision: 3, runtimeStatus: "stopped", observedAt: "2026-10-05 08:00:00", operationId: null, operationStatus: null, operationKind: null, operationPhase: null, actions: ["rename", "start", "stop", "restart", "delete"] };
     window.edit = { templateId: "generic-service", selectedVersion: "custom-17", storageMethod: "volume", specRevision: 1, appliedSpecRevision: 1,
       inputs: [{ slot: "username", label: "接続ユーザー", secret: false, value: "app-user" }, { slot: "password", label: "認証用パスワード", secret: true, value: null }, { slot: "enabled", label: "機能を有効化", secret: false, value: false }],
       ports: [{ slot: "db", hostIp: "127.0.0.1", containerPort: 5432, oldPort: 15432, committedPort: 15432, candidatePort: null, oldReservation: "committed", candidateReservation: null }, { slot: "metrics", hostIp: "127.0.0.1", containerPort: 9000, oldPort: 19000, committedPort: 19000, candidatePort: null, oldReservation: "committed", candidateReservation: null }] };
     window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
-    window.__TAURI_INTERNALS__ = { transformCallback: () => 1, invoke: async (command, { request }) => {
+    window.__TAURI_INTERNALS__ = { transformCallback: () => 1, invoke: async (command, args) => {
+      if (command === "plugin:clipboard-manager|write_text") {
+        window.calls.push({ command });
+        if (window.mode === "clipboard_failure") throw new Error(window.secret);
+        window.copied = args.text; return null;
+      }
+      const { request } = args;
       window.calls.push({ command, request: structuredClone(request) });
       const response = (result, error = null) => ({ apiVersion: 1, requestId: (request.context ?? request).requestId, result, error });
       if (command === "get_bootstrap") return response({ applicationTitle: "ComposeNest", startedAtUnixSeconds: 1 });
+      if (command === "get_instance_secret") {
+        if (window.mode === "secret_failure") throw new Error(window.secret);
+        if (window.mode === "secret_delay") await new Promise((resolve) => { window.finishContent = resolve; });
+        return response({ instanceId: window.mode === "wrong_content" ? "other" : request.instanceId,
+          specRevision: window.mode === "wrong_revision" ? 999 : request.expectedSpecRevision,
+          slot: window.mode === "wrong_slot" ? "other" : request.slot, value: window.secret });
+      }
+      if (command === "get_instance_compose") {
+        if (window.mode === "compose_failure") throw new Error(window.secret);
+        if (window.mode === "compose_delay" && request.reveal) await new Promise((resolve) => { window.finishContent = resolve; });
+        return response({ instanceId: window.mode === "wrong_content" ? "other" : request.instanceId,
+          specRevision: window.mode === "wrong_revision" ? 999 : request.expectedSpecRevision,
+          masked: window.mode === "wrong_mask" ? request.reveal : !request.reveal,
+          path: window.composePath ?? "/managed/instances/target/artifacts/replacement/compose.yaml",
+          content: request.reveal ? window.rawCompose : window.rawCompose.replace(/Actual-.+日本語/g, "••••••••") });
+      }
       if (command === "get_instance_detail") {
         if (window.mode === "read_failure") throw new Error("Disconnected");
         const state = structuredClone(window.view);
@@ -185,6 +210,81 @@ try {
       await page.keyboard.press("Escape");
     }
     console.log("Delete: explicit retention/revision, cancellation, stale guard, duplicate clicks, durable progress, Retiring failures, retained navigation, same-request replay and themes passed.");
+  } else if (process.argv.includes("--content")) {
+    await open();
+    const overview = () => page.getByRole("tab", { name: "概要・接続情報", exact: true }).click();
+    const composeTab = () => page.getByRole("tab", { name: "Compose", exact: true }).click();
+    const reveal = () => page.getByRole("button", { name: "認証用パスワードを表示", exact: true }).first().click();
+    const secretAbsent = async () => assert.equal((await page.locator("body").textContent()).includes('Actual-$ "quote" \\ 日本語'), false);
+    assert.equal((await calls("get_instance_secret")).length, 0);
+    assert.equal((await calls("get_instance_compose")).length, 0);
+    for (const [label, expected] of [["ホスト", "127.0.0.1"], ["ポート", "15432"], ["接続ユーザー", "app-user"], ["機能を有効化", "false"], ["認証用パスワード", 'Actual-$ "quote" \\ 日本語']]) {
+      await page.getByRole("button", { name: `${label}をコピー`, exact: true }).first().click();
+      await page.getByText("コピーしました。", { exact: true }).first().waitFor();
+      assert.equal(await page.evaluate(() => window.copied), expected); await secretAbsent();
+    }
+    const request = (await calls("get_instance_secret"))[0].request;
+    assert.deepEqual(Object.keys(request).sort(), ["context", "expectedSpecRevision", "instanceId", "slot"]);
+    assert.equal(request.instanceId, "target"); assert.equal(request.slot, "password"); assert.equal(request.expectedSpecRevision, 1);
+    await reveal();
+    await page.getByRole("button", { name: "認証用パスワードを隠す", exact: true }).waitFor();
+    assert.equal(await page.locator(".connection-value").filter({ hasText: 'Actual-$ "quote" \\ 日本語' }).count(), 1);
+    await page.getByRole("button", { name: "認証用パスワードを隠す", exact: true }).click(); await secretAbsent();
+    for (const mode of ["secret_failure", "wrong_content", "wrong_revision", "wrong_slot"]) {
+      await page.evaluate((mode) => { window.mode = mode; }, mode); await reveal();
+      await page.getByText("秘密情報を取得できませんでした。もう一度お試しください。", { exact: true }).waitFor(); await secretAbsent();
+    }
+    await page.evaluate(() => { window.mode = "clipboard_failure"; });
+    await page.getByRole("button", { name: "認証用パスワードをコピー", exact: true }).first().click();
+    await page.getByText("コピーできませんでした。もう一度お試しください。", { exact: true }).waitFor(); await secretAbsent();
+    await page.evaluate(() => { window.mode = "normal"; }); await reveal();
+    await page.getByRole("button", { name: "認証用パスワードを隠す", exact: true }).waitFor();
+    await page.evaluate(() => { window.view.revision++; window.edit.specRevision++; });
+    await page.getByText("保存 r2 / 適用 r1", { exact: true }).waitFor(); await secretAbsent();
+    await page.evaluate(() => { window.mode = "secret_delay"; }); await reveal();
+    await page.waitForFunction(() => typeof window.finishContent === "function");
+    await composeTab(); await page.evaluate(() => { window.finishContent(); window.mode = "normal"; });
+    await page.locator(".detail-compose").waitFor(); await overview(); await secretAbsent();
+    await reveal(); await page.getByRole("button", { name: "認証用パスワードを隠す", exact: true }).waitFor();
+    await page.evaluate(() => window.dispatchEvent(new Event("blur"))); await secretAbsent();
+    await composeTab(); await page.locator(".detail-compose").waitFor();
+    assert.equal((await page.locator(".detail-compose").textContent()).includes("Actual-"), false);
+    assert.ok((await page.locator(".detail-compose").textContent()).includes("# selected actual artifact"));
+    await page.getByRole("button", { name: "原文を表示", exact: true }).click();
+    await page.getByRole("button", { name: "再マスク", exact: true }).waitFor();
+    assert.equal(await page.locator(".detail-compose").textContent(), await page.evaluate(() => window.rawCompose));
+    await page.getByRole("button", { name: "再マスク", exact: true }).click(); await page.locator(".detail-compose").waitFor();
+    assert.equal((await page.locator(".detail-compose").textContent()).includes("Actual-"), false);
+    for (const mode of ["compose_failure", "wrong_content", "wrong_revision", "wrong_mask"]) {
+      await page.evaluate((mode) => { window.mode = mode; }, mode); await page.getByRole("button", { name: "再読込み", exact: true }).click();
+      await page.getByText("Composeを取得できませんでした。生成物の状態を確認し、再読込みしてください。", { exact: true }).waitFor();
+      assert.equal(await page.locator(".detail-compose").count(), 0); await secretAbsent();
+    }
+    await page.evaluate(() => { window.mode = "normal"; }); await page.getByRole("button", { name: "再読込み", exact: true }).click();
+    await page.locator(".detail-compose").waitFor();
+    await page.evaluate(() => { window.mode = "compose_delay"; window.finishContent = null; });
+    await page.getByRole("button", { name: "原文を表示", exact: true }).click();
+    await page.waitForFunction(() => typeof window.finishContent === "function");
+    await overview(); await page.evaluate(() => { window.mode = "normal"; window.finishContent(); });
+    await composeTab(); await page.locator(".detail-compose").waitFor();
+    assert.equal((await page.locator(".detail-compose").textContent()).includes("Actual-"), false);
+    await page.getByRole("button", { name: "原文を表示", exact: true }).click();
+    await page.getByRole("button", { name: "再マスク", exact: true }).waitFor();
+    await page.evaluate(() => window.dispatchEvent(new Event("blur"))); await page.locator(".detail-compose").waitFor();
+    assert.equal((await page.locator(".detail-compose").textContent()).includes("Actual-"), false);
+    for (const [theme, width, path] of [["light", 1280, "C:\\ProgramData\\ComposeNest\\instances\\target\\artifacts\\replacement\\compose.yaml"], ["dark", 390, "/Library/Application Support/ComposeNest/instances/target/artifacts/replacement/compose.yaml"]]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.evaluate(({ theme, path }) => { document.documentElement.dataset.theme = theme; window.composePath = path; }, { theme, path });
+      await page.getByRole("button", { name: "再読込み", exact: true }).click(); await page.getByText(path, { exact: true }).waitFor();
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      await mkdir("test-results", { recursive: true }); await page.screenshot({ path: `test-results/instance-compose-${theme}-${width}.png`, fullPage: true });
+    }
+    await overview();
+    await page.getByText("Dockerが管理するボリューム名です。通常のフォルダーではありません。", { exact: false }).waitFor();
+    assert.equal(await page.getByRole("button", { name: /フォルダー.*開く/ }).count(), 0);
+    assert.equal(await page.evaluate(() => Object.keys(localStorage).some((key) => localStorage[key].includes(window.secret))), false);
+    assert.equal((await page.evaluate(() => JSON.stringify(window.calls))).includes("Actual-"), false);
+    console.log("Content: explicit scoped reveal/copy, clipboard failures, stale/late responses, tab/blur remask, actual Compose text, OS paths and responsive themes passed.");
   } else {
   await open();
   assert.equal(await page.getByRole("heading", { level: 1 }).textContent(), "開発用データベース");
@@ -209,8 +309,10 @@ try {
   await page.getByText("ログ購読は未接続です。ログは取得していません。", { exact: true }).waitFor();
   assert.equal(await page.getByRole("button", { name: "追従を開始", exact: true }).isDisabled(), true);
   await tabs.nth(2).click();
-  assert.equal(await page.getByRole("button", { name: "原文を表示", exact: true }).isDisabled(), true);
-  assert.deepEqual((await page.evaluate(() => window.calls)).filter((call) => !["get_bootstrap", "get_instance_detail"].includes(call.command)), []);
+  await page.locator(".detail-compose").waitFor();
+  assert.equal(await page.getByRole("button", { name: "原文を表示", exact: true }).isDisabled(), false);
+  assert.equal((await calls("get_instance_secret")).length, 0);
+  assert.ok((await calls("get_instance_compose")).every((call) => call.request.reveal === false));
   await tabs.nth(0).click();
   await page.evaluate(() => { window.freshness = "stale"; window.view.observedAt = "2026-09-30 06:05:04"; window.edit.appliedSpecRevision = null; });
   await page.getByText("保存 r1 / 適用 未確認", { exact: true }).waitFor();

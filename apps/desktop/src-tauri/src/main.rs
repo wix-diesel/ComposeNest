@@ -67,6 +67,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runner = Arc::new(OperationRunner::new());
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_clipboard_manager::init())
         .manage(bootstrap)
         .manage(Arc::clone(&runner))
         .setup(move |app| {

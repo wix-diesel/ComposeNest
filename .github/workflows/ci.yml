@@ -181,6 +181,7 @@ jobs:
           pnpm run test:clone
           pnpm run test:delete
           pnpm run test:instances
+          pnpm run test:content
           pnpm run test:list
           pnpm run test:templates
       - uses: actions/upload-artifact@v4

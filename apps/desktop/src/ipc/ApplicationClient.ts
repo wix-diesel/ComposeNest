@@ -14,6 +14,36 @@ import {
 
 /** Typed boundary between React features and the Tauri transport. */
 export class ApplicationClient {
+  /** Starts a scoped masked stream, retaining its ID before a response for reliable cleanup. */
+  subscribeLogs(instanceId: string, revision: number): { id: string; ready: Promise<import("../generated/template-form").LogsView> } {
+    const context = this.context();
+    const ready = this.createCall<import("../generated/template-form").LogsView>("subscribe_logs", { context, instanceId, expectedSpecRevision: revision } as import("../generated/template-form").SubscribeLogsRequest)
+      .then((view) => this.validateLogs(view, context.requestId, instanceId, revision));
+    return { id: context.requestId, ready };
+  }
+
+  /** Pulls one bounded snapshot; the caller never accumulates an event queue. */
+  async getLogs(id: string, instanceId: string, revision: number): Promise<import("../generated/template-form").LogsView> {
+    const view = await this.createCall<import("../generated/template-form").LogsView>("get_logs", { context: this.context(), subscriptionId: id } as import("../generated/template-form").LogSubscriptionRequest);
+    return this.validateLogs(view, id, instanceId, revision);
+  }
+
+  /** Releases only a log CLI and validates backend acknowledgement. */
+  async unsubscribeLogs(id: string): Promise<void> {
+    const closed = await this.createCall<boolean>("unsubscribe_logs", { context: this.context(), subscriptionId: id } as import("../generated/template-form").LogSubscriptionRequest);
+    if (closed !== true) throw new Error("log_cleanup_unconfirmed");
+  }
+
+  private validateLogs(view: import("../generated/template-form").LogsView, id: string, instanceId: string, revision: number) {
+    const encoder = new TextEncoder();
+    if (!view || view.subscriptionId !== id || view.instanceId !== instanceId || view.specRevision !== revision
+      || !Array.isArray(view.lines) || view.lines.length > 2000 || typeof view.finished !== "boolean" || typeof view.failed !== "boolean"
+      || !Number.isSafeInteger(view.droppedLines) || view.droppedLines < 0 || !Number.isSafeInteger(view.truncatedLines) || view.truncatedLines < 0
+      || view.lines.some((line) => typeof line !== "string" || line.includes("\n") || encoder.encode(line).length > 16 * 1024)
+      || view.lines.reduce((bytes, line) => bytes + encoder.encode(line).length + 1, 0) > 2 * 1024 * 1024) throw new Error("invalid_log_response");
+    return view;
+  }
+
   private recoveryChanges = new Map<string, import("../generated/template-form").RecoverOperationRequest>();
 
   /** Collects fresh evidence; a lost restoration response is looked up by its stable identity. */

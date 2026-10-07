@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import { chromium } from "playwright";
+import { testLogs } from "./log-tab.test.mjs";
 
 const server = spawn(process.execPath, ["node_modules/vite/bin/vite.js", "--host", "127.0.0.1", "--port", "4176", "--strictPort"], { stdio: "pipe" });
 let browser;
@@ -36,6 +37,25 @@ try {
       window.calls.push({ command, request: structuredClone(request) });
       const response = (result, error = null) => ({ apiVersion: 1, requestId: (request.context ?? request).requestId, result, error });
       if (command === "get_bootstrap") return response({ applicationTitle: "ComposeNest", startedAtUnixSeconds: 1 });
+      if (command === "subscribe_logs" || command === "get_logs") {
+        const id = command === "subscribe_logs" ? request.context.requestId : request.subscriptionId;
+        window.activeLogs ??= new Set();
+        if (command === "subscribe_logs") {
+          window.activeLogs.add(id);
+          if (window.mode === "logs_delay") await new Promise((resolve) => { window.finishLogs = resolve; });
+          if (window.mode === "logs_lost") throw new Error(window.secret);
+        }
+        if (command === "get_logs" && window.mode === "logs_poll_failure") throw new Error(window.secret);
+        return response({ subscriptionId: window.mode === "logs_wrong_id" ? "wrong" : id,
+          instanceId: window.mode === "logs_wrong_target" ? "other" : "target", specRevision: window.mode === "logs_wrong_revision" ? 99 : window.edit.specRevision,
+          lines: window.mode === "logs_oversized" ? ["x".repeat(16 * 1024 + 1)] : window.mode === "logs_byte_budget" ? Array(129).fill("x".repeat(16 * 1024)) : window.mode === "logs_line_budget" ? Array(2001).fill("x") : window.logLines ?? [],
+          droppedLines: window.mode === "logs_bad_count" ? -1 : window.logDropped ?? 0, truncatedLines: window.logTruncated ?? 0,
+          finished: window.logFinished ?? false, failed: window.logFailed ?? false });
+      }
+      if (command === "unsubscribe_logs") {
+        if (window.mode === "logs_unsubscribe_failure") throw new Error(window.secret);
+        window.activeLogs?.delete(request.subscriptionId); return response(true);
+      }
       if (command === "get_instance_secret") {
         if (window.mode === "secret_failure") throw new Error(window.secret);
         if (window.mode === "secret_delay") await new Promise((resolve) => { window.finishContent = resolve; });
@@ -125,7 +145,9 @@ try {
     await page.getByRole("button", { name: "変更内容を確認", exact: true }).click();
     await page.getByRole("button", { name: "名前変更を適用", exact: true }).click();
   }
-  if (process.argv.includes("--delete")) {
+  if (process.argv.includes("--logs")) {
+    await testLogs({ page, open, calls });
+  } else if (process.argv.includes("--delete")) {
     const remove = () => page.getByRole("button", { name: "環境を削除", exact: true }).click();
     const confirm = () => page.getByRole("button", { name: "データを残して削除", exact: true });
     const acknowledge = () => page.getByRole("checkbox").check();
@@ -306,8 +328,7 @@ try {
     assert.equal(await page.locator('[role="tab"][tabindex="0"]').count(), 1);
   }
   await tabs.nth(1).click();
-  await page.getByText("ログ購読は未接続です。ログは取得していません。", { exact: true }).waitFor();
-  assert.equal(await page.getByRole("button", { name: "追従を開始", exact: true }).isDisabled(), true);
+  await page.getByRole("button", { name: "追従を停止", exact: true }).waitFor();
   await tabs.nth(2).click();
   await page.locator(".detail-compose").waitFor();
   assert.equal(await page.getByRole("button", { name: "原文を表示", exact: true }).isDisabled(), false);

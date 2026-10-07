@@ -4,6 +4,28 @@ import type { RequestContext } from "./ipc";
 
 export type JsonValue = null | boolean | number | string | Array<JsonValue> | { [key: string]: JsonValue };
 
+export interface SubscribeLogsRequest {
+  context: RequestContext;
+  instanceId: string;
+  expectedSpecRevision: number;
+}
+
+export interface LogSubscriptionRequest {
+  context: RequestContext;
+  subscriptionId: string;
+}
+
+export interface LogsView {
+  subscriptionId: string;
+  instanceId: string;
+  specRevision: number;
+  lines: Array<string>;
+  droppedLines: number;
+  truncatedLines: number;
+  finished: boolean;
+  failed: boolean;
+}
+
 export interface RecoveryRequest {
   context: RequestContext;
   instanceId: string;

@@ -2,6 +2,9 @@ const phase: Record<string, string> = { accepted: "受付済み", prepare: "準�
 
 /** Labels saved operation phases without exposing internal tokens. */
 export function operationPhaseLabel(value: string | null | undefined): string {
+  if (value === "remove_runtime") return "コンテナと専用ネットワークを削除";
+  if (value === "delete_check") return "削除結果の確認が必要";
+  if (value === "retired") return "データを保持して削除完了";
   if (value === "create") return "コンテナ作成";
   if (value === "inspect_created") return "作成した構成を照合";
   return phase[value ?? ""] ?? "確認中";

@@ -210,3 +210,110 @@ fn incomplete_slot_checks_and_unfinished_steps_cannot_release_reservations() {
     );
     assert_eq!(db.source_revision("scope", "source"), Ok(Some(2)));
 }
+
+#[tokio::test]
+async fn desktop_delete_requires_confirmation_replays_and_uses_reserved_capacity() {
+    use composenest_application::{
+        RequestContext,
+        instance_actions::{self, ChangeInstanceRequest},
+        query_service::{QueryService, QueryStore},
+    };
+    use std::{sync::Arc, time::Duration};
+    let (_root, db, template) = store();
+    setup_source(&db, &template);
+    let mut request = ChangeInstanceRequest {
+        context: RequestContext {
+            api_version: 1,
+            request_id: "desktop-delete".into(),
+        },
+        instance_id: "source".into(),
+        expected_revision: 1,
+        action: "delete".into(),
+        retain_data_confirmed: false,
+    };
+    let accept = |scope: &str, request: &ChangeInstanceRequest| {
+        instance_actions::accept(&db, scope, request, &mut composenest_adapters::SystemRandom)
+    };
+    assert!(matches!(
+        accept("scope", &request),
+        Err(StoreConflict::InvalidInput)
+    ));
+    assert!(db.receipt("scope", "desktop-delete").unwrap().is_none());
+    request.retain_data_confirmed = true;
+    assert!(matches!(
+        accept("other", &request),
+        Err(StoreConflict::Missing)
+    ));
+    request.expected_revision = 2;
+    assert!(matches!(
+        accept("scope", &request),
+        Err(StoreConflict::StaleRevision)
+    ));
+    request.expected_revision = 1;
+    let runner = Arc::new(OperationRunner::new());
+    let reservation = runner.reserve().unwrap();
+    let (receipt, kind, fresh) = accept("scope", &request).unwrap();
+    assert!(fresh);
+    assert_eq!(kind, OperationKind::Delete);
+    assert!(
+        instance_actions::view(&db, "scope", "source")
+            .unwrap()
+            .actions
+            .is_empty()
+    );
+    assert_eq!(
+        QueryService::new(&db)
+            .list_instances("scope")
+            .unwrap()
+            .len(),
+        1
+    );
+    let (repeated, _, fresh) = accept("scope", &request).unwrap();
+    assert_eq!(repeated, receipt);
+    assert!(!fresh);
+    request.context.request_id = "different-request".into();
+    request.expected_revision = 2;
+    assert!(matches!(
+        accept("scope", &request),
+        Err(StoreConflict::UnresolvedOperation)
+    ));
+    request.context.request_id = "desktop-delete".into();
+    request.expected_revision = 1;
+    assert!(!runner.shutdown(Duration::ZERO));
+    let intent = OperationIntent {
+        id: receipt.operation_id.clone(),
+        instance_id: receipt.instance_id.clone(),
+        kind,
+        phase: "inspect".into(),
+        expected_revision: 1,
+        old_spec_revision: None,
+        new_spec_revision: None,
+    };
+    let stages = Stages(Ok(()), StoragePresence::Present);
+    assert_eq!(
+        DeleteOperation {
+            state: &db,
+            runner: &runner,
+            stages: &stages
+        }
+        .run_reserved(&intent, &receipt, true, reservation)
+        .await,
+        Ok(receipt.clone())
+    );
+    assert!(runner.shutdown(Duration::ZERO));
+    assert!(db.list_instances("scope").unwrap().is_empty());
+    let progress =
+        composenest_adapters::query_service::view_operation(&db, "scope", &receipt.operation_id)
+            .unwrap();
+    assert_eq!(progress.instance.lifecycle, "retired");
+    assert_eq!(progress.operation.status, "Succeeded");
+    assert!(progress.completed_at.is_some());
+    let (repeated, _, fresh) = accept("scope", &request).unwrap();
+    assert_eq!(repeated, receipt);
+    assert!(!fresh);
+    request.retain_data_confirmed = false;
+    assert!(matches!(
+        accept("scope", &request),
+        Err(StoreConflict::InvalidInput)
+    ));
+}

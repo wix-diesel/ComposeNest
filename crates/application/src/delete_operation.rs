@@ -5,7 +5,7 @@ use crate::{
     operation_journal::{
         OperationIntent, OperationJournal, OperationKind, OperationStatus, RequestReceipt,
     },
-    operation_runner::{OperationRunner, RunnerError},
+    operation_runner::{OperationReservation, OperationRunner, RunnerError},
     state_store::StoreConflict,
 };
 use composenest_domain::instance::StoragePresence;
@@ -77,6 +77,36 @@ impl<S: DeleteState + OperationJournal, A: DeleteStages> DeleteOperation<'_, S, 
         receipt: &RequestReceipt,
         retain_data_confirmed: bool,
     ) -> Result<RequestReceipt, DeleteError> {
+        self.runner
+            .run_exclusive(&receipt.instance_id, || {
+                self.run_locked(intent, receipt, retain_data_confirmed)
+            })
+            .await
+            .map_err(DeleteError::Runner)?
+    }
+
+    /// Executes confirmed deletion with capacity reserved before durable acceptance.
+    pub async fn run_reserved(
+        &self,
+        intent: &OperationIntent,
+        receipt: &RequestReceipt,
+        retain_data_confirmed: bool,
+        reservation: OperationReservation,
+    ) -> Result<RequestReceipt, DeleteError> {
+        self.runner
+            .run_reserved(reservation, &receipt.instance_id, || {
+                self.run_locked(intent, receipt, retain_data_confirmed)
+            })
+            .await
+            .map_err(DeleteError::Runner)?
+    }
+
+    async fn run_locked(
+        &self,
+        intent: &OperationIntent,
+        receipt: &RequestReceipt,
+        retain_data_confirmed: bool,
+    ) -> Result<RequestReceipt, DeleteError> {
         if !retain_data_confirmed
             || intent.kind != OperationKind::Delete
             || receipt.plan_id.is_some()
@@ -88,56 +118,51 @@ impl<S: DeleteState + OperationJournal, A: DeleteStages> DeleteOperation<'_, S, 
         {
             return Err(DeleteError::Rejected);
         }
-        self.runner
-            .run_exclusive(&receipt.instance_id, || async {
-                let accepted = self
-                    .state
-                    .accept(intent, receipt)
-                    .map_err(DeleteError::Store)?;
-                if !self
-                    .state
-                    .delete_pending(&accepted)
-                    .map_err(DeleteError::Store)?
-                {
-                    return Ok(accepted);
-                }
-                self.state
-                    .set_status(
-                        &accepted.operation_id,
-                        OperationStatus::Executing,
-                        "remove_runtime",
-                    )
-                    .map_err(DeleteError::Store)?;
-                let result = async {
-                    self.stages.remove_runtime(&accepted).await?;
-                    let storage = self.stages.inspect_storage().await?;
-                    self.stages.runtime_absent().await?;
-                    Ok(storage)
-                }
-                .await;
-                let storage = match result {
-                    Ok(storage) => storage,
-                    Err(error) => {
-                        let (status, result) = match error {
-                            LifecycleEffectError::Rejected => {
-                                (OperationStatus::Failed, DeleteError::Rejected)
-                            }
-                            LifecycleEffectError::OutcomeUnknown => {
-                                (OperationStatus::OutcomeUnknown, DeleteError::OutcomeUnknown)
-                            }
-                        };
-                        self.state
-                            .set_status(&accepted.operation_id, status, "delete_check")
-                            .map_err(DeleteError::Store)?;
-                        return Err(result);
+        let accepted = self
+            .state
+            .accept(intent, receipt)
+            .map_err(DeleteError::Store)?;
+        if !self
+            .state
+            .delete_pending(&accepted)
+            .map_err(DeleteError::Store)?
+        {
+            return Ok(accepted);
+        }
+        self.state
+            .set_status(
+                &accepted.operation_id,
+                OperationStatus::Executing,
+                "remove_runtime",
+            )
+            .map_err(DeleteError::Store)?;
+        let result = async {
+            self.stages.remove_runtime(&accepted).await?;
+            let storage = self.stages.inspect_storage().await?;
+            self.stages.runtime_absent().await?;
+            Ok(storage)
+        }
+        .await;
+        let storage = match result {
+            Ok(storage) => storage,
+            Err(error) => {
+                let (status, result) = match error {
+                    LifecycleEffectError::Rejected => {
+                        (OperationStatus::Failed, DeleteError::Rejected)
+                    }
+                    LifecycleEffectError::OutcomeUnknown => {
+                        (OperationStatus::OutcomeUnknown, DeleteError::OutcomeUnknown)
                     }
                 };
                 self.state
-                    .complete_delete(&accepted, &storage)
+                    .set_status(&accepted.operation_id, status, "delete_check")
                     .map_err(DeleteError::Store)?;
-                Ok(accepted)
-            })
-            .await
-            .map_err(DeleteError::Runner)?
+                return Err(result);
+            }
+        };
+        self.state
+            .complete_delete(&accepted, &storage)
+            .map_err(DeleteError::Store)?;
+        Ok(accepted)
     }
 }

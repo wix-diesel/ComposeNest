@@ -321,6 +321,7 @@ fn lifecycle_acceptance_is_scoped_versioned_idempotent_and_never_optimistic() {
         instance_id: "one".into(),
         expected_revision: 1,
         action: "start".into(),
+        retain_data_confirmed: false,
     };
     assert!(matches!(
         accept("other", &request),

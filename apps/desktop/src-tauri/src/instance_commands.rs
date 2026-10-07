@@ -1,13 +1,16 @@
 //! Scoped desktop transport for instance actions and detached lifecycle execution.
 use crate::create_commands::CreateBackend;
-use composenest_adapters::{SystemRandom, lifecycle_stages::run_confirmed_lifecycle_reserved};
+use composenest_adapters::{
+    SystemRandom, delete_stages::run_confirmed_delete_reserved,
+    lifecycle_stages::run_confirmed_lifecycle_reserved,
+};
 use composenest_application::{
     ErrorDto, RequestContext, ResponseEnvelope, Retryability,
     instance_actions::{
         self, ChangeInstanceRequest, InstanceActionRequest, InstanceActionView,
         RenameInstanceRequest,
     },
-    operation_journal::OperationJournal,
+    operation_journal::{OperationJournal, OperationKind},
     query_service::{InstanceDetailView, InstanceListView, QueryService},
     state_store::StoreConflict,
 };
@@ -162,6 +165,7 @@ pub async fn change_instance(
         }
         let (receipt, kind, fresh) =
             instance_actions::accept(&*state.database, &state.scope, &request, &mut SystemRandom)?;
+        let operation_id = receipt.operation_id.clone();
         if fresh {
             let backend = Arc::clone(state.inner());
             tauri::async_runtime::spawn_blocking(move || {
@@ -172,15 +176,31 @@ pub async fn change_instance(
                     .and_then(|runtime| {
                         let probe = backend.probe.as_ref()?;
                         let reservation = reservation?;
-                        Some(runtime.block_on(run_confirmed_lifecycle_reserved(
-                            &backend.database,
-                            probe,
-                            backend.database.management_root(),
-                            &backend.runner,
-                            &receipt,
-                            kind,
-                            reservation,
-                        )))
+                        Some(if kind == OperationKind::Delete {
+                            runtime
+                                .block_on(run_confirmed_delete_reserved(
+                                    &backend.database,
+                                    probe,
+                                    &backend.runner,
+                                    &receipt,
+                                    reservation,
+                                ))
+                                .map(|_| ())
+                                .map_err(|_| ())
+                        } else {
+                            runtime
+                                .block_on(run_confirmed_lifecycle_reserved(
+                                    &backend.database,
+                                    probe,
+                                    backend.database.management_root(),
+                                    &backend.runner,
+                                    &receipt,
+                                    kind,
+                                    reservation,
+                                ))
+                                .map(|_| ())
+                                .map_err(|_| ())
+                        })
                     });
                 if !matches!(result, Some(Ok(_))) {
                     // Preserve Core's specific failed phase; only pre-stage failures need fallback.
@@ -191,7 +211,16 @@ pub async fn change_instance(
                 }
             });
         }
-        instance_actions::view(&*state.database, &state.scope, &request.instance_id)
+        if kind == OperationKind::Delete {
+            composenest_adapters::query_service::view_operation(
+                &state.database,
+                &state.scope,
+                &operation_id,
+            )
+            .map(|progress| InstanceActionView::from(progress.instance))
+        } else {
+            instance_actions::view(&*state.database, &state.scope, &request.instance_id)
+        }
     })();
     Ok(envelope(request.context, result))
 }

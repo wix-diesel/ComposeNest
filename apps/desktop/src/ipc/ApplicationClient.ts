@@ -246,7 +246,13 @@ export class ApplicationClient {
       ? this.createCall<InstanceEditView>(pending.command, pending.request).then((view) => view.state)
       : pending.readBack && "name" in pending.request
         ? this.reconcileRename(pending.request) : this.createCall<InstanceActionView>(pending.command, pending.request);
-    pending.promise = call.then((view) => { this.instanceChanges.delete(instanceId); return view; }).catch((error: unknown) => {
+    pending.promise = call.then((view) => {
+      if ("action" in pending.request && pending.request.action === "delete"
+        && (!view || view.id !== instanceId || view.operationKind !== "delete" || !view.operationId
+          || !Number.isSafeInteger(view.revision) || view.revision <= pending.request.expectedRevision))
+        throw new Error("invalid_delete_response");
+      this.instanceChanges.delete(instanceId); return view;
+    }).catch((error: unknown) => {
       const code = typeof error === "object" && error !== null && "code" in error ? error.code : null;
       if (["NAME_OR_REQUEST_CONFLICT", "INSTANCE_STALE", "INSTANCE_MISSING", "INSTANCE_INPUT_INVALID", "INSTANCE_ACTION_UNAVAILABLE", "PORT_EDIT_REJECTED", "PORT_EDIT_CONFLICT", "PORT_EDIT_NOT_ACCEPTED"].includes(String(code)))
         this.instanceChanges.delete(instanceId);
@@ -265,7 +271,11 @@ export class ApplicationClient {
   }
   /** Accepts one fixed lifecycle action with a stable request ID until reconciliation. */
   changeInstance(instanceId: string, expectedRevision: number, action: string): Promise<InstanceActionView> {
-    return this.beginInstanceChange("change_instance", { context: this.context(), instanceId, expectedRevision, action });
+    return this.beginInstanceChange("change_instance", { context: this.context(), instanceId, expectedRevision, action, retainDataConfirmed: false });
+  }
+  /** Deletes runtime resources while preserving data, using the explicitly confirmed revision. */
+  deleteInstance(instanceId: string, expectedRevision: number): Promise<InstanceActionView> {
+    return this.beginInstanceChange("change_instance", { context: this.context(), instanceId, expectedRevision, action: "delete", retainDataConfirmed: true });
   }
   /** Changes only the display name against the exact version shown by Core. */
   renameInstance(instanceId: string, expectedRevision: number, name: string): Promise<InstanceActionView> {

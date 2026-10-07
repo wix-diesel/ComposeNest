@@ -16,6 +16,8 @@
 .detail-path { display: block; background: var(--soft); border-radius: 6px; padding: 12px; margin-top: 10px; }
 .detail-note, .detail-storage p, .detail-danger p { font-size: 11px; margin-top: 10px; }
 .detail-danger { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 16px; border: 1px solid var(--line); border-radius: 10px; padding: 20px; }
+.delete-consent { display: flex; align-items: flex-start; gap: 8px; margin-top: 12px; font-size: 12px; }
+.instance-actions .delete-consent input { width: auto; flex: 0 0 auto; padding: 0; margin-top: 4px; accent-color: var(--green); }
 .instance-actions h1, .instance-actions .subtitle { overflow-wrap: anywhere; }
 @media (max-width: 1000px) { .detail-columns { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 540px) { .instance-actions .instance-state { grid-template-columns: minmax(0, 1fr); } }

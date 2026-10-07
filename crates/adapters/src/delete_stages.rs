@@ -12,8 +12,8 @@ use crate::{
 use composenest_application::{
     delete_operation::{DeleteError, DeleteOperation, DeleteStages, StorageCheck},
     lifecycle_operation::LifecycleEffectError,
-    operation_journal::{OperationIntent, RequestReceipt},
-    operation_runner::OperationRunner,
+    operation_journal::{OperationIntent, OperationKind, RequestReceipt},
+    operation_runner::{OperationReservation, OperationRunner},
     retained_storage::{RetainedInstance, RetainedStore},
     state_store::{RuntimeTarget, StorageLedgerEntry, StorageMethod, StoreConflict},
 };
@@ -169,6 +169,38 @@ pub async fn run_delete(
         stages: &stages,
     }
     .run(intent, receipt, retain_data_confirmed)
+    .await
+}
+
+/// Runs an explicitly confirmed, durably accepted Delete using its reserved capacity.
+pub async fn run_confirmed_delete_reserved(
+    database: &DatabaseWorker,
+    probe: &DockerProbe,
+    runner: &OperationRunner,
+    receipt: &RequestReceipt,
+    reservation: OperationReservation,
+) -> Result<RequestReceipt, DeleteError> {
+    let stages = Stages {
+        database,
+        probe: Some(probe),
+        scope: &receipt.scope_id,
+        id: &receipt.instance_id,
+    };
+    let intent = OperationIntent {
+        id: receipt.operation_id.clone(),
+        instance_id: receipt.instance_id.clone(),
+        kind: OperationKind::Delete,
+        phase: "inspect".into(),
+        expected_revision: receipt.confirmed_revision,
+        old_spec_revision: None,
+        new_spec_revision: None,
+    };
+    DeleteOperation {
+        state: database,
+        runner,
+        stages: &stages,
+    }
+    .run_reserved(&intent, receipt, true, reservation)
     .await
 }
 

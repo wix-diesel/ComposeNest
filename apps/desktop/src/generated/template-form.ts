@@ -242,6 +242,7 @@ export interface ChangeInstanceRequest {
   instanceId: string;
   expectedRevision: number;
   action: string;
+  retainDataConfirmed: boolean;
 }
 
 export interface InstanceActionView {

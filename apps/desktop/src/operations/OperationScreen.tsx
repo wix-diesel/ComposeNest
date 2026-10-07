@@ -57,7 +57,9 @@ export function OperationScreen({ client, operationId, instanceId, headingRef }:
   const operation = view?.operation;
   const target = view?.instance;
   const creation = operation?.kind === "create" || operation?.kind === "clone";
-  const succeeded = operation?.status === "Succeeded" && !notice;
+  const deletion = operation?.kind === "delete";
+  const succeeded = operation?.status === "Succeeded" && !notice
+    && (!deletion || (target?.lifecycle === "retired" && target.lastOperation?.id === operation.id && !!view?.completedAt));
   const failed = operation?.status === "Failed";
   const stage = phases[operation?.phase ?? ""];
   const ready = succeeded && creation && target?.lastOperation?.id === operation?.id && target?.runtimeStatus === "ready";
@@ -85,7 +87,11 @@ export function OperationScreen({ client, operationId, instanceId, headingRef }:
       <p>開始: {operation.startedAt} UTC{view.completedAt && ` · 終了: ${view.completedAt} UTC`}</p>
       <p>処理ID: <code>{operationId}</code> · 記録 sequence: {view.sequence}</p>
     </section><div className="notice" role="status">
-      {ready ? <><strong>準備完了を確認しました</strong><p>保存されたHealth確認結果に基づく接続情報です。</p>
+      {deletion ? <><strong>{succeeded ? "環境の削除が完了しました。データは残ります" : "環境の削除は完了していません"}</strong>
+        <p>{succeeded ? "環境一覧から除外しました。データ・元の設定・Composeの所在は保持データで確認できます。"
+          : "受付済み・失敗・結果不明の環境は一覧に残ります。削除完了を確認するまで、別の変更は実行できません。"}</p>
+        <button className="btn" onClick={() => client.navigate(succeeded ? { page: "retained" } : { page: "instance-detail", instanceId: target.id })}>{succeeded ? "保持データを確認" : "対象の環境を確認"}</button></>
+        : ready ? <><strong>準備完了を確認しました</strong><p>保存されたHealth確認結果に基づく接続情報です。</p>
         {target.connections.map((connection) => <p key={connection.slot}>{connection.label}: <code>{connection.port.hostIp}:{connection.port.hostPort}</code></p>)}
         <button className="btn primary" onClick={() => client.navigate({ page: "instance-detail", instanceId: target.id })}>環境の詳細・接続設定を確認</button></>
         : <><strong>{notice ? "現在の結果は未確認です" : succeeded ? "処理の完了記録があります" : failed ? "処理は完了していません" : terminal(operation.status) ? "実際の結果を確認してください" : "準備完了の確認を待っています"}</strong>

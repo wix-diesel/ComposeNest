@@ -106,6 +106,7 @@ try {
   for (const invalid of ["wrong_id", "wrong_version", "wrong_instance", "null", "failure"]) {
     mode = invalid; await refresh.click(); await page.getByRole("alert").filter({ hasText: "一部の状態を確認できませんでした" }).waitFor();
     await settled();
+    await status("再確認失敗・前回の観測").nth(3).waitFor();
     assert.equal(await status("再確認失敗・前回の観測").count(), 4);
     assert.equal(await status("最終観測: " + newTime + " UTC").count(), 0);
   }

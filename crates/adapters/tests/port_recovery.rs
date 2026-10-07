@@ -38,6 +38,133 @@ use serde_json::json;
 const ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const CONTAINER: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
+#[tokio::test]
+async fn recovery_view_is_scoped_fresh_and_keeps_the_failed_result() {
+    use composenest_adapters::recovery_view::{RecoverySession, inspect_recovery};
+    let fixture = Fixture::new(OperationKind::EditPort).await;
+    fixture.current(1);
+    fixture
+        .db
+        .set_status("operation", OperationStatus::Failed, "ports")
+        .unwrap();
+    let session = RecoverySession::new(&fixture.db).unwrap();
+    let inspect = || {
+        inspect_recovery(
+            &fixture.db,
+            &fixture.probe,
+            &session,
+            "scope",
+            ID,
+            "operation",
+        )
+    };
+    let view = inspect().await.unwrap();
+    assert_eq!(view.previous_status, "Failed");
+    assert_eq!(view.current_runtime, "stopped");
+    assert!(view.actions.contains(&"restore_ports".into()));
+    assert_ne!(view.ports[0].host_port, view.original_ports[0].host_port);
+    assert!(
+        inspect_recovery(
+            &fixture.db,
+            &fixture.probe,
+            &session,
+            "other",
+            ID,
+            "operation"
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        inspect_recovery(
+            &fixture.db,
+            &fixture.probe,
+            &session,
+            "scope",
+            "other",
+            "operation"
+        )
+        .await
+        .is_err()
+    );
+    fs::copy(
+        fixture.root.path().join("ready.json"),
+        fixture.root.path().join("current.json"),
+    )
+    .unwrap();
+    let ready = inspect().await.unwrap();
+    assert_eq!(ready.previous_status, "Failed");
+    assert_eq!(ready.current_runtime, "ready");
+    assert!(!ready.actions.contains(&"retry_ports".into()));
+    assert!(!ready.actions.contains(&"reconcile_ports".into()));
+    assert!(!serde_json::to_string(&ready).unwrap().contains("password"));
+    let calls = fs::read_to_string(fixture.root.path().join("calls")).unwrap();
+    assert!(!calls.contains("compose create"));
+    assert!(!calls.contains("container start"));
+}
+
+#[tokio::test]
+async fn inherited_unfinished_cli_and_missing_storage_hold_every_change() {
+    use composenest_adapters::recovery_view::{RecoverySession, inspect_recovery};
+    use composenest_application::operation_journal::{ExpectedResult, StepCommand, StepIntent};
+    let fixture = Fixture::new(OperationKind::EditPort).await;
+    fixture.current(1);
+    fixture
+        .db
+        .set_status("operation", OperationStatus::Executing, "ports")
+        .unwrap();
+    fixture
+        .db
+        .record_step(&StepIntent {
+            operation_id: "operation".into(),
+            sequence: 1,
+            attempt: 1,
+            command_kind: StepCommand::ComposeCreate,
+            resource_id: ID.into(),
+            expected_result: ExpectedResult::ContainerCreated,
+        })
+        .unwrap();
+    fixture
+        .db
+        .set_status("operation", OperationStatus::OutcomeUnknown, "ports")
+        .unwrap();
+    let session = RecoverySession::new(&fixture.db).unwrap();
+    fixture
+        .db
+        .write(|db| {
+            db.execute("UPDATE storage_allocations SET presence='missing'", [])?;
+            Ok(())
+        })
+        .unwrap();
+    let view = inspect_recovery(
+        &fixture.db,
+        &fixture.probe,
+        &session,
+        "scope",
+        ID,
+        "operation",
+    )
+    .await
+    .unwrap();
+    assert!(view.actions.is_empty());
+    assert!(
+        view.hold_reasons
+            .contains(&"CLI_TERMINATION_UNCONFIRMED".into())
+    );
+    assert!(view.hold_reasons.contains(&"STORAGE_MISSING".into()));
+    let reservations: u64 = fixture
+        .db
+        .read(|db| {
+            Ok(db.query_row(
+                "SELECT count(*) FROM port_reservations WHERE status!='released'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(reservations, 2);
+}
+
 fn available_fixture_port() -> u16 {
     // Avoid ephemeral ports reused by child processes, and leave room for each
     // fixture's recovery proposals without overlapping parallel fixtures.

@@ -47,6 +47,43 @@ fn input() -> ArtifactInput {
 }
 
 #[test]
+fn oversized_generated_files_leave_no_state_and_allow_a_corrected_retry() {
+    for name in ["compose.yaml", "config.txt", "manifest.json"] {
+        let (root, database) = fixture();
+        let store = ArtifactStore::new(root.path(), &database);
+        let mut candidate = input();
+        if name == "manifest.json" {
+            candidate.generator_version = "v".repeat(2 * 1024 * 1024);
+        } else {
+            candidate
+                .files
+                .insert(name.into(), vec![b'x'; 2 * 1024 * 1024 + 1]);
+        }
+        assert!(matches!(
+            store.publish("operation", candidate),
+            Err(ArtifactError::InvalidInput)
+        ));
+        let saved_files = database
+            .read(|db| {
+                Ok(db.query_row(
+                    "SELECT (SELECT count(*) FROM artifacts) + (SELECT count(*) FROM artifact_files)",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(saved_files, 0, "{name}");
+        assert!(!root.path().join("instances").exists(), "{name}");
+        assert!(!root.path().join("staging").exists(), "{name}");
+        let path = store.publish("operation", input()).unwrap();
+        assert_eq!(
+            store.verified_compose_path("artifact").unwrap(),
+            path.join("compose.yaml")
+        );
+    }
+}
+
+#[test]
 fn rejects_oversized_compose_manifest_and_added_file_before_hashing() {
     for name in ["compose.yaml", "manifest.json", "extra"] {
         let (root, database) = fixture();

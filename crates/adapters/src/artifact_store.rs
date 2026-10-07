@@ -285,10 +285,33 @@ impl<'a> ArtifactStore<'a> {
         check_dir(&path)?;
         let mut found = BTreeMap::new();
         collect_files(&path, &path, &mut found)?;
+        if !found.contains_key("compose.yaml") {
+            return Err(ArtifactError::Unavailable);
+        }
         if found != record.1 {
             return Err(ArtifactError::Modified);
         }
         Ok(path)
+    }
+
+    /// Reads bounded UTF-8 Compose bytes and verifies those exact bytes against SQLite.
+    pub fn read_compose(&self, id: &str) -> Result<(PathBuf, String), ArtifactError> {
+        let path = self.verified_compose_path(id)?;
+        let file = open_bounded_file(&path)?;
+        let mut bytes = Vec::new();
+        file.take(FILE_LIMIT + 1).read_to_end(&mut bytes)?;
+        let expected = self.database.read(|db| {
+            Ok(db.query_row("SELECT sha256 FROM artifact_files WHERE artifact_id=?1 AND relative_path='compose.yaml'", [id], |row| row.get::<_, String>(0))?)
+        })?;
+        if bytes.len() as u64 > FILE_LIMIT {
+            return Err(ArtifactError::InvalidInput);
+        }
+        if digest(&bytes) != expected {
+            return Err(ArtifactError::Modified);
+        }
+        self.verified_compose_path(id)?;
+        let text = String::from_utf8(bytes).map_err(|_| ArtifactError::InvalidInput)?;
+        Ok((path, text))
     }
 
     fn mark_published(&self, id: &str) -> Result<(), ArtifactError> {

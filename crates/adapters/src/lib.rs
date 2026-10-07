@@ -52,6 +52,7 @@ pub mod external_recovery_state;
 pub mod host_ports;
 pub mod image_resolution;
 pub mod image_store;
+pub mod instance_content;
 pub mod instance_edit;
 pub mod lifecycle_stages;
 pub mod lifecycle_state;

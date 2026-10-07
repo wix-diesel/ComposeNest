@@ -234,6 +234,35 @@ export interface InstanceDetailView {
   cloneSourceId: string | null;
 }
 
+export interface InstanceSecretRequest {
+  context: RequestContext;
+  instanceId: string;
+  expectedSpecRevision: number;
+  slot: string;
+}
+
+export interface InstanceSecretView {
+  instanceId: string;
+  specRevision: number;
+  slot: string;
+  value: string;
+}
+
+export interface InstanceComposeRequest {
+  context: RequestContext;
+  instanceId: string;
+  expectedSpecRevision: number;
+  reveal: boolean;
+}
+
+export interface InstanceComposeView {
+  instanceId: string;
+  specRevision: number;
+  masked: boolean;
+  content: string;
+  path: string;
+}
+
 export interface EditInstancePortsRequest {
   context: RequestContext;
   instanceId: string;

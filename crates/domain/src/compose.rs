@@ -506,6 +506,44 @@ pub fn to_yaml(model: &ComposeModel) -> Result<String, ComposeError> {
 fn scalar(value: &str) -> Yaml {
     Yaml::String(value.replace('$', "$$"))
 }
+
+/// Masks known values in actual generated YAML without rebuilding its document.
+/// Includes Compose interpolation and YAML double-quote escapes for embedded values.
+pub fn mask_yaml(text: &str, secrets: &[String]) -> Result<String, ComposeError> {
+    let mut patterns = Vec::new();
+    for secret in secrets.iter().filter(|secret| !secret.is_empty()) {
+        for value in [secret.clone(), secret.replace('$', "$$")] {
+            let mut encoded = String::new();
+            YamlEmitter::new(&mut encoded)
+                .dump(&Yaml::String(format!("\n{value}")))
+                .map_err(|_| ComposeError::Serialization)?;
+            let escaped = encoded
+                .strip_prefix("---\n\"\\n")
+                .and_then(|s| s.strip_suffix('"'))
+                .ok_or(ComposeError::Serialization)?;
+            patterns.push(escaped.to_owned());
+            patterns.push(value);
+        }
+    }
+    patterns.sort_by_key(|pattern| std::cmp::Reverse(pattern.len()));
+    patterns.dedup();
+    let mut masked = String::new();
+    let mut rest = text;
+    while !rest.is_empty() {
+        if let Some(pattern) = patterns
+            .iter()
+            .find(|pattern| rest.starts_with(pattern.as_str()))
+        {
+            masked.push_str("••••••••");
+            rest = &rest[pattern.len()..];
+        } else {
+            let character = rest.chars().next().ok_or(ComposeError::Serialization)?;
+            masked.push(character);
+            rest = &rest[character.len_utf8()..];
+        }
+    }
+    Ok(masked)
+}
 fn array(items: impl Iterator<Item = String>) -> Yaml {
     Yaml::Array(items.map(|value| scalar(&value)).collect())
 }

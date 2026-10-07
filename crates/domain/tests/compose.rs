@@ -446,3 +446,28 @@ fn docker_config_and_container_preserve_actual_values() {
             .any(|entry| entry.as_str() == Some(expected_env.as_str()))
     );
 }
+#[test]
+fn actual_yaml_masks_special_characters_embedded_values_and_overlapping_secrets() {
+    use yaml_rust2::{Yaml, YamlEmitter};
+    let secret = "p$ \"quote\" \\ 日本語\n\t\r\0";
+    let value = format!("prefix-{}-suffix", secret.replace('$', "$$"));
+    let mut raw = String::new();
+    YamlEmitter::new(&mut raw)
+        .dump(&Yaml::String(value))
+        .unwrap();
+    let masked =
+        composenest_domain::compose::mask_yaml(&raw, &[secret.into(), "p".into(), String::new()])
+            .unwrap();
+    assert!(!masked.contains("quote"));
+    assert!(!masked.contains("日本語"));
+    assert!(masked.contains("••••••••-suffix"));
+    assert_eq!(
+        composenest_domain::compose::mask_yaml("abc ab unchanged", &["ab".into(), "abc".into()])
+            .unwrap(),
+        "•••••••• •••••••• unchanged"
+    );
+    assert_eq!(
+        composenest_domain::compose::mask_yaml("# artifact\nservices: {}", &[]).unwrap(),
+        "# artifact\nservices: {}"
+    );
+}

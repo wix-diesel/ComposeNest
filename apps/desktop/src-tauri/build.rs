@@ -14,6 +14,8 @@ fn main() {
             "list_retained_storage",
             "refresh_retained_storage",
             "get_instance_detail",
+            "get_instance_secret",
+            "get_instance_compose",
             "get_instance_actions",
             "rename_instance",
             "change_instance",

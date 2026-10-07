@@ -56,6 +56,132 @@ fn fixture() -> (TempDir, DatabaseWorker) {
 }
 
 #[test]
+fn explicit_secret_is_scoped_committed_and_connection_slot_only() {
+    use composenest_adapters::instance_content::secret;
+    use composenest_application::{RequestContext, instance_content::InstanceSecretRequest};
+    let (_root, db) = fixture();
+    let mut request = InstanceSecretRequest {
+        context: RequestContext {
+            api_version: 1,
+            request_id: "reveal".into(),
+        },
+        instance_id: "one".into(),
+        expected_spec_revision: 1,
+        slot: "password".into(),
+    };
+    assert_eq!(secret(&db, "scope", &request).unwrap().value, "top-secret");
+    assert!(matches!(
+        secret(&db, "other", &request),
+        Err(StoreConflict::Missing)
+    ));
+    for slot in ["username", "missing", "../../state/composenest.sqlite"] {
+        request.slot = slot.into();
+        assert!(matches!(
+            secret(&db, "scope", &request),
+            Err(StoreConflict::InvalidInput)
+        ));
+    }
+    request.slot = "password".into();
+    request.expected_spec_revision = 2;
+    assert!(matches!(
+        secret(&db, "scope", &request),
+        Err(StoreConflict::StaleRevision)
+    ));
+    request.expected_spec_revision = 1;
+    db.write(|db| {
+        db.execute(
+            "UPDATE instances SET lifecycle='retired' WHERE id='one'",
+            [],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    assert!(matches!(
+        secret(&db, "scope", &request),
+        Err(StoreConflict::Missing)
+    ));
+}
+
+#[test]
+fn compose_reads_selected_actual_artifact_and_rejects_unsafe_or_modified_files() {
+    use composenest_adapters::{
+        artifact_store::{ArtifactInput, ArtifactStore},
+        instance_content::compose,
+    };
+    use composenest_application::{RequestContext, instance_content::InstanceComposeRequest};
+    let (root, db) = fixture();
+    let store = ArtifactStore::new(root.path(), &db);
+    let raw = "# actual generated artifact\nservices:\n  main:\n    image: postgres@sha256:actual\n    environment:\n      PASSWORD: top-secret\n";
+    let publish = |id: &str, text: &str| {
+        store
+            .publish(
+                "create",
+                ArtifactInput {
+                    id: id.into(),
+                    instance_id: "one".into(),
+                    spec_revision: 1,
+                    generator_version: "compose-v1".into(),
+                    files: std::collections::BTreeMap::from([(
+                        "compose.yaml".into(),
+                        text.as_bytes().to_vec(),
+                    )]),
+                },
+            )
+            .unwrap()
+    };
+    publish("one-r1", raw);
+    let selected = publish("replacement", &format!("{raw}# restored selection\n"));
+    db.write(|db| {
+        db.execute("INSERT INTO artifact_selections (instance_id, spec_revision, artifact_id) VALUES ('one',1,'replacement')", [])?;
+        Ok(())
+    }).unwrap();
+    let mut request = InstanceComposeRequest {
+        context: RequestContext {
+            api_version: 1,
+            request_id: "compose".into(),
+        },
+        instance_id: "one".into(),
+        expected_spec_revision: 1,
+        reveal: false,
+    };
+    let masked = compose(&db, "scope", &request).unwrap();
+    assert!(masked.masked);
+    assert_eq!(
+        masked.content,
+        format!(
+            "{}# restored selection\n",
+            raw.replace("top-secret", "••••••••")
+        )
+    );
+    assert_eq!(masked.path, selected.join("compose.yaml").to_string_lossy());
+    assert!(compose(&db, "other", &request).is_err());
+    request.expected_spec_revision = 2;
+    assert!(matches!(
+        compose(&db, "scope", &request),
+        Err(StoreConflict::StaleRevision)
+    ));
+    request.expected_spec_revision = 1;
+    request.reveal = true;
+    assert_eq!(
+        compose(&db, "scope", &request).unwrap().content,
+        format!("{raw}# restored selection\n")
+    );
+    fs::write(selected.join("compose.yaml"), "changed secret text").unwrap();
+    assert!(compose(&db, "scope", &request).is_err());
+    fs::remove_file(selected.join("compose.yaml")).unwrap();
+    assert!(compose(&db, "scope", &request).is_err());
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(
+            root.path().join("state/composenest.sqlite"),
+            selected.join("compose.yaml"),
+        )
+        .unwrap();
+        assert!(compose(&db, "scope", &request).is_err());
+    }
+}
+
+#[test]
 fn reconciliation_preserves_the_last_failure_separately_from_current_ready() {
     let (_root, db) = fixture();
     db.write(|db| {

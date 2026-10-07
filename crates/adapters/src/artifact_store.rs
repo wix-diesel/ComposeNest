@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set, TransactionTrait};
@@ -279,6 +279,42 @@ impl<'a> ArtifactStore<'a> {
             return Err(ArtifactError::Modified);
         }
         Ok(path)
+    }
+
+    /// Reads bounded UTF-8 Compose bytes and verifies those exact bytes against SQLite.
+    pub fn read_compose(&self, id: &str) -> Result<(PathBuf, String), ArtifactError> {
+        let path = self.verified_compose_path(id)?;
+        let mut options = OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            options.custom_flags(
+                windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT,
+            );
+        }
+        let file = options.open(&path)?;
+        let metadata = file.metadata()?;
+        const LIMIT: u64 = 2 * 1024 * 1024;
+        if !metadata.is_file() || metadata.len() > LIMIT {
+            return Err(ArtifactError::InvalidInput);
+        }
+        let mut bytes = Vec::new();
+        file.take(LIMIT + 1).read_to_end(&mut bytes)?;
+        let expected = self.database.read(|db| {
+            Ok(db.query_row("SELECT sha256 FROM artifact_files WHERE artifact_id=?1 AND relative_path='compose.yaml'", [id], |row| row.get::<_, String>(0))?)
+        })?;
+        if bytes.len() as u64 > LIMIT || digest(&bytes) != expected {
+            return Err(ArtifactError::Modified);
+        }
+        self.verified_compose_path(id)?;
+        let text = String::from_utf8(bytes).map_err(|_| ArtifactError::InvalidInput)?;
+        Ok((path, text))
     }
 
     fn mark_published(&self, id: &str) -> Result<(), ArtifactError> {

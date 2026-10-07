@@ -9,6 +9,8 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 use tauri::{Manager, State};
 mod create_commands;
 use create_commands::*;
+mod instance_content_commands;
+use instance_content_commands::*;
 mod instance_commands;
 use instance_commands::*;
 mod port_commands;
@@ -96,6 +98,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             list_retained_storage,
             refresh_retained_storage,
             get_instance_detail,
+            get_instance_secret,
+            get_instance_compose,
             get_instance_actions,
             rename_instance,
             change_instance,

@@ -9,6 +9,7 @@ const sources = {
   runtime_diagnostics: ["DiagnosticCheck", "RuntimeDiagnosis"],
   template_catalog_view: ["TemplateCard", "TemplateLoadResult", "TemplateCatalogView"],
   query_service: ["PortView", "StorageView", "InputView", "ConnectionView", "ObservationView", "OperationView", "OperationRequest", "OperationProgressView", "InstanceView", "InstanceListView", "StorageLocationView", "InstanceDetailView"],
+  instance_content: ["InstanceSecretRequest", "InstanceSecretView", "InstanceComposeRequest", "InstanceComposeView"],
   instance_edit: ["EditInstancePortsRequest", "EditSettingView", "EditPortView", "InstanceEditView"],
   instance_actions: ["InstanceActionRequest", "RenameInstanceRequest", "ChangeInstanceRequest", "InstanceActionView"],
   template_form: ["FormInput", "FormOption", "FormSlot", "FormConnection", "TemplateForm"],

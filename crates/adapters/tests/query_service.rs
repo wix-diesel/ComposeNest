@@ -167,9 +167,23 @@ fn compose_reads_selected_actual_artifact_and_rejects_unsafe_or_modified_files()
         format!("{raw}# restored selection\n")
     );
     fs::write(selected.join("compose.yaml"), "changed secret text").unwrap();
-    assert!(compose(&db, "scope", &request).is_err());
+    assert!(matches!(
+        compose(&db, "scope", &request),
+        Err(StoreConflict::ArtifactModified)
+    ));
+    fs::File::create(selected.join("compose.yaml"))
+        .unwrap()
+        .set_len(2 * 1024 * 1024 + 1)
+        .unwrap();
+    assert!(matches!(
+        compose(&db, "scope", &request),
+        Err(StoreConflict::ArtifactInvalid)
+    ));
     fs::remove_file(selected.join("compose.yaml")).unwrap();
-    assert!(compose(&db, "scope", &request).is_err());
+    assert!(matches!(
+        compose(&db, "scope", &request),
+        Err(StoreConflict::ArtifactUnavailable)
+    ));
     #[cfg(unix)]
     {
         std::os::unix::fs::symlink(
@@ -177,7 +191,10 @@ fn compose_reads_selected_actual_artifact_and_rejects_unsafe_or_modified_files()
             selected.join("compose.yaml"),
         )
         .unwrap();
-        assert!(compose(&db, "scope", &request).is_err());
+        assert!(matches!(
+            compose(&db, "scope", &request),
+            Err(StoreConflict::ArtifactModified)
+        ));
     }
 }
 

@@ -17,6 +17,8 @@ use crate::{
 mod external;
 pub use external::{ArtifactDifference, ExternalArtifact};
 
+const FILE_LIMIT: u64 = 2 * 1024 * 1024;
+
 /// A failure that leaves an artifact unavailable for execution.
 #[derive(Debug, thiserror::Error)]
 pub enum ArtifactError {
@@ -57,7 +59,7 @@ pub struct ArtifactInput {
     pub files: BTreeMap<String, Vec<u8>>,
 }
 
-/// Publishes and checks artifacts under one protected management root.
+/// Publishes and checks artifacts under one protected root, reading at most 2 MiB per file.
 pub struct ArtifactStore<'a> {
     root: PathBuf,
     database: &'a DatabaseWorker,
@@ -275,6 +277,9 @@ impl<'a> ArtifactStore<'a> {
         check_dir(&path)?;
         let mut found = BTreeMap::new();
         collect_files(&path, &path, &mut found)?;
+        if !found.contains_key("compose.yaml") {
+            return Err(ArtifactError::Unavailable);
+        }
         if found != record.1 {
             return Err(ArtifactError::Modified);
         }
@@ -284,32 +289,16 @@ impl<'a> ArtifactStore<'a> {
     /// Reads bounded UTF-8 Compose bytes and verifies those exact bytes against SQLite.
     pub fn read_compose(&self, id: &str) -> Result<(PathBuf, String), ArtifactError> {
         let path = self.verified_compose_path(id)?;
-        let mut options = OpenOptions::new();
-        options.read(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-        }
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::OpenOptionsExt;
-            options.custom_flags(
-                windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT,
-            );
-        }
-        let file = options.open(&path)?;
-        let metadata = file.metadata()?;
-        const LIMIT: u64 = 2 * 1024 * 1024;
-        if !metadata.is_file() || metadata.len() > LIMIT {
-            return Err(ArtifactError::InvalidInput);
-        }
+        let file = open_bounded_file(&path)?;
         let mut bytes = Vec::new();
-        file.take(LIMIT + 1).read_to_end(&mut bytes)?;
+        file.take(FILE_LIMIT + 1).read_to_end(&mut bytes)?;
         let expected = self.database.read(|db| {
             Ok(db.query_row("SELECT sha256 FROM artifact_files WHERE artifact_id=?1 AND relative_path='compose.yaml'", [id], |row| row.get::<_, String>(0))?)
         })?;
-        if bytes.len() as u64 > LIMIT || digest(&bytes) != expected {
+        if bytes.len() as u64 > FILE_LIMIT {
+            return Err(ArtifactError::InvalidInput);
+        }
+        if digest(&bytes) != expected {
             return Err(ArtifactError::Modified);
         }
         self.verified_compose_path(id)?;
@@ -502,12 +491,54 @@ fn collect_files(
             if relative != "manifest.json" && !valid_relative(&relative) {
                 return Err(ArtifactError::Modified);
             }
-            found.insert(relative, digest(&fs::read(path)?));
+            found.insert(relative, bounded_digest(open_bounded_file(&path)?)?);
         } else {
             return Err(ArtifactError::UnsafePath(path));
         }
     }
     Ok(())
+}
+
+fn open_bounded_file(path: &Path) -> Result<File, ArtifactError> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || is_link(&metadata) {
+        return Err(ArtifactError::UnsafePath(path.into()));
+    }
+    if metadata.len() > FILE_LIMIT {
+        return Err(ArtifactError::InvalidInput);
+    }
+    Ok(file)
+}
+
+fn bounded_digest(reader: impl Read) -> Result<String, ArtifactError> {
+    let mut reader = reader.take(FILE_LIMIT + 1);
+    let mut hash = Sha256::new();
+    if io::copy(&mut reader, &mut hash)? > FILE_LIMIT {
+        return Err(ArtifactError::InvalidInput);
+    }
+    Ok(format!("{:x}", hash.finalize()))
+}
+
+#[test]
+fn streaming_hash_stops_if_content_grows_past_the_limit() {
+    assert!(matches!(
+        bounded_digest(io::repeat(0)),
+        Err(ArtifactError::InvalidInput)
+    ));
+    assert_eq!(bounded_digest(io::empty()).unwrap(), digest(&[]));
 }
 
 fn sync_tree_dirs(dir: &Path) -> io::Result<()> {

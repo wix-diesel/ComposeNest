@@ -16,6 +16,7 @@ pub mod instance_actions;
 pub mod instance_content;
 pub mod instance_edit;
 pub mod lifecycle_operation;
+pub mod log_subscription;
 pub mod logs;
 pub mod named_volumes;
 pub mod operation_journal;

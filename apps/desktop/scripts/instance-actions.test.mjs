@@ -22,7 +22,8 @@ try {
     window.edit = { templateId: "generic-service", selectedVersion: "custom-17", storageMethod: "volume", specRevision: 1, appliedSpecRevision: 1,
       inputs: [{ slot: "username", label: "接続ユーザー", secret: false, value: "app-user" }, { slot: "password", label: "認証用パスワード", secret: true, value: null }, { slot: "enabled", label: "機能を有効化", secret: false, value: false }],
       ports: [{ slot: "db", hostIp: "127.0.0.1", containerPort: 5432, oldPort: 15432, committedPort: 15432, candidatePort: null, oldReservation: "committed", candidateReservation: null }, { slot: "metrics", hostIp: "127.0.0.1", containerPort: 9000, oldPort: 19000, committedPort: 19000, candidatePort: null, oldReservation: "committed", candidateReservation: null }] };
-    window.__TAURI_INTERNALS__ = { invoke: async (command, { request }) => {
+    window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
+    window.__TAURI_INTERNALS__ = { transformCallback: () => 1, invoke: async (command, { request }) => {
       window.calls.push({ command, request: structuredClone(request) });
       const response = (result, error = null) => ({ apiVersion: 1, requestId: (request.context ?? request).requestId, result, error });
       if (command === "get_bootstrap") return response({ applicationTitle: "ComposeNest", startedAtUnixSeconds: 1 });
@@ -38,6 +39,7 @@ try {
             connections: window.edit.ports.map((port) => ({ slot: port.slot, label: port.slot, port: { ...port, hostPort: port.committedPort }, inputSlots: ["username", "password", "enabled"] })) } });
       }
       if (command === "plugin:event|listen") return 1;
+      if (command === "plugin:event|unlisten") return null;
       if (command === "list_instances") return response(window.view.lifecycle === "retired" ? [] : [{ ...structuredClone(window.view), ...structuredClone(window.edit), ports: [], observation: null, needsAttention: window.view.lifecycle === "retiring" }]);
       if (command === "list_retained_storage") return response([]);
       if (command === "get_operation") return response({ operation: { id: window.view.operationId, kind: window.view.operationKind, status: window.view.operationStatus, phase: window.view.operationPhase, startedAt: "2026-10-07 00:00:00" },

@@ -56,6 +56,7 @@ pub mod instance_content;
 pub mod instance_edit;
 pub mod lifecycle_stages;
 pub mod lifecycle_state;
+pub mod log_subscription;
 pub mod named_volumes;
 pub mod operation_journal;
 pub mod port_edit_stages;
@@ -70,3 +71,7 @@ pub mod state_store;
 pub mod storage;
 pub mod template_catalog_view;
 pub mod template_package;
+
+#[cfg(test)]
+#[path = "../tests/support/mod.rs"]
+mod test_support;

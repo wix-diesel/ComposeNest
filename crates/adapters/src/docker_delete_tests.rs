@@ -1,12 +1,11 @@
 use super::*;
+use crate::test_support as support;
 use composenest_application::{
     operation_journal::{OperationIntent, OperationJournal, OperationKind},
     state_store::StateStore,
 };
 use serde_json::json;
 use std::sync::Mutex;
-#[path = "../tests/support/mod.rs"]
-mod support;
 
 const INSTANCE: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const CONTAINER: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";

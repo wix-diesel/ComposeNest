@@ -76,6 +76,7 @@ impl<'a> ArtifactStore<'a> {
 
     /// Records the expected bytes, flushes staging, then publishes without replacing a target.
     /// Repeating the same request reconciles an earlier interrupted publication.
+    /// Rejects oversized generated files and manifest before any database or filesystem writes.
     pub fn publish(
         &self,
         operation_id: &str,
@@ -89,6 +90,10 @@ impl<'a> ArtifactStore<'a> {
             || !input.files.contains_key("compose.yaml")
             || input.files.contains_key("manifest.json")
             || input.files.keys().any(|path| !valid_relative(path))
+            || input
+                .files
+                .values()
+                .any(|bytes| bytes.len() as u64 > FILE_LIMIT)
         {
             return Err(ArtifactError::InvalidInput);
         }
@@ -107,6 +112,9 @@ impl<'a> ArtifactStore<'a> {
             "files": hashes,
         }))
         .map_err(|_| ArtifactError::InvalidInput)?;
+        if manifest.len() as u64 > FILE_LIMIT {
+            return Err(ArtifactError::InvalidInput);
+        }
         let manifest_hash = digest(&manifest);
         files.insert("manifest.json".into(), manifest);
         let expected: BTreeMap<_, _> = files

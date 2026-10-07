@@ -315,9 +315,9 @@ try {
   const corrected = (await calls("edit_instance_ports"))[1].request;
   assert.equal(corrected.ports.db, 15434);
   assert.notEqual(corrected.context.requestId, separate.context.requestId);
-  assert.equal(await page.locator(".operation-link").textContent(), "処理ID: port-operation · コンテナ再作成");
+  assert.equal(await page.locator(".operation-link").textContent(), "処理ID: port-operation · コンテナ再作成 復旧・結果確認");
   await page.evaluate(() => { window.view.operationPhase = "future_phase"; });
-  await page.waitForFunction(() => document.querySelector(".operation-link").textContent.endsWith("確認中"));
+  await page.waitForFunction(() => document.querySelector(".operation-link").textContent.includes("確認中"));
 
 
   await open(true); await confirmPorts();
@@ -400,7 +400,8 @@ try {
   assert.equal(await page.getByRole("button", { name: "起動", exact: true }).isDisabled(), false);
   for (const status of ["Failed", "OutcomeUnknown", "AwaitingDecision"]) {
     await page.evaluate((status) => { Object.assign(window.view, { operationId: "failed-op", operationStatus: status, actions: [] }); }, status);
-    await page.getByText("未解決の処理があるため、別の変更は実行できません。", { exact: true }).waitFor();
+    await page.locator(".notice").filter({ hasText: "未解決の処理があるため、別の変更は実行できません。" }).waitFor();
+    assert.equal(await page.getByRole("button", { name: "復旧・結果確認", exact: true }).isVisible(), true);
     assert.equal(await page.getByRole("button", { name: "起動", exact: true }).count(), 0);
     assert.equal(await page.getByRole("button", { name: "停止", exact: true }).isDisabled(), true);
   }

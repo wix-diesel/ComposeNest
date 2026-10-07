@@ -6,6 +6,7 @@
   "packageManager": "pnpm@11.19.0",
   "scripts": {
     "test:operation": "node scripts/operation-screen.test.mjs",
+    "test:recovery": "node scripts/recovery-screen.test.mjs",
     "test:retained": "node scripts/retained.test.mjs",
     "test:settings": "node scripts/settings.test.mjs",
     "test:diagnostics": "node scripts/diagnostics.test.mjs",

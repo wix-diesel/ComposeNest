@@ -56,6 +56,20 @@ fn fixture() -> (TempDir, DatabaseWorker) {
 }
 
 #[test]
+fn reconciliation_preserves_the_last_failure_separately_from_current_ready() {
+    let (_root, db) = fixture();
+    db.write(|db| {
+        db.execute_batch("UPDATE operations SET status='Failed', completed_at=NULL WHERE id='create'; UPDATE operations SET status='OutcomeUnknown' WHERE id='create'; UPDATE operations SET status='Succeeded', completed_at=CURRENT_TIMESTAMP WHERE id='create'; UPDATE runtime_observations SET freshness='fresh';")?;
+        Ok(())
+    }).unwrap();
+    let progress =
+        composenest_adapters::query_service::view_operation(&db, "scope", "create").unwrap();
+    assert_eq!(progress.last_failure_status.as_deref(), Some("Failed"));
+    assert_eq!(progress.operation.status, "Succeeded");
+    assert_eq!(progress.instance.runtime_status, "ready");
+}
+
+#[test]
 fn saved_list_and_detail_use_committed_ports_and_mask_secrets() {
     let (_root, db) = fixture();
     let query = QueryService::new(&db);

@@ -4,6 +4,36 @@ import type { RequestContext } from "./ipc";
 
 export type JsonValue = null | boolean | number | string | Array<JsonValue> | { [key: string]: JsonValue };
 
+export interface RecoveryRequest {
+  context: RequestContext;
+  instanceId: string;
+  operationId: string;
+}
+
+export interface RecoveryFileDiff {
+  path: string;
+  recordedHash: string | null;
+  observedHash: string | null;
+}
+
+export interface RecoveryView {
+  instanceId: string;
+  operationId: string;
+  attempt: number;
+  instanceRevision: number;
+  candidateRevision: number;
+  previousStatus: string;
+  currentRuntime: string;
+  actions: Array<string>;
+  holdReasons: Array<string>;
+  ports: Array<PortView>;
+  originalPorts: Array<PortView>;
+  proposedPorts: Array<PortView>;
+  artifactId: string | null;
+  confirmationHash: string | null;
+  files: Array<RecoveryFileDiff>;
+}
+
 export interface RetainedLocation {
   storage: StorageView;
   location: string;
@@ -132,6 +162,7 @@ export interface OperationRequest {
 }
 
 export interface OperationProgressView {
+  lastFailureStatus: string | null;
   operation: OperationView;
   instance: InstanceView;
   sequence: number;

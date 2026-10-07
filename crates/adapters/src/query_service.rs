@@ -35,6 +35,7 @@ pub fn view_operation(
             [id], |row| row.get(0),
         )?;
         Ok(OperationProgressView {
+            last_failure_status: db.query_row("SELECT status FROM operation_failures WHERE operation_id=?1", [id], |row| row.get(0)).optional()?,
             operation, instance: read_instance(db, scope, &instance_id)?,
             sequence: positive(sequence)?, completed_at,
         })

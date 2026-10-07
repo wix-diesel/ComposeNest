@@ -48,8 +48,8 @@ impl LogBuffer {
 
 /// One pipe's incremental masker and line decoder; stdout and stderr stay separate.
 pub struct LogDecoder {
-    secrets: Vec<Vec<u8>>,
-    pending: Vec<u8>,
+    secrets: Vec<SecretPattern>,
+    pending: VecDeque<(u8, usize)>,
     line: Vec<u8>,
     truncated: bool,
 }
@@ -67,45 +67,50 @@ impl LogDecoder {
         secrets.sort_by_key(|s| std::cmp::Reverse(s.len()));
         secrets.dedup();
         Ok(Self {
-            secrets,
-            pending: Vec::new(),
+            secrets: secrets.into_iter().map(SecretPattern::new).collect(),
+            pending: VecDeque::new(),
             line: Vec::new(),
             truncated: false,
         })
     }
     /// Masks before line truncation, retaining a suffix that might cross the next chunk.
     pub fn feed(&mut self, bytes: &[u8], end: bool, buffer: &mut LogBuffer) {
-        // Callers feed at most 8 KiB at once, so pending storage is bounded too.
-        self.pending.extend_from_slice(bytes);
-        let mut offset = 0;
-        while offset < self.pending.len() {
-            let rest = &self.pending[offset..];
-            if !end
-                && self
-                    .secrets
-                    .iter()
-                    .any(|s| s.len() > rest.len() && s.starts_with(rest))
-            {
-                break;
-            }
-            if let Some(secret) = self
-                .secrets
-                .iter()
-                .find(|s| self.pending[offset..].starts_with(s))
-            {
-                offset += secret.len();
-                for byte in b"********" {
-                    self.output(*byte, buffer);
+        for &byte in bytes {
+            self.pending.push_back((byte, 0));
+            let mut unresolved = 0;
+            for secret in &mut self.secrets {
+                if secret.advance(byte) && self.pending.len() >= secret.bytes.len() {
+                    let start = self.pending.len() - secret.bytes.len();
+                    if let Some((_, length)) = self.pending.get_mut(start) {
+                        *length = (*length).max(secret.bytes.len());
+                    }
                 }
-            } else {
-                let byte = self.pending[offset];
-                offset += 1;
-                self.output(byte, buffer);
+                unresolved = unresolved.max(secret.matched);
             }
+            self.flush(unresolved, buffer);
         }
-        self.pending.drain(..offset);
+        if end {
+            self.flush(0, buffer);
+        }
         if end && (!self.line.is_empty() || self.truncated) {
             self.finish_line(buffer);
+        }
+    }
+    fn flush(&mut self, unresolved: usize, buffer: &mut LogBuffer) {
+        // Only prefixes that might complete in a later chunk remain undecided.
+        while self.pending.len() > unresolved {
+            if let Some((byte, length)) = self.pending.pop_front() {
+                if length == 0 {
+                    self.output(byte, buffer);
+                } else {
+                    for _ in 1..length {
+                        self.pending.pop_front();
+                    }
+                    for &byte in b"********" {
+                        self.output(byte, buffer);
+                    }
+                }
+            }
         }
     }
     fn output(&mut self, byte: u8, buffer: &mut LogBuffer) {
@@ -124,6 +129,60 @@ impl LogDecoder {
     }
 }
 
+// KMP keeps a failure table and cursor per secret instead of rescanning long prefixes.
+// With at most 128 patterns, total matching work is O(128 * input bytes), even across chunks.
+struct SecretPattern {
+    bytes: Vec<u8>,
+    fallback: Vec<usize>,
+    matched: usize,
+    #[cfg(test)]
+    comparisons: usize,
+}
+impl SecretPattern {
+    fn new(bytes: Vec<u8>) -> Self {
+        let mut fallback = vec![0; bytes.len()];
+        let mut matched = 0;
+        for i in 1..bytes.len() {
+            while matched > 0 && bytes[matched] != bytes[i] {
+                matched = fallback[matched - 1];
+            }
+            if bytes[matched] == bytes[i] {
+                matched += 1;
+            }
+            fallback[i] = matched;
+        }
+        Self {
+            bytes,
+            fallback,
+            matched: 0,
+            #[cfg(test)]
+            comparisons: 0,
+        }
+    }
+    fn advance(&mut self, byte: u8) -> bool {
+        loop {
+            #[cfg(test)]
+            {
+                self.comparisons += 1;
+            }
+            if self.bytes[self.matched] == byte {
+                self.matched += 1;
+                break;
+            }
+            if self.matched == 0 {
+                return false;
+            }
+            self.matched = self.fallback[self.matched - 1];
+        }
+        if self.matched == self.bytes.len() {
+            self.matched = self.fallback[self.matched - 1];
+            true
+        } else {
+            false
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,6 +196,55 @@ mod tests {
             decoder.feed(&raw[..split], false, &mut buffer);
             decoder.feed(&raw[split..], true, &mut buffer);
             assert_eq!(buffer.lines(), ["before ******** ******** after"]);
+        }
+    }
+    #[test]
+    fn long_common_prefixes_have_linear_comparison_work_and_bounded_pending_bytes() {
+        let secrets = (0..128)
+            .map(|i| format!("{}{:02x}", "a".repeat(LINE_BYTES - 2), i))
+            .collect::<Vec<_>>();
+        let mut decoder = LogDecoder::new(&secrets).unwrap();
+        let mut buffer = LogBuffer::default();
+        let raw = "a".repeat(4 * LINE_BYTES);
+        for chunk in raw.as_bytes().chunks(8192) {
+            decoder.feed(chunk, false, &mut buffer);
+            assert!(decoder.pending.len() < LINE_BYTES);
+        }
+        decoder.feed(b"z\n", true, &mut buffer);
+        assert_eq!(buffer.truncated_lines, 1);
+        assert!(
+            decoder
+                .secrets
+                .iter()
+                .all(|s| s.comparisons <= 2 * (raw.len() + 2))
+        );
+    }
+    #[test]
+    fn leftmost_longest_matches_and_eof_prefixes_survive_byte_sized_chunks() {
+        let secrets: Vec<String> = vec!["aba".into(), "ab".into(), "bab".into(), "aaaa".into()];
+        for raw in ["ababa", "baba", "aaaaaa", "aab", "abaaba", "bababa", "a"] {
+            let mut expected = String::new();
+            let mut rest = raw;
+            while !rest.is_empty() {
+                if let Some(secret) = secrets
+                    .iter()
+                    .filter(|s| rest.starts_with(s.as_str()))
+                    .max_by_key(|s| s.len())
+                {
+                    expected.push_str("********");
+                    rest = &rest[secret.len()..];
+                } else {
+                    expected.push_str(&rest[..1]);
+                    rest = &rest[1..];
+                }
+            }
+            let mut decoder = LogDecoder::new(&secrets).unwrap();
+            let mut buffer = LogBuffer::default();
+            for byte in raw.bytes() {
+                decoder.feed(&[byte], false, &mut buffer);
+            }
+            decoder.feed(&[], true, &mut buffer);
+            assert_eq!(buffer.lines(), [expected], "{raw}");
         }
     }
     #[test]

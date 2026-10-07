@@ -13,15 +13,20 @@ use composenest_application::{
     create_state::ConfirmedCreate,
     image_resolution::ImageResolutionStore,
     log_subscription::{LogsView, SubscribeLogsRequest},
-    state_store::{StateStore, StoreConflict, TemplateFile},
+    state_store::{PortAllocation, StateStore, StoreConflict, TemplateFile},
 };
 use composenest_domain::instance::RuntimeStatus;
 use rusqlite::{OptionalExtension, params};
 use std::{
     collections::HashMap,
-    sync::Mutex,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
+
+use tokio::sync::{Mutex as AsyncMutex, watch};
 
 const LEASE: Duration = Duration::from_secs(30);
 const PENDING_LEASE: Duration = Duration::from_secs(90);
@@ -32,19 +37,31 @@ struct Entry {
     revision: u64,
     container: Option<String>,
     touched: Instant,
-    stream: Option<LogSubscription>,
-    closing: bool,
+    stream: Option<Arc<AsyncMutex<LogSubscription>>>,
+    closing: Arc<AtomicBool>,
+    started: watch::Receiver<bool>,
 }
-/// Owns at most two subscriptions; dropping entries cancels their read-only CLIs.
+struct StartCompletion(watch::Sender<bool>);
+impl Drop for StartCompletion {
+    fn drop(&mut self) {
+        let _ = self.0.send(true);
+    }
+}
 #[derive(Default)]
-pub struct LogSessions(Mutex<HashMap<String, Entry>>);
+struct Sessions {
+    entries: HashMap<String, Entry>,
+    shutting_down: bool,
+}
+/// Owns at most two reads, retaining starts and failed cleanup until termination is confirmed.
+#[derive(Default)]
+pub struct LogSessions(Mutex<Sessions>);
 impl LogSessions {
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Entry>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Sessions> {
         self.0.lock().unwrap_or_else(|p| p.into_inner())
     }
-    /// Expires lost or abandoned frontend sessions without depending on IPC cleanup.
+    /// Expires lost sessions; pending starts and unconfirmed cleanup remain tracked.
     pub fn expire(&self) {
-        self.lock().retain(|_, e| {
+        self.lock().entries.retain(|_, e| {
             if e.touched.elapsed()
                 >= if e.stream.is_some() {
                     LEASE
@@ -52,42 +69,54 @@ impl LogSessions {
                     PENDING_LEASE
                 }
             {
-                e.closing = true;
+                e.closing.store(true, Ordering::Release);
             }
-            if !e.closing {
+            if !e.closing.load(Ordering::Acquire) {
                 return true;
             }
             if let Some(stream) = &e.stream {
-                stream.cancel();
-                !stream.snapshot(|b| b.finished)
-            } else {
-                false
-            }
-        });
-    }
-    /// Releases all reads owned by a destroyed window, or all reads on application shutdown.
-    pub fn close_owner(&self, owner: Option<&str>) {
-        self.lock().retain(|_, e| {
-            if owner.is_some_and(|o| e.owner != o) {
-                return true;
-            }
-            e.closing = true;
-            if let Some(stream) = &e.stream {
-                stream.cancel();
+                if let Ok(stream) = stream.try_lock() {
+                    stream.cancel();
+                    return !stream.termination_confirmed();
+                }
                 true
             } else {
-                false
+                !*e.started.borrow()
             }
         });
     }
-    /// Waits for active and already-cancelled log supervisors before the runtime exits.
-    pub async fn shutdown(&self) -> Result<(), StoreConflict> {
-        let entries = std::mem::take(&mut *self.lock());
-        let mut failed = false;
-        for entry in entries.into_values() {
-            if let Some(stream) = entry.stream {
-                failed |= stream.close().await.is_err();
+    /// Cancels a window's reads, retaining pending starts for shutdown confirmation.
+    pub fn close_owner(&self, owner: Option<&str>) {
+        for e in self.lock().entries.values() {
+            if owner.is_some_and(|o| e.owner != o) {
+                continue;
             }
+            e.closing.store(true, Ordering::Release);
+            if let Some(stream) = &e.stream
+                && let Ok(stream) = stream.try_lock()
+            {
+                stream.cancel();
+            }
+        }
+    }
+    /// Rejects new starts and waits up to 90 seconds per pending validation, then reaps its CLI.
+    pub async fn shutdown(&self) -> Result<(), StoreConflict> {
+        let entries = {
+            let mut sessions = self.lock();
+            sessions.shutting_down = true;
+            for e in sessions.entries.values() {
+                e.closing.store(true, Ordering::Release);
+            }
+            sessions
+                .entries
+                .iter()
+                .map(|(id, e)| (id.clone(), e.owner.clone()))
+                .collect::<Vec<_>>()
+        };
+        self.close_owner(None);
+        let mut failed = false;
+        for (id, owner) in entries {
+            failed |= self.unsubscribe(&owner, &id).await.is_err();
         }
         if failed {
             Err(StoreConflict::Backend)
@@ -95,21 +124,53 @@ impl LogSessions {
             Ok(())
         }
     }
-    /// Releases only the matching window's subscription, including a pending start.
+    /// Keeps a failed release addressable; retrying it cannot report an absent-entry success.
     pub async fn unsubscribe(&self, owner: &str, id: &str) -> Result<(), StoreConflict> {
-        let entry = {
-            let mut entries = self.lock();
-            if entries.get(id).is_some_and(|e| e.owner != owner) {
+        let (closing, mut started) = {
+            let sessions = self.lock();
+            let Some(entry) = sessions.entries.get(id) else {
+                return Ok(());
+            };
+            if entry.owner != owner {
                 return Err(StoreConflict::Missing);
             }
-            entries.remove(id)
+            entry.closing.store(true, Ordering::Release);
+            (Arc::clone(&entry.closing), entry.started.clone())
         };
-        if let Some(stream) = entry.and_then(|e| e.stream) {
-            stream.close().await.map_err(|_| StoreConflict::Backend)?;
+        tokio::time::timeout(PENDING_LEASE, async {
+            while !*started.borrow_and_update() {
+                if started.changed().await.is_err() {
+                    break;
+                }
+            }
+        })
+        .await
+        .map_err(|_| StoreConflict::Backend)?;
+        let stream = self
+            .lock()
+            .entries
+            .get(id)
+            .filter(|e| Arc::ptr_eq(&e.closing, &closing))
+            .and_then(|e| e.stream.clone());
+        if let Some(stream) = stream {
+            stream
+                .lock()
+                .await
+                .close()
+                .await
+                .map_err(|_| StoreConflict::Backend)?;
+        }
+        let mut sessions = self.lock();
+        if sessions
+            .entries
+            .get(id)
+            .is_some_and(|e| Arc::ptr_eq(&e.closing, &closing))
+        {
+            sessions.entries.remove(id);
         }
         Ok(())
     }
-    /// Starts one validated immutable container, failing closed if the start was cancelled.
+    /// Starts an immutable container; cancelled validation cannot create an untracked CLI.
     pub async fn subscribe(
         &self,
         database: &DatabaseWorker,
@@ -120,43 +181,60 @@ impl LogSessions {
     ) -> Result<LogsView, StoreConflict> {
         self.expire();
         let id = &request.context.request_id;
-        let token = Instant::now();
+        let closing = Arc::new(AtomicBool::new(false));
+        let (done, started) = watch::channel(false);
+        let _completion = StartCompletion(done);
         {
-            let mut entries = self.lock();
-            if entries.len() >= CAPACITY || entries.contains_key(id) {
+            let mut sessions = self.lock();
+            if sessions.shutting_down
+                || sessions.entries.len() >= CAPACITY
+                || sessions.entries.contains_key(id)
+                || sessions
+                    .entries
+                    .values()
+                    .any(|e| e.closing.load(Ordering::Acquire))
+            {
                 return Err(StoreConflict::UnresolvedOperation);
             }
-            entries.insert(
+            sessions.entries.insert(
                 id.clone(),
                 Entry {
                     owner: owner.into(),
                     instance: request.instance_id.clone(),
                     revision: request.expected_spec_revision,
                     container: None,
-                    touched: token,
+                    touched: Instant::now(),
                     stream: None,
-                    closing: false,
+                    closing: Arc::clone(&closing),
+                    started,
                 },
             );
         }
-        let result = start(database, probe, scope, request).await;
-        let mut entries = self.lock();
+        let result = start(database, probe, scope, request, &closing).await;
+        let mut sessions = self.lock();
         let (container, stream) = match result {
             Ok(result) => result,
             Err(error) => {
-                if entries.get(id).is_some_and(|e| e.touched == token) {
-                    entries.remove(id);
+                // Cancelled entries stay reserved until their completion signal is observed.
+                if !closing.load(Ordering::Acquire) {
+                    sessions.entries.remove(id);
                 }
                 return Err(error);
             }
         };
-        let entry = entries
-            .get_mut(id)
-            .filter(|e| e.owner == owner && e.touched == token && !e.closing)
-            .ok_or(StoreConflict::Missing)?;
+        // Closing entries remain in the map until their pending validation completes.
+        let entry = sessions.entries.get_mut(id).ok_or(StoreConflict::Missing)?;
         entry.container = Some(container);
-        entry.stream = Some(stream);
+        entry.stream = Some(Arc::new(AsyncMutex::new(stream)));
         entry.touched = Instant::now();
+        if closing.load(Ordering::Acquire) {
+            if let Some(stream) = &entry.stream
+                && let Ok(stream) = stream.try_lock()
+            {
+                stream.cancel();
+            }
+            return Err(StoreConflict::Missing);
+        }
         snapshot(id, entry)
     }
     /// Rechecks saved identity before every pull and refreshes only a valid session's lease.
@@ -168,17 +246,20 @@ impl LogSessions {
         id: &str,
     ) -> Result<LogsView, StoreConflict> {
         self.expire();
-        let mut entries = self.lock();
-        let entry = entries
+        let mut sessions = self.lock();
+        let entry = sessions
+            .entries
             .get_mut(id)
-            .filter(|e| e.owner == owner && !e.closing)
+            .filter(|e| e.owner == owner && !e.closing.load(Ordering::Acquire))
             .ok_or(StoreConflict::Missing)?;
         let identity = current(database, scope, &entry.instance, entry.revision);
         if identity.as_ref().is_err()
             || identity.as_ref().ok().map(|(_, c)| c) != entry.container.as_ref()
         {
-            entry.closing = true;
-            if let Some(stream) = &entry.stream {
+            entry.closing.store(true, Ordering::Release);
+            if let Some(stream) = &entry.stream
+                && let Ok(stream) = stream.try_lock()
+            {
                 stream.cancel();
             }
             return Err(StoreConflict::StaleRevision);
@@ -192,6 +273,9 @@ fn snapshot(id: &str, entry: &Entry) -> Result<LogsView, StoreConflict> {
         .stream
         .as_ref()
         .ok_or(StoreConflict::UnresolvedOperation)?;
+    let stream = stream
+        .try_lock()
+        .map_err(|_| StoreConflict::UnresolvedOperation)?;
     Ok(stream.snapshot(|b| LogsView {
         subscription_id: id.into(),
         instance_id: entry.instance.clone(),
@@ -221,53 +305,19 @@ async fn start(
     probe: &DockerProbe,
     scope: &str,
     request: &SubscribeLogsRequest,
+    closing: &AtomicBool,
 ) -> Result<(String, LogSubscription), StoreConflict> {
     let instance = &request.instance_id;
     let (generation, container) =
         current(database, scope, instance, request.expected_spec_revision)?;
-    let saved = database
-        .clone_source(scope, instance)?
-        .ok_or(StoreConflict::UnresolvedOperation)?;
-    if saved.spec_revision != request.expected_spec_revision || saved.revision != generation {
-        return Err(StoreConflict::StaleRevision);
-    }
-    let target = database
-        .runtime_target(scope)?
-        .filter(|t| t.id == saved.target_id)
-        .ok_or(StoreConflict::Missing)?;
-    let (project, snapshot_files, secrets) = database.read(|db| {
-        let view = read_instance(db, scope, instance)?;
-        let inputs: serde_json::Value = serde_json::from_str(&saved.inputs_json).map_err(|_| DatabaseError::InvalidInput)?;
-        let secrets = view.inputs.iter().filter(|i| i.secret).map(|i| match &inputs[&i.slot] {
-            serde_json::Value::Null => Ok(String::new()),
-            serde_json::Value::String(value) => Ok(value.clone()),
-            _ => Err(DatabaseError::InvalidInput),
-        }).collect::<Result<Vec<_>, _>>()?;
-        let mut q = db.prepare("SELECT relative_path, contents FROM template_snapshot_files WHERE snapshot_id=(SELECT id FROM template_snapshots WHERE instance_id=?1) ORDER BY relative_path")?;
-        let files = q.query_map([instance], |r| Ok(TemplateFile { relative_path: r.get(0)?, contents: r.get(1)? }))?.collect::<Result<Vec<_>, _>>()?;
-        Ok((view.project_name, files, secrets))
-    }).map_err(map_error)?;
-    let storage = saved
-        .storage
-        .iter()
-        .map(|s| {
-            database
-                .storage_allocation(instance, &s.slot)?
-                .ok_or(StoreConflict::Missing)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let confirmed = ConfirmedCreate {
-        instance_id: instance.clone(),
-        scope_id: scope.into(),
-        project_name: project,
-        target: target.clone(),
-        spec_revision: saved.spec_revision,
-        selected_version: saved.selected_version,
-        snapshot_files,
-        inputs_json: saved.inputs_json,
-        ports: saved.ports,
-        storage,
-    };
+    let (confirmed, secrets) = confirmed_log_inputs(
+        database,
+        scope,
+        instance,
+        request.expected_spec_revision,
+        generation,
+    )?;
+    let target = &confirmed.target;
     let docker = probe
         .bind(target.clone())
         .map_err(|_| StoreConflict::Backend)?;
@@ -303,226 +353,83 @@ async fn start(
         probe.executable.clone(),
         probe.directory.clone(),
         probe.config_directory.clone(),
-        target.endpoint.into(),
+        target.endpoint.clone().into(),
     )
     .map_err(|_| StoreConflict::Backend)?;
+    if closing.load(Ordering::Acquire) {
+        return Err(StoreConflict::Missing);
+    }
     let stream = cli
         .follow_logs(&container, &secrets)
         .map_err(|_| StoreConflict::InvalidInput)?;
     Ok((container, stream))
 }
+fn confirmed_log_inputs(
+    database: &DatabaseWorker,
+    scope: &str,
+    instance: &str,
+    revision: u64,
+    generation: u64,
+) -> Result<(ConfirmedCreate, Vec<String>), StoreConflict> {
+    // Read only the applied committed spec; unresolved changes do not affect log eligibility.
+    let confirmed = database.read(|db| {
+        let view = read_instance(db, scope, instance)?;
+        if view.spec_revision != revision || view.revision != generation {
+            return Err(DatabaseError::InvalidInput);
+        }
+        let target_id: String = db.query_row("SELECT target_id FROM instances WHERE id=?1", [instance], |r| r.get(0))?;
+        let inputs_json: String = db.query_row(
+            "SELECT inputs_json FROM instance_specs WHERE instance_id=?1 AND revision=?2",
+            params![instance, view.spec_revision], |r| r.get(0))?;
+        let inputs: serde_json::Value = serde_json::from_str(&inputs_json).map_err(|_| DatabaseError::InvalidInput)?;
+        let secrets = view.inputs.iter().filter(|i| i.secret).map(|i| match &inputs[&i.slot] {
+            serde_json::Value::Null => Ok(String::new()),
+            serde_json::Value::String(value) => Ok(value.clone()),
+            _ => Err(DatabaseError::InvalidInput),
+        }).collect::<Result<Vec<_>, _>>()?;
+        let mut q = db.prepare("SELECT relative_path, contents FROM template_snapshot_files WHERE snapshot_id=(SELECT id FROM template_snapshots WHERE instance_id=?1) ORDER BY relative_path")?;
+        let files = q.query_map([instance], |r| Ok(TemplateFile { relative_path: r.get(0)?, contents: r.get(1)? }))?.collect::<Result<Vec<_>, _>>()?;
+        Ok((view, target_id, inputs_json, files, secrets))
+    }).map_err(map_error)?;
+    let (view, target_id, inputs_json, snapshot_files, secrets) = confirmed;
+    let ports = view
+        .ports
+        .into_iter()
+        .map(|p| PortAllocation {
+            slot: p.slot,
+            host_ip: p.host_ip,
+            host_port: p.host_port,
+            container_port: p.container_port,
+        })
+        .collect();
+    let target = database
+        .runtime_target(scope)?
+        .filter(|t| t.id == target_id)
+        .ok_or(StoreConflict::Missing)?;
+    let storage = view
+        .storage
+        .iter()
+        .map(|s| {
+            database
+                .storage_allocation(instance, &s.slot)?
+                .ok_or(StoreConflict::Missing)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let confirmed = ConfirmedCreate {
+        instance_id: instance.into(),
+        scope_id: scope.into(),
+        project_name: view.project_name,
+        target: target.clone(),
+        spec_revision: revision,
+        selected_version: view.selected_version,
+        snapshot_files,
+        inputs_json,
+        ports,
+        storage,
+    };
+    Ok((confirmed, secrets))
+}
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_support as support;
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn only_verified_engine_owner_and_full_configuration_can_start_logs() {
-        use composenest_application::{RequestContext, state_store::StorageMethod};
-        use serde_json::json;
-        use std::{fs, os::unix::fs::PermissionsExt};
-        let (root, database, template) = support::store();
-        database
-            .create_target(
-                "target",
-                "scope",
-                "unix:///tmp/logs.sock",
-                "engine",
-                "linux/amd64",
-            )
-            .unwrap();
-        let mut record = support::source_instance(&template);
-        record.id = "a".repeat(32);
-        record.project_name = format!("cn-{}", record.id);
-        record.storage_method = StorageMethod::Volume;
-        record.storage[0].resource_identity = format!("{}-data", record.project_name);
-        database.commit_instance(&record).unwrap();
-        let container = "b".repeat(64);
-        let image = format!("sha256:{}", "c".repeat(64));
-        {
-            let record = record.clone();
-            let container = container.clone();
-            let image = image.clone();
-            database.write(move |db| {
-            db.execute("UPDATE instances SET applied_spec_revision=1 WHERE id=?1", [&record.id])?;
-            db.execute("UPDATE storage_allocations SET presence='present' WHERE instance_id=?1", [&record.id])?;
-            db.execute("INSERT INTO operations(id, instance_id, kind, status, phase, expected_instance_revision, new_spec_revision, completed_at) VALUES('created', ?1, 'create', 'Succeeded', 'ready', 1, 1, CURRENT_TIMESTAMP)", [&record.id])?;
-            db.execute("INSERT INTO runtime_observations(instance_id, container_id, runtime_state, freshness) VALUES(?1, ?2, 'stopped', 'fresh')", params![record.id, container])?;
-            db.execute("INSERT INTO image_resolutions(instance_id, spec_revision, image_ref, digest, image_id, platform, first_operation_id) VALUES(?1, 1, 'example:1', ?2, ?3, 'linux/amd64', 'created')", params![record.id, format!("example@{image}"), image])?;
-            Ok(())
-        }).unwrap();
-        }
-        let actual = json!({ "Id": container, "Image": image,
-            "Config": { "Labels": { "com.docker.compose.project": record.project_name, "com.docker.compose.service":"main", "io.composenest.scope":"scope", "io.composenest.instance":record.id, "io.composenest.spec-revision":"1" },
-                "Env":["RETAINED=first", format!("PASSWORD={}", "p".repeat(32))], "Cmd":[],
-                "Healthcheck":{"Test":["CMD","check"], "Interval":5_000_000_000_u64, "Timeout":3_000_000_000_u64, "StartPeriod":10_000_000_000_u64, "StartInterval":5_000_000_000_u64, "Retries":12}},
-            "Mounts":[{"Type":"volume","Name":record.storage[0].resource_identity,"Source":"ignored","Destination":"/data","RW":true}],
-            "HostConfig":{"PortBindings":{"5432/tcp":[{"HostIp":"127.0.0.1","HostPort":"5432"}]}},
-            "NetworkSettings":{"Networks":{format!("{}_default",record.project_name):{}}}, "State":{"Status":"exited"} });
-        fs::write(root.path().join("actual"), actual.to_string()).unwrap();
-        fs::write(root.path().join("engine"), r#"{"ID":"engine"}"#).unwrap();
-        let executable = root.path().join("docker");
-        fs::write(
-            &executable,
-            format!(
-                r#"#!/bin/sh
-shift 2
-if [ "$1" = info ]; then /bin/cat engine; exit; fi
-if [ "$1" = image ]; then printf '{{"Env":[],"Cmd":[]}}'; exit; fi
-if [ "$1" = container ]; then /bin/cat actual; exit; fi
-if [ "$1" = logs ]; then echo $$ > log-pid; printf '{}\n'; exec /bin/sleep 60; fi
-exit 9
-"#,
-                "p".repeat(32)
-            ),
-        )
-        .unwrap();
-        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
-        let probe = DockerProbe {
-            executable,
-            directory: root.path().into(),
-            config_directory: root.path().into(),
-        };
-        let sessions = LogSessions::default();
-        let request = SubscribeLogsRequest {
-            context: RequestContext {
-                api_version: 1,
-                request_id: "subscription".into(),
-            },
-            instance_id: record.id.clone(),
-            expected_spec_revision: 1,
-        };
-        sessions
-            .subscribe(&database, &probe, "scope", "main", &request)
-            .await
-            .unwrap();
-        tokio::time::timeout(Duration::from_secs(3), async {
-            loop {
-                if !sessions
-                    .get(&database, "scope", "main", "subscription")
-                    .unwrap()
-                    .lines
-                    .is_empty()
-                {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-        assert_eq!(
-            sessions
-                .get(&database, "scope", "main", "subscription")
-                .unwrap()
-                .lines,
-            ["********"]
-        );
-        assert!(
-            sessions
-                .get(&database, "scope", "other", "subscription")
-                .is_err()
-        );
-        let pid: i32 = fs::read_to_string(root.path().join("log-pid"))
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
-        sessions.unsubscribe("main", "subscription").await.unwrap();
-        assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
-        for mode in ["engine", "owner", "image"] {
-            let mut changed = actual.clone();
-            fs::write(
-                root.path().join("engine"),
-                if mode == "engine" {
-                    r#"{"ID":"other"}"#
-                } else {
-                    r#"{"ID":"engine"}"#
-                },
-            )
-            .unwrap();
-            if mode == "owner" {
-                changed["Config"]["Labels"]["io.composenest.instance"] = json!("foreign");
-            }
-            if mode == "image" {
-                changed["Image"] = json!("different");
-            }
-            fs::write(root.path().join("actual"), changed.to_string()).unwrap();
-            fs::remove_file(root.path().join("log-pid")).unwrap_or(());
-            assert!(
-                sessions
-                    .subscribe(&database, &probe, "scope", "main", &request)
-                    .await
-                    .is_err(),
-                "{mode}"
-            );
-            assert!(!root.path().join("log-pid").exists());
-        }
-    }
-
-    #[test]
-    fn target_requires_scope_applied_and_committed_revision_and_managed_identity() {
-        let (_root, database, template) = support::store();
-        support::setup_source(&database, &template);
-        assert!(current(&database, "scope", "source", 1).is_err());
-        database.write(|db| {
-            db.execute("UPDATE instances SET applied_spec_revision=1 WHERE id='source'", [])?;
-            db.execute("INSERT INTO runtime_observations(instance_id, container_id, runtime_state, freshness) VALUES('source', ?1, 'stopped', 'fresh')", ["a".repeat(64)])?;
-            Ok(())
-        }).unwrap();
-        assert_eq!(
-            current(&database, "scope", "source", 1).unwrap().1,
-            "a".repeat(64)
-        );
-        assert!(current(&database, "other", "source", 1).is_err());
-        assert!(current(&database, "scope", "other", 1).is_err());
-        assert!(current(&database, "scope", "source", 2).is_err());
-        database
-            .write(|db| {
-                db.execute(
-                    "UPDATE instances SET lifecycle='retiring' WHERE id='source'",
-                    [],
-                )?;
-                Ok(())
-            })
-            .unwrap();
-        assert!(current(&database, "scope", "source", 1).is_err());
-    }
-    fn pending(owner: &str, touched: Instant) -> Entry {
-        Entry {
-            owner: owner.into(),
-            instance: "source".into(),
-            revision: 1,
-            container: None,
-            touched,
-            stream: None,
-            closing: false,
-        }
-    }
-    #[tokio::test]
-    async fn window_ownership_pending_cancellation_expiry_and_shutdown_are_scoped() {
-        let sessions = LogSessions::default();
-        sessions
-            .lock()
-            .insert("one".into(), pending("main", Instant::now()));
-        sessions
-            .lock()
-            .insert("two".into(), pending("other", Instant::now()));
-        assert!(sessions.unsubscribe("other", "one").await.is_err());
-        sessions.unsubscribe("main", "one").await.unwrap();
-        assert!(!sessions.lock().contains_key("one"));
-        sessions.unsubscribe("main", "one").await.unwrap();
-        sessions.lock().insert(
-            "expired".into(),
-            pending("main", Instant::now() - PENDING_LEASE),
-        );
-        sessions.expire();
-        assert!(!sessions.lock().contains_key("expired"));
-        sessions.close_owner(Some("main"));
-        assert!(sessions.lock().contains_key("two"));
-        sessions.close_owner(None);
-        assert!(sessions.lock().is_empty());
-    }
-}
+#[path = "log_subscription_tests.rs"]
+mod tests;

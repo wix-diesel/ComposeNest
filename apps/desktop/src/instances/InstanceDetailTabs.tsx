@@ -2,6 +2,7 @@ import { useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { InstanceDetailView, JsonValue } from "../generated/template-form";
 import type { ApplicationClient } from "../ipc/ApplicationClient";
 import { ConnectionValue, InstanceCompose } from "./InstanceContent";
+import { InstanceLogs } from "./InstanceLogs";
 import "./instance-detail.css";
 
 const tabs = ["概要・接続情報", "ログ", "Compose"];
@@ -28,7 +29,7 @@ export function InstanceDetailTabs({ client, detail, deleteAction }: { client: A
     </div>
     {tabs.map((label, index) => <div key={label} role="tabpanel" id={`detail-panel-${index}`} aria-labelledby={`detail-tab-${index}`} hidden={tab !== index} tabIndex={0}>
       {tab === index && (index === 0 ? detail ? <Overview key={`${detail.instance.id}:${detail.instance.revision}:${detail.instance.specRevision}`} client={client} detail={detail} /> : <section className="panel"><p>詳細情報を取得できていません。現在の状態を再確認してください。</p></section>
-        : index === 1 ? <section className="panel"><div className="panel-title"><h2>サービスログ</h2><div className="actions"><button className="btn" disabled>追従を開始</button><button className="btn" disabled>再読込み</button></div></div><p>ログ購読は未接続です。ログは取得していません。</p></section>
+        : index === 1 ? detail ? <InstanceLogs key={`${detail.instance.id}:${detail.instance.specRevision}`} client={client} instanceId={detail.instance.id} revision={detail.instance.specRevision} /> : <section className="panel"><p>詳細情報を取得できていません。現在の状態を再確認してください。</p></section>
           : detail ? <InstanceCompose key={`${detail.instance.id}:${detail.instance.revision}:${detail.instance.specRevision}`} client={client} instanceId={detail.instance.id} revision={detail.instance.specRevision} /> : <section className="panel"><p>詳細情報を取得できていません。現在の状態を再確認してください。</p></section>)}
       {index === 0 && deleteAction}
     </div>)}

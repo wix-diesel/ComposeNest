@@ -68,8 +68,9 @@ try {
       if (command === "change_instance") {
         if (window.mode === "delay") await new Promise((resolve) => { window.finishChange = resolve; });
         if (window.mode === "stale") return response(null, { code: "INSTANCE_STALE" });
-        if (!window.view.operationId) Object.assign(window.view, { operationId: "accepted-op", operationStatus: "Accepted", operationKind: request.action, operationPhase: "inspect", actions: [], lifecycle: request.action === "delete" ? "retiring" : "managed" });
+        if (!window.view.operationId) Object.assign(window.view, { operationId: "accepted-op", operationStatus: "Accepted", operationKind: request.action, operationPhase: "inspect", actions: [], revision: request.action === "delete" ? request.expectedRevision + 1 : window.view.revision, lifecycle: request.action === "delete" ? "retiring" : "managed" });
         if (window.mode === "lost") throw new Error("Disconnected after acceptance");
+        if (window.mode === "bad_delete_response") return response({ ...structuredClone(window.view), id: "another-instance" });
         return response(structuredClone(window.view));
       }
       if (command === "rename_instance") {
@@ -158,20 +159,22 @@ try {
     await page.getByRole("heading", { name: "保持データ", exact: true }).waitFor();
     await page.evaluate(() => { location.hash = "#/instances"; });
     await page.getByText("環境はまだありません。「環境を作成」から追加してください。", { exact: true }).waitFor();
-    await open(); await remove(); await acknowledge();
-    await page.evaluate(() => { window.mode = "lost"; }); await confirm().click();
-    await page.getByText("受付結果の確認が必要です。別の変更は実行できません。", { exact: true }).waitFor();
-    await page.getByRole("button", { name: "戻る", exact: true }).click();
-    await page.getByRole("heading", { name: "環境一覧", exact: true }).waitFor();
-    await page.evaluate(() => { window.mode = "normal"; location.hash = "#/instance-detail?instanceId=target"; });
-    await page.getByRole("button", { name: "受付を再確認", exact: true }).click();
-    await page.getByRole("heading", { name: "処理状況", exact: true }).waitFor();
-    const repeated = await calls("change_instance"); assert.equal(repeated.length, 2); assert.deepEqual(repeated[0].request, repeated[1].request);
-    await page.evaluate(() => { window.view.operationStatus = "Failed"; window.view.operationPhase = "delete_check"; });
-    await page.getByRole("button", { name: "再照会", exact: true }).click();
-    await page.getByRole("button", { name: "閉じる", exact: true }).click();
-    await page.getByText("開発用データベース", { exact: true }).waitFor();
-    assert.equal((await calls("change_instance")).length, 2, "closing progress never cancels or resubmits");
+    for (const mode of ["lost", "bad_delete_response"]) {
+      await open(); await remove(); await acknowledge();
+      await page.evaluate((mode) => { window.mode = mode; }, mode); await confirm().click();
+      await page.getByText("受付結果の確認が必要です。別の変更は実行できません。", { exact: true }).waitFor();
+      await page.getByRole("button", { name: "戻る", exact: true }).click();
+      await page.getByRole("heading", { name: "環境一覧", exact: true }).waitFor();
+      await page.evaluate(() => { window.mode = "normal"; location.hash = "#/instance-detail?instanceId=target"; });
+      await page.getByRole("button", { name: "受付を再確認", exact: true }).click();
+      await page.getByRole("heading", { name: "処理状況", exact: true }).waitFor();
+      const repeated = await calls("change_instance"); assert.equal(repeated.length, 2); assert.deepEqual(repeated[0].request, repeated[1].request);
+      await page.evaluate(() => { window.view.operationStatus = "Failed"; window.view.operationPhase = "delete_check"; });
+      await page.getByRole("button", { name: "再照会", exact: true }).click();
+      await page.getByRole("button", { name: "閉じる", exact: true }).click();
+      await page.getByText("開発用データベース", { exact: true }).waitFor();
+      assert.equal((await calls("change_instance")).length, 2, "closing progress never cancels or resubmits");
+    }
     for (const [theme, width] of [["light", 1280], ["dark", 390]]) {
       await open(); await page.setViewportSize({ width, height: 900 });
       await page.evaluate((theme) => { document.documentElement.dataset.theme = theme; }, theme);

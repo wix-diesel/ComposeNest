@@ -107,6 +107,8 @@ pub struct OperationRequest {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OperationProgressView {
+    /// Last unresolved result retained even after successful reconciliation.
+    pub last_failure_status: Option<String>,
     /// Historical progress of the requested operation, not the latest operation.
     pub operation: OperationView,
     /// Current committed target settings and saved runtime observation.

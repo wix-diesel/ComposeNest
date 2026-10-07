@@ -1,12 +1,13 @@
 //! Bounded, shell-free execution of the Docker CLI.
 
 use std::{
+    collections::HashMap,
     ffi::{OsStr, OsString},
     io,
     path::{Path, PathBuf},
     process::{ExitStatus, Stdio},
     sync::{
-        Arc,
+        Arc, Mutex as StdMutex, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, SystemTime},
@@ -22,6 +23,10 @@ use tokio::{
 const OUTPUT_LIMIT: usize = 64 * 1024;
 const INSPECT_OUTPUT_LIMIT: usize = 4 * 1024 * 1024;
 const REAP_TIMEOUT: Duration = Duration::from_secs(5);
+
+type CliKey = (PathBuf, PathBuf, PathBuf, OsString);
+type Supervision = (Arc<Mutex<()>>, Arc<AtomicBool>);
+static SUPERVISORS: OnceLock<StdMutex<HashMap<CliKey, Supervision>>> = OnceLock::new();
 
 /// A command category used for process tracking and diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,6 +131,19 @@ impl DockerCli {
             .ok_or(CliError::InvalidConfiguration(
                 "SystemRoot is required on Windows",
             ))?;
+        // Keep failed termination evidence across fresh bindings in the same process.
+        let (gate, blocked) = SUPERVISORS
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .entry((
+                executable.clone(),
+                directory.clone(),
+                config_directory.clone(),
+                endpoint.clone(),
+            ))
+            .or_insert_with(|| (Arc::new(Mutex::new(())), Arc::new(AtomicBool::new(false))))
+            .clone();
         Ok(Self {
             executable,
             directory,
@@ -135,9 +153,15 @@ impl DockerCli {
             system_root,
             #[cfg(windows)]
             system_drive: std::env::var_os("SystemDrive"),
-            gate: Arc::new(Mutex::new(())),
-            blocked: Arc::new(AtomicBool::new(false)),
+            gate,
+            blocked,
         })
+    }
+
+    /// Confirms that this session's supervisor is idle and no termination remains uncertain.
+    /// The caller must independently establish that the recorded attempt belongs to this session.
+    pub fn termination_verified(&self) -> bool {
+        !self.blocked.load(Ordering::Acquire) && self.gate.try_lock().is_ok()
     }
 
     /// Runs a CLI attempt and drains both output streams within a fixed byte budget.
@@ -462,3 +486,38 @@ impl ProcessGroup {
 mod windows_job;
 #[cfg(windows)]
 use windows_job::ProcessGroup;
+
+#[cfg(test)]
+mod supervision_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn fresh_bindings_preserve_busy_and_unconfirmed_termination() {
+        let root = tempfile::tempdir().unwrap();
+        let create = || {
+            DockerCli::new(
+                root.path().join("docker.exe"),
+                root.path().into(),
+                root.path().into(),
+                "unix:///tmp/test.sock".into(),
+            )
+            .unwrap()
+        };
+        let first = create();
+        let second = create();
+        assert!(second.termination_verified());
+        let guard = first.gate.lock().await;
+        assert!(!second.termination_verified());
+        drop(guard);
+        first.blocked.store(true, Ordering::Release);
+        assert!(!create().termination_verified());
+        let outcome = second
+            .run(
+                CommandKind::Change,
+                &["version".into()],
+                Duration::from_secs(1),
+            )
+            .await;
+        assert!(matches!(outcome, Err(CliError::TerminationUnconfirmed(_))));
+    }
+}

@@ -1,7 +1,7 @@
 //! Scoped explicit content reads; no sensitive result is logged or emitted as an event.
 
 use crate::{
-    artifact_store::ArtifactStore,
+    artifact_store::{ArtifactError, ArtifactStore},
     query_service::read_instance,
     sqlite::{DatabaseError, DatabaseWorker},
     state_store::map_error,
@@ -104,10 +104,13 @@ pub fn compose(
         db.query_row("SELECT 1 FROM artifacts WHERE id=?1 AND instance_id=?2 AND spec_revision=?3 AND placement='published'",
             params![artifact, view.id, view.spec_revision], |_| Ok(())).optional()?.ok_or(DatabaseError::Missing)?;
         Ok(())
-    }).map_err(map_error)?;
+    }).map_err(|error| match error {
+        DatabaseError::Missing => StoreConflict::ArtifactUnavailable,
+        error => map_error(error),
+    })?;
     let (path, mut content) = ArtifactStore::new(database.management_root(), database)
         .read_compose(&artifact)
-        .map_err(|_| StoreConflict::Backend)?;
+        .map_err(content_error)?;
     if !request.reveal {
         let secrets = view
             .inputs
@@ -120,7 +123,7 @@ pub fn compose(
             })
             .collect::<Result<Vec<_>, _>>()?;
         content = composenest_domain::compose::mask_yaml(&content, &secrets)
-            .map_err(|_| StoreConflict::Backend)?;
+            .map_err(|_| StoreConflict::ArtifactInvalid)?;
     }
     // Reject a concurrent configuration change before returning sensitive content.
     let current = saved(
@@ -142,4 +145,19 @@ pub fn compose(
         content,
         path: path.to_string_lossy().into_owned(),
     })
+}
+
+fn content_error(error: ArtifactError) -> StoreConflict {
+    match error {
+        ArtifactError::Modified | ArtifactError::UnsafePath(_) | ArtifactError::Conflict => {
+            StoreConflict::ArtifactModified
+        }
+        ArtifactError::Unavailable => StoreConflict::ArtifactUnavailable,
+        ArtifactError::InvalidInput => StoreConflict::ArtifactInvalid,
+        ArtifactError::Io(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            StoreConflict::ArtifactUnavailable
+        }
+        ArtifactError::Database(error) => map_error(error),
+        ArtifactError::Io(_) => StoreConflict::Backend,
+    }
 }

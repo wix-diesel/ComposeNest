@@ -176,7 +176,7 @@ pub struct StorageLedgerEntry {
     pub initialization: Initialization,
 }
 
-/// Expected persistence conflicts and rejected input.
+/// Expected persistence conflicts, artifact validation failures, and rejected input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StoreConflict {
     /// Another transaction already owns the resource or ID.
@@ -191,6 +191,12 @@ pub enum StoreConflict {
     UnresolvedOperation,
     /// Input failed a persistence boundary check.
     InvalidInput,
+    /// Published artifact bytes or paths differ from the recorded state.
+    ArtifactModified,
+    /// The selected published artifact or its Compose file is absent.
+    ArtifactUnavailable,
+    /// Artifact content exceeds its read limit or is not valid UTF-8.
+    ArtifactInvalid,
     /// Persistence backend failed unexpectedly.
     Backend,
 }

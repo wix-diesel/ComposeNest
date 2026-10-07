@@ -65,7 +65,7 @@ impl CreateStateStore for DatabaseWorker {
                 || owned.scope_id != receipt.scope_id
                 || owned.lifecycle != "managed"
                 || !(op.status == "Accepted"
-                    || ((pending || recover || create_operation(&op.kind))
+                    || ((pending || lifecycle || create_operation(&op.kind))
                         && matches!(
                             op.status.as_str(),
                             "Executing" | "Failed" | "AwaitingDecision" | "OutcomeUnknown"
@@ -331,11 +331,18 @@ impl CreateStateStore for DatabaseWorker {
                 return Err(DatabaseError::InvalidInput);
             }
             let observed_at = last.observed_at.ok_or(DatabaseError::InvalidInput)?;
-            let started = operation_step::Entity::find()
+            let recovered = op.phase == "reconcile";
+            let mut starts = operation_step::Entity::find()
                 .filter(operation_step::Column::OperationId.eq(&operation_id))
-                .filter(operation_step::Column::Attempt.eq(op.attempt))
-                .filter(operation_step::Column::CommandKind.eq("compose_start"))
-                .filter(operation_step::Column::Outcome.eq("succeeded"))
+                .filter(operation_step::Column::CommandKind.eq("compose_start"));
+            if !recovered {
+                starts = starts
+                    .filter(operation_step::Column::Attempt.eq(op.attempt))
+                    .filter(operation_step::Column::Outcome.eq("succeeded"));
+            }
+            // Reconciliation follows a fresh verified observation, retaining the original
+            // failed start step instead of fabricating another successful change command.
+            let started = starts
                 .order_by_desc(operation_step::Column::Sequence)
                 .one(&tx)?;
             if !started.is_some_and(|step| step.sequence < last.sequence) {

@@ -8,6 +8,20 @@ export interface RecoveryRequest {
   context: RequestContext;
   instanceId: string;
   operationId: string;
+  recoveryRequestId: string | null;
+}
+
+export interface RecoverOperationRequest {
+  context: RequestContext;
+  instanceId: string;
+  operationId: string;
+  expectedAttempt: number;
+  expectedRevision: number;
+  candidateRevision: number;
+  action: string;
+  ports: Record<string, number>;
+  artifactId: string | null;
+  confirmationHash: string | null;
 }
 
 export interface RecoveryFileDiff {
@@ -19,6 +33,7 @@ export interface RecoveryFileDiff {
 export interface RecoveryView {
   instanceId: string;
   operationId: string;
+  receiptRequestId: string;
   attempt: number;
   instanceRevision: number;
   candidateRevision: number;

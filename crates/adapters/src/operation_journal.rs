@@ -786,7 +786,8 @@ impl RecoveryJournal for DatabaseWorker {
             let operation = operation_entity::Entity::find_by_id(&operation_id)
                 .one(&transaction)?
                 .ok_or(DatabaseError::Missing)?;
-            if operation.attempt != attempt
+            if operation.kind == "delete"
+                || operation.attempt != attempt
                 || !matches!(
                     operation.status.as_str(),
                     "Failed" | "AwaitingDecision" | "OutcomeUnknown"
@@ -1072,6 +1073,42 @@ mod tests {
         worker
             .accept(&intent("second"), &receipt("second"))
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn absent_failed_delete_cannot_abandon_a_retiring_instance() {
+        let (_root, worker) = store();
+        let mut deletion = intent("deletion");
+        deletion.kind = OperationKind::Delete;
+        deletion.old_spec_revision = None;
+        deletion.new_spec_revision = None;
+        worker.accept(&deletion, &receipt("deletion")).unwrap();
+        worker
+            .set_status("deletion", OperationStatus::Failed, "verify_absence")
+            .unwrap();
+        assert_eq!(
+            abandon_operation(
+                &worker,
+                "deletion",
+                &VerifiedRuntime(CurrentRuntime::Absent)
+            )
+            .await,
+            Err(StoreConflict::InvalidLifecycle)
+        );
+        assert_eq!(
+            worker.recoverable("deletion").unwrap().status,
+            OperationStatus::Failed
+        );
+        let lifecycle: String = worker
+            .read(|db| {
+                Ok(db.query_row(
+                    "SELECT lifecycle FROM instances WHERE id='instance'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(lifecycle, "retiring");
     }
 
     #[test]

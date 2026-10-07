@@ -56,6 +56,8 @@ impl RecoverySession {
 pub(crate) struct Inspection {
     pub(crate) view: RecoveryView,
     pub(crate) evidence: RecoveryEvidence,
+    pub(crate) receipt: RequestReceipt,
+    pub(crate) container_id: Option<String>,
 }
 impl RecoveryProbe for Inspection {
     async fn inspect(&self, _: &RecoverableOperation) -> RecoveryEvidence {
@@ -77,6 +79,28 @@ pub fn recovery_receipt(
     database
         .receipt(scope, &request)?
         .ok_or(StoreConflict::Missing)
+}
+
+/// Resolves a lost external-restoration receipt without creating or replaying work.
+pub fn inspection_operation(
+    database: &DatabaseWorker,
+    scope: &str,
+    instance: &str,
+    original: &str,
+    recovery_request: Option<&str>,
+) -> Result<String, StoreConflict> {
+    recovery_receipt(database, scope, instance, original)?;
+    let Some(request) = recovery_request else {
+        return Ok(original.into());
+    };
+    let Some(receipt) = database.receipt(scope, request)? else {
+        return Ok(original.into());
+    };
+    if receipt.instance_id != instance {
+        return Err(StoreConflict::Missing);
+    }
+    database.external_recovery(&receipt.operation_id)?;
+    Ok(receipt.operation_id)
 }
 
 /// Inspects without changing files, Docker, reservations or historical outcome.
@@ -110,8 +134,53 @@ pub(crate) async fn inspect_locked(
         progress.operation.status.as_str(),
         "Succeeded" | "Abandoned"
     );
+    let applied_revision: Option<u64> = database
+        .read(|db| {
+            Ok(db.query_row(
+                "SELECT applied_spec_revision FROM instances WHERE id=?1",
+                [instance],
+                |r| r.get(0),
+            )?)
+        })
+        .map_err(|_| StoreConflict::Backend)?;
     let operation = database.recoverable(operation_id).ok();
-    let mut confirmed = database.confirmed_create(&receipt)?;
+    let mut confirmed = if unresolved {
+        database.confirmed_create(&receipt)?
+    } else {
+        use composenest_application::state_store::StateStore;
+        let saved = database
+            .clone_source(scope, instance)?
+            .ok_or(StoreConflict::UnresolvedOperation)?;
+        let target = database
+            .runtime_target(scope)?
+            .filter(|t| t.id == saved.target_id)
+            .ok_or(StoreConflict::Missing)?;
+        let snapshot_files = database.read(|db| {
+            let mut q = db.prepare("SELECT relative_path, contents FROM template_snapshot_files WHERE snapshot_id=(SELECT id FROM template_snapshots WHERE instance_id=?1) ORDER BY relative_path")?;
+            Ok(q.query_map([instance], |r| Ok(composenest_application::state_store::TemplateFile{relative_path:r.get(0)?,contents:r.get(1)?}))?.collect::<Result<Vec<_>,_>>()?)
+        }).map_err(|_| StoreConflict::Backend)?;
+        let storage = saved
+            .storage
+            .iter()
+            .map(|s| {
+                database
+                    .storage_allocation(instance, &s.slot)?
+                    .ok_or(StoreConflict::Missing)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        composenest_application::create_state::ConfirmedCreate {
+            instance_id: instance.into(),
+            scope_id: scope.into(),
+            project_name: progress.instance.project_name.clone(),
+            target,
+            spec_revision: saved.spec_revision,
+            selected_version: saved.selected_version,
+            snapshot_files,
+            inputs_json: saved.inputs_json,
+            ports: saved.ports,
+            storage,
+        }
+    };
     let original = database
         .port_change_revisions(operation_id)
         .ok()
@@ -148,6 +217,9 @@ pub(crate) async fn inspect_locked(
         .await
         .is_ok();
     let mut reasons = Vec::new();
+    if !unresolved && applied_revision != Some(candidate_revision) {
+        reasons.push("SPEC_NOT_APPLIED".into());
+    }
     if !previous_cli_exited {
         reasons.push("CLI_TERMINATION_UNCONFIRMED".into());
     }
@@ -299,7 +371,8 @@ pub(crate) async fn inspect_locked(
                 && storage_verified
                 && owned
             {
-                if runtime == CurrentRuntime::Absent
+                if kind != OperationKind::Delete
+                    && runtime == CurrentRuntime::Absent
                     && operation.steps.iter().all(|s| {
                         matches!(
                             s.outcome,
@@ -344,6 +417,8 @@ pub(crate) async fn inspect_locked(
             .collect()
     });
     if !unresolved
+        && progress.instance.lifecycle == "managed"
+        && applied_revision == Some(candidate_revision)
         && previous_cli_exited
         && target_matches
         && storage_verified
@@ -351,6 +426,16 @@ pub(crate) async fn inspect_locked(
         && !files.is_empty()
     {
         actions.push("restore_external".into());
+    }
+    if unresolved
+        && kind == OperationKind::Recover
+        && previous_cli_exited
+        && target_matches
+        && storage_verified
+        && owned
+        && database.external_recovery(operation_id).is_ok()
+    {
+        actions.push("retry_external".into());
     }
     if progress
         .instance
@@ -370,9 +455,12 @@ pub(crate) async fn inspect_locked(
     })?;
     Ok(Inspection {
         evidence,
+        receipt: receipt.clone(),
+        container_id,
         view: RecoveryView {
             instance_id: instance.into(),
             operation_id: operation_id.into(),
+            receipt_request_id: receipt.request_id,
             attempt: operation.as_ref().map_or(0, |o| o.attempt),
             instance_revision: progress.instance.revision,
             candidate_revision,

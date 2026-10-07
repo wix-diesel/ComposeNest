@@ -99,7 +99,7 @@ pub async fn recover_port_change<P: RecoveryProbe>(
         .map_err(PortEditError::Runner)?
 }
 
-async fn recover_locked(
+pub(crate) async fn recover_locked(
     database: &DatabaseWorker,
     probe: &DockerProbe,
     root: &Path,
@@ -301,7 +301,7 @@ async fn recover_locked(
         stages.confirmed = confirmed;
         select_revision(database, &mut stages, revision)?;
     }
-    if pending.is_none() && !confirming {
+    if pending.is_none() && !confirming && !complete {
         return Ok(PortRecoveryResult::Held);
     }
     for step in &operation.steps {
@@ -311,7 +311,13 @@ async fn recover_locked(
                 .map_err(PortEditError::Store)?;
         }
     }
-    let phase = if restore { "restore" } else { "ports" };
+    let phase = if restore {
+        "restore"
+    } else if complete && pending.is_none() {
+        "reconcile"
+    } else {
+        "ports"
+    };
     let attempt = database
         .retry(&operation.id, phase)
         .map_err(PortEditError::Store)?;
@@ -320,6 +326,7 @@ async fn recover_locked(
         operation_id: &operation.id,
         attempt,
         sequence: operation.steps.last().map_or(1, |step| step.sequence + 1),
+        has_pending_change: pending.is_some() || confirming,
     };
     let result = apply(
         &mut effects,
@@ -355,6 +362,7 @@ struct Effects<'a> {
     operation_id: &'a str,
     attempt: u64,
     sequence: u64,
+    has_pending_change: bool,
 }
 
 impl Effects<'_> {
@@ -519,7 +527,9 @@ async fn apply(
     effects
         .run(
             StepCommand::Observe,
-            if ready {
+            if ready && !effects.has_pending_change {
+                ExpectedResult::StateObserved
+            } else if ready {
                 ExpectedResult::ContainerRunning
             } else {
                 ExpectedResult::ContainerStopped
@@ -546,6 +556,8 @@ async fn apply(
         .await?;
     if restore {
         database.complete_port_restore(effects.operation_id, &id)
+    } else if ready && !effects.has_pending_change {
+        database.complete_ready(effects.operation_id, &id)
     } else {
         database.complete_port_edit(effects.operation_id, &id)
     }

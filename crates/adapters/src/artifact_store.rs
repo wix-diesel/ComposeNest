@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set, TransactionTrait};
@@ -16,6 +16,8 @@ use crate::{
 
 mod external;
 pub use external::{ArtifactDifference, ExternalArtifact};
+
+const FILE_LIMIT: u64 = 2 * 1024 * 1024;
 
 /// A failure that leaves an artifact unavailable for execution.
 #[derive(Debug, thiserror::Error)]
@@ -57,7 +59,7 @@ pub struct ArtifactInput {
     pub files: BTreeMap<String, Vec<u8>>,
 }
 
-/// Publishes and checks artifacts under one protected management root.
+/// Publishes and checks artifacts under one protected root, reading at most 2 MiB per file.
 pub struct ArtifactStore<'a> {
     root: PathBuf,
     database: &'a DatabaseWorker,
@@ -74,6 +76,7 @@ impl<'a> ArtifactStore<'a> {
 
     /// Records the expected bytes, flushes staging, then publishes without replacing a target.
     /// Repeating the same request reconciles an earlier interrupted publication.
+    /// Rejects oversized generated files and manifest before any database or filesystem writes.
     pub fn publish(
         &self,
         operation_id: &str,
@@ -87,6 +90,10 @@ impl<'a> ArtifactStore<'a> {
             || !input.files.contains_key("compose.yaml")
             || input.files.contains_key("manifest.json")
             || input.files.keys().any(|path| !valid_relative(path))
+            || input
+                .files
+                .values()
+                .any(|bytes| bytes.len() as u64 > FILE_LIMIT)
         {
             return Err(ArtifactError::InvalidInput);
         }
@@ -105,6 +112,9 @@ impl<'a> ArtifactStore<'a> {
             "files": hashes,
         }))
         .map_err(|_| ArtifactError::InvalidInput)?;
+        if manifest.len() as u64 > FILE_LIMIT {
+            return Err(ArtifactError::InvalidInput);
+        }
         let manifest_hash = digest(&manifest);
         files.insert("manifest.json".into(), manifest);
         let expected: BTreeMap<_, _> = files
@@ -466,12 +476,54 @@ fn collect_files(
             if relative != "manifest.json" && !valid_relative(&relative) {
                 return Err(ArtifactError::Modified);
             }
-            found.insert(relative, digest(&fs::read(path)?));
+            found.insert(relative, bounded_digest(open_bounded_file(&path)?)?);
         } else {
             return Err(ArtifactError::UnsafePath(path));
         }
     }
     Ok(())
+}
+
+fn open_bounded_file(path: &Path) -> Result<File, ArtifactError> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || is_link(&metadata) {
+        return Err(ArtifactError::UnsafePath(path.into()));
+    }
+    if metadata.len() > FILE_LIMIT {
+        return Err(ArtifactError::InvalidInput);
+    }
+    Ok(file)
+}
+
+fn bounded_digest(reader: impl Read) -> Result<String, ArtifactError> {
+    let mut reader = reader.take(FILE_LIMIT + 1);
+    let mut hash = Sha256::new();
+    if io::copy(&mut reader, &mut hash)? > FILE_LIMIT {
+        return Err(ArtifactError::InvalidInput);
+    }
+    Ok(format!("{:x}", hash.finalize()))
+}
+
+#[test]
+fn streaming_hash_stops_if_content_grows_past_the_limit() {
+    assert!(matches!(
+        bounded_digest(io::repeat(0)),
+        Err(ArtifactError::InvalidInput)
+    ));
+    assert_eq!(bounded_digest(io::empty()).unwrap(), digest(&[]));
 }
 
 fn sync_tree_dirs(dir: &Path) -> io::Result<()> {

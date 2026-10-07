@@ -244,6 +244,178 @@ exit 1
     }
 }
 
+#[tokio::test]
+async fn scoped_external_confirmation_rejects_changed_hash_and_reconciles_same_receipt() {
+    use composenest_adapters::{
+        recovery_actions::recover_operation,
+        recovery_view::{RecoverySession, inspect_recovery},
+    };
+    use composenest_application::{RequestContext, recovery_view::RecoverOperationRequest};
+    let f = Fixture::new().await;
+    let session = RecoverySession::new(&f.db).unwrap();
+    let view = inspect_recovery(&f.db, &f.probe, &session, "scope", ID, "create")
+        .await
+        .unwrap();
+    assert!(view.actions.contains(&"restore_external".into()));
+    assert!(!view.files.is_empty());
+    let mut request = RecoverOperationRequest {
+        context: RequestContext {
+            api_version: 1,
+            request_id: "explicit-restore".into(),
+        },
+        instance_id: ID.into(),
+        operation_id: "create".into(),
+        expected_attempt: view.attempt,
+        expected_revision: view.instance_revision,
+        candidate_revision: view.candidate_revision,
+        action: "restore_external".into(),
+        ports: BTreeMap::new(),
+        artifact_id: view.artifact_id,
+        confirmation_hash: view.confirmation_hash.clone(),
+    };
+    let confirmed_hash = request.confirmation_hash.clone().unwrap();
+    let mut different_hash = confirmed_hash.clone();
+    different_hash.replace_range(
+        0..1,
+        if &confirmed_hash[0..1] == "0" {
+            "1"
+        } else {
+            "0"
+        },
+    );
+    request.confirmation_hash = Some(different_hash);
+    let runner = OperationRunner::new();
+    assert!(matches!(
+        recover_operation(&f.db, &f.probe, &session, &runner, "scope", &request).await,
+        Err(composenest_adapters::port_edit_stages::PortEditError::Rejected)
+    ));
+    assert!(
+        f.db.receipt("scope", &request.context.request_id)
+            .unwrap()
+            .is_none(),
+        "hash rejection must precede acceptance"
+    );
+    request.confirmation_hash = Some(confirmed_hash);
+    let restored = recover_operation(&f.db, &f.probe, &session, &runner, "scope", &request)
+        .await
+        .unwrap();
+    assert_ne!(restored.operation_id, "recover-explicit-restore");
+    assert_eq!(restored.receipt_request_id, request.context.request_id);
+    use composenest_adapters::recovery_view::inspection_operation;
+    assert_eq!(
+        inspection_operation(&f.db, "scope", ID, "create", Some("explicit-restore")).unwrap(),
+        restored.operation_id
+    );
+    assert_eq!(
+        inspection_operation(&f.db, "scope", ID, "create", Some("not-accepted")).unwrap(),
+        "create"
+    );
+    assert!(
+        inspection_operation(&f.db, "foreign", ID, "create", Some("explicit-restore")).is_err()
+    );
+    assert!(
+        f.root
+            .path()
+            .join(format!(
+                "instances/{ID}/recovery/{}/compose.yaml",
+                restored.operation_id
+            ))
+            .exists()
+    );
+    let again = recover_operation(&f.db, &f.probe, &session, &runner, "scope", &request)
+        .await
+        .unwrap();
+    assert_eq!(again.operation_id, restored.operation_id);
+    assert!(!f.calls().contains("container stop"));
+}
+
+#[tokio::test]
+async fn abandoned_unapplied_create_or_clone_does_not_offer_external_restoration() {
+    use composenest_adapters::recovery_view::{RecoverySession, inspect_recovery};
+    for kind in ["create", "clone"] {
+        let f = Fixture::new().await;
+        f.db.write(move |db| {
+            db.execute("UPDATE instances SET applied_spec_revision=NULL", [])?;
+            db.execute(
+                "UPDATE operations SET status='Abandoned', kind=?1 WHERE id='create'",
+                [kind],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let view = inspect_recovery(
+            &f.db,
+            &f.probe,
+            &RecoverySession::new(&f.db).unwrap(),
+            "scope",
+            ID,
+            "create",
+        )
+        .await
+        .unwrap();
+        assert!(!view.actions.contains(&"restore_external".into()));
+        assert!(view.hold_reasons.contains(&"SPEC_NOT_APPLIED".into()));
+        assert!(!f.calls().contains("container stop"));
+    }
+}
+
+#[tokio::test]
+async fn external_restoration_allocates_internal_ids_for_all_valid_request_ids() {
+    use composenest_adapters::{
+        recovery_actions::recover_operation,
+        recovery_view::{RecoverySession, inspect_recovery},
+    };
+    use composenest_application::{RequestContext, recovery_view::RecoverOperationRequest};
+    for request_id in [
+        "request.with.dots".to_owned(),
+        "日本語の受付".to_owned(),
+        "x".repeat(128),
+    ] {
+        let f = Fixture::new().await;
+        let session = RecoverySession::new(&f.db).unwrap();
+        let view = inspect_recovery(&f.db, &f.probe, &session, "scope", ID, "create")
+            .await
+            .unwrap();
+        let request = RecoverOperationRequest {
+            context: RequestContext {
+                api_version: 1,
+                request_id,
+            },
+            instance_id: ID.into(),
+            operation_id: "create".into(),
+            expected_attempt: view.attempt,
+            expected_revision: view.instance_revision,
+            candidate_revision: view.candidate_revision,
+            action: "restore_external".into(),
+            ports: BTreeMap::new(),
+            artifact_id: view.artifact_id,
+            confirmation_hash: view.confirmation_hash,
+        };
+        request.context.validate().unwrap();
+        let runner = OperationRunner::new();
+        let restored = recover_operation(&f.db, &f.probe, &session, &runner, "scope", &request)
+            .await
+            .unwrap();
+        assert_eq!(restored.operation_id.len(), 40);
+        assert!(
+            restored.operation_id[8..]
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit())
+        );
+        assert_eq!(
+            f.db.receipt("scope", &request.context.request_id)
+                .unwrap()
+                .unwrap()
+                .operation_id,
+            restored.operation_id
+        );
+        let repeated = recover_operation(&f.db, &f.probe, &session, &runner, "scope", &request)
+            .await
+            .unwrap();
+        assert_eq!(repeated.operation_id, restored.operation_id);
+    }
+}
+
 fn inspection(expected: &ExpectedContainer, ready: bool) -> Vec<u8> {
     let health = expected.healthcheck.as_ref().unwrap();
     serde_json::to_vec(&json!({

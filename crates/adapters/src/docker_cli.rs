@@ -20,6 +20,8 @@ use tokio::{
     time::{sleep, timeout},
 };
 
+pub mod logs;
+
 const OUTPUT_LIMIT: usize = 64 * 1024;
 const INSPECT_OUTPUT_LIMIT: usize = 4 * 1024 * 1024;
 const REAP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -251,18 +253,7 @@ impl DockerCli {
         })?
     }
 
-    async fn run_inner(
-        &self,
-        kind: CommandKind,
-        args: &[OsString],
-        deadline: Duration,
-        fixed_host: bool,
-        stdout_limit: usize,
-    ) -> Result<CliOutcome, CliError> {
-        let _guard = self.gate.lock().await;
-        if kind == CommandKind::Change && self.blocked.load(Ordering::Acquire) {
-            return Err(CliError::TerminationUnconfirmed("earlier attempt"));
-        }
+    fn command(&self, args: &[OsString], fixed_host: bool) -> Result<Command, CliError> {
         let mut command = Command::new(&self.executable);
         if fixed_host {
             command.arg("--host").arg(&self.endpoint);
@@ -286,6 +277,22 @@ impl DockerCli {
             }
         }
         configure_platform(&mut command);
+        Ok(command)
+    }
+
+    async fn run_inner(
+        &self,
+        kind: CommandKind,
+        args: &[OsString],
+        deadline: Duration,
+        fixed_host: bool,
+        stdout_limit: usize,
+    ) -> Result<CliOutcome, CliError> {
+        let _guard = self.gate.lock().await;
+        if kind == CommandKind::Change && self.blocked.load(Ordering::Acquire) {
+            return Err(CliError::TerminationUnconfirmed("earlier attempt"));
+        }
+        let mut command = self.command(args, fixed_host)?;
         let started_at = SystemTime::now();
         let mut child = command.spawn()?;
         let pid = child

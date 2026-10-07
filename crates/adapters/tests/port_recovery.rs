@@ -26,7 +26,9 @@ use composenest_application::{
     operation_journal::{
         OperationIntent, OperationJournal, OperationKind, OperationStatus, RequestReceipt,
     },
-    operation_recovery::{CurrentRuntime, RecoverableOperation, RecoveryEvidence, RecoveryProbe},
+    operation_recovery::{
+        CurrentRuntime, RecoverableOperation, RecoveryEvidence, RecoveryJournal, RecoveryProbe,
+    },
     operation_runner::OperationRunner,
     port_edit::{PortEditRequest, PortEditStore},
     state_store::StateStore,
@@ -163,6 +165,331 @@ async fn inherited_unfinished_cli_and_missing_storage_hold_every_change() {
         })
         .unwrap();
     assert_eq!(reservations, 2);
+}
+
+#[tokio::test]
+async fn recovery_confirmation_rechecks_revisions_and_never_replays_a_completed_change() {
+    use composenest_adapters::{
+        recovery_actions::recover_operation,
+        recovery_view::{RecoverySession, inspect_recovery},
+    };
+    use composenest_application::{RequestContext, recovery_view::RecoverOperationRequest};
+    let fixture = Fixture::new(OperationKind::EditPort).await;
+    fixture.current(1);
+    let session = RecoverySession::new(&fixture.db).unwrap();
+    let view = inspect_recovery(
+        &fixture.db,
+        &fixture.probe,
+        &session,
+        "scope",
+        ID,
+        "operation",
+    )
+    .await
+    .unwrap();
+    let mut request = RecoverOperationRequest {
+        context: RequestContext {
+            api_version: 1,
+            request_id: "recovery".into(),
+        },
+        instance_id: ID.into(),
+        operation_id: "operation".into(),
+        expected_attempt: view.attempt,
+        expected_revision: view.instance_revision,
+        candidate_revision: view.candidate_revision,
+        action: "restore_ports".into(),
+        ports: BTreeMap::new(),
+        artifact_id: None,
+        confirmation_hash: None,
+    };
+    request.expected_revision += 1;
+    let runner = OperationRunner::new();
+    assert!(
+        recover_operation(
+            &fixture.db,
+            &fixture.probe,
+            &session,
+            &runner,
+            "scope",
+            &request
+        )
+        .await
+        .is_err()
+    );
+    request.expected_revision -= 1;
+    let restored = recover_operation(
+        &fixture.db,
+        &fixture.probe,
+        &session,
+        &runner,
+        "scope",
+        &request,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        restored.ports[0].host_port,
+        view.original_ports[0].host_port
+    );
+    let calls = fs::read_to_string(fixture.root.path().join("calls")).unwrap();
+    assert!(!calls.contains("container start"));
+    assert!(
+        recover_operation(
+            &fixture.db,
+            &fixture.probe,
+            &session,
+            &runner,
+            "scope",
+            &request
+        )
+        .await
+        .is_err()
+    );
+    let effects = |log: &str| {
+        log.lines()
+            .filter(|line| line.contains("compose create") || line.contains("container start"))
+            .count()
+    };
+    assert_eq!(
+        effects(&calls),
+        effects(&fs::read_to_string(fixture.root.path().join("calls")).unwrap())
+    );
+}
+
+#[tokio::test]
+async fn proposed_ports_are_uncommitted_until_the_exact_set_is_confirmed() {
+    use composenest_adapters::{
+        recovery_actions::recover_operation,
+        recovery_view::{RecoverySession, inspect_recovery},
+    };
+    use composenest_application::{RequestContext, recovery_view::RecoverOperationRequest};
+    let fixture = Fixture::new(OperationKind::EditPort).await;
+    fixture.current(1);
+    let session = RecoverySession::new(&fixture.db).unwrap();
+    let view = inspect_recovery(
+        &fixture.db,
+        &fixture.probe,
+        &session,
+        "scope",
+        ID,
+        "operation",
+    )
+    .await
+    .unwrap();
+    let collision = TcpListener::bind(("127.0.0.1", view.ports[0].host_port)).unwrap();
+    let mut request = RecoverOperationRequest {
+        context: RequestContext {
+            api_version: 1,
+            request_id: "proposal".into(),
+        },
+        instance_id: ID.into(),
+        operation_id: "operation".into(),
+        expected_attempt: view.attempt,
+        expected_revision: view.instance_revision,
+        candidate_revision: view.candidate_revision,
+        action: "propose_ports".into(),
+        ports: BTreeMap::new(),
+        artifact_id: None,
+        confirmation_hash: None,
+    };
+    let runner = OperationRunner::new();
+    let proposed = recover_operation(
+        &fixture.db,
+        &fixture.probe,
+        &session,
+        &runner,
+        "scope",
+        &request,
+    )
+    .await
+    .unwrap();
+    assert_eq!(proposed.candidate_revision, view.candidate_revision);
+    assert_ne!(
+        proposed.proposed_ports[0].host_port,
+        view.ports[0].host_port
+    );
+    request.action = "confirm_ports".into();
+    request.ports = proposed
+        .proposed_ports
+        .iter()
+        .map(|p| (p.slot.clone(), p.host_port))
+        .collect();
+    let ports = proposed
+        .proposed_ports
+        .iter()
+        .map(|p| composenest_application::state_store::PortAllocation {
+            slot: p.slot.clone(),
+            host_ip: p.host_ip.clone(),
+            host_port: p.host_port,
+            container_port: p.container_port,
+        })
+        .collect();
+    fixture.prepare_confirmed_runtime(ports).await;
+    let applied = recover_operation(
+        &fixture.db,
+        &fixture.probe,
+        &session,
+        &runner,
+        "scope",
+        &request,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        applied.ports[0].host_port,
+        proposed.proposed_ports[0].host_port
+    );
+    drop(collision);
+}
+
+#[tokio::test]
+async fn original_create_ready_is_committed_without_recreating_or_starting() {
+    let fixture = Fixture::new(OperationKind::Create).await;
+    use composenest_application::operation_journal::{
+        ExpectedResult, StepCommand, StepIntent, StepOutcome,
+    };
+    fixture
+        .db
+        .set_status("operation", OperationStatus::Executing, "start")
+        .unwrap();
+    fixture
+        .db
+        .record_step(&StepIntent {
+            operation_id: "operation".into(),
+            sequence: 1,
+            attempt: 1,
+            command_kind: StepCommand::ComposeStart,
+            resource_id: CONTAINER.into(),
+            expected_result: ExpectedResult::ContainerRunning,
+        })
+        .unwrap();
+    fixture
+        .db
+        .finish_step("operation", 1, StepOutcome::Failed)
+        .unwrap();
+    fixture
+        .db
+        .set_status("operation", OperationStatus::Failed, "start")
+        .unwrap();
+    fs::copy(
+        fixture.root.path().join("ready.json"),
+        fixture.root.path().join("current.json"),
+    )
+    .unwrap();
+    assert!(matches!(
+        fixture.run(PortRecoveryAction::Reconcile).await,
+        PortRecoveryResult::Completed(_)
+    ));
+    assert_eq!(
+        fixture.db.recoverable("operation"),
+        Err(composenest_application::state_store::StoreConflict::Missing)
+    );
+    let calls = fs::read_to_string(fixture.root.path().join("calls")).unwrap();
+    assert!(!calls.contains("container start"));
+    assert!(!calls.contains("compose create"));
+}
+
+#[tokio::test]
+async fn failed_start_retries_the_same_operation_and_retains_the_failed_step() {
+    use composenest_adapters::{
+        recovery_actions::recover_operation,
+        recovery_view::{RecoverySession, inspect_recovery},
+    };
+    use composenest_application::{
+        RequestContext,
+        instance_actions::{ChangeInstanceRequest, accept, view},
+        operation_journal::{ExpectedResult, StepCommand, StepIntent, StepOutcome},
+        recovery_view::RecoverOperationRequest,
+    };
+    let fixture = Fixture::new(OperationKind::Create).await;
+    fixture.current(1);
+    fixture.db.write(|db| { db.execute_batch("UPDATE operations SET status='Succeeded',completed_at=CURRENT_TIMESTAMP WHERE id='operation'; UPDATE instances SET applied_spec_revision=1; INSERT INTO runtime_observations(instance_id,container_id,runtime_state,freshness) VALUES ('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','stopped','fresh');")?;Ok(()) }).unwrap();
+    let state = view(&fixture.db, "scope", ID).unwrap();
+    let (receipt, _, _) = accept(
+        &fixture.db,
+        "scope",
+        &ChangeInstanceRequest {
+            context: RequestContext {
+                api_version: 1,
+                request_id: "failed-start".into(),
+            },
+            instance_id: ID.into(),
+            expected_revision: state.revision,
+            action: "start".into(),
+            retain_data_confirmed: false,
+        },
+        &mut support::TestRandom::default(),
+    )
+    .unwrap();
+    fixture
+        .db
+        .set_status(&receipt.operation_id, OperationStatus::Executing, "start")
+        .unwrap();
+    fixture
+        .db
+        .record_step(&StepIntent {
+            operation_id: receipt.operation_id.clone(),
+            sequence: 1,
+            attempt: 1,
+            command_kind: StepCommand::ComposeStart,
+            resource_id: CONTAINER.into(),
+            expected_result: ExpectedResult::ContainerRunning,
+        })
+        .unwrap();
+    fixture
+        .db
+        .finish_step(&receipt.operation_id, 1, StepOutcome::Failed)
+        .unwrap();
+    fixture
+        .db
+        .set_status(&receipt.operation_id, OperationStatus::Failed, "start")
+        .unwrap();
+    let session = RecoverySession::new(&fixture.db).unwrap();
+    let inspected = inspect_recovery(
+        &fixture.db,
+        &fixture.probe,
+        &session,
+        "scope",
+        ID,
+        &receipt.operation_id,
+    )
+    .await
+    .unwrap();
+    assert!(inspected.actions.contains(&"retry".into()));
+    let request = RecoverOperationRequest {
+        context: RequestContext {
+            api_version: 1,
+            request_id: "retry-start".into(),
+        },
+        instance_id: ID.into(),
+        operation_id: receipt.operation_id.clone(),
+        expected_attempt: inspected.attempt,
+        expected_revision: inspected.instance_revision,
+        candidate_revision: inspected.candidate_revision,
+        action: "retry".into(),
+        ports: BTreeMap::new(),
+        artifact_id: None,
+        confirmation_hash: None,
+    };
+    let result = recover_operation(
+        &fixture.db,
+        &fixture.probe,
+        &session,
+        &OperationRunner::new(),
+        "scope",
+        &request,
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.previous_status, "Failed");
+    assert_eq!(result.current_runtime, "ready");
+    let steps = fixture
+        .db
+        .steps_for_resource(&receipt.operation_id, CONTAINER)
+        .unwrap();
+    assert_eq!(steps[0].outcome, Some(StepOutcome::Failed));
+    assert_eq!(steps[1].attempt, 2);
+    assert_eq!(steps[1].sequence, 2);
 }
 
 fn available_fixture_port() -> u16 {

@@ -244,6 +244,61 @@ exit 1
     }
 }
 
+#[tokio::test]
+async fn scoped_external_confirmation_rejects_changed_hash_and_reconciles_same_receipt() {
+    use composenest_adapters::{
+        recovery_actions::recover_operation,
+        recovery_view::{RecoverySession, inspect_recovery},
+    };
+    use composenest_application::{RequestContext, recovery_view::RecoverOperationRequest};
+    let f = Fixture::new().await;
+    let session = RecoverySession::new(&f.db).unwrap();
+    let view = inspect_recovery(&f.db, &f.probe, &session, "scope", ID, "create")
+        .await
+        .unwrap();
+    assert!(view.actions.contains(&"restore_external".into()));
+    assert!(!view.files.is_empty());
+    let mut request = RecoverOperationRequest {
+        context: RequestContext {
+            api_version: 1,
+            request_id: "explicit-restore".into(),
+        },
+        instance_id: ID.into(),
+        operation_id: "create".into(),
+        expected_attempt: view.attempt,
+        expected_revision: view.instance_revision,
+        candidate_revision: view.candidate_revision,
+        action: "restore_external".into(),
+        ports: BTreeMap::new(),
+        artifact_id: view.artifact_id,
+        confirmation_hash: Some("wrong".into()),
+    };
+    let runner = OperationRunner::new();
+    assert!(
+        recover_operation(&f.db, &f.probe, &session, &runner, "scope", &request)
+            .await
+            .is_err()
+    );
+    request.confirmation_hash = view.confirmation_hash;
+    let restored = recover_operation(&f.db, &f.probe, &session, &runner, "scope", &request)
+        .await
+        .unwrap();
+    assert_eq!(restored.operation_id, "recover-explicit-restore");
+    assert!(
+        f.root
+            .path()
+            .join(format!(
+                "instances/{ID}/recovery/recover-explicit-restore/compose.yaml"
+            ))
+            .exists()
+    );
+    let again = recover_operation(&f.db, &f.probe, &session, &runner, "scope", &request)
+        .await
+        .unwrap();
+    assert_eq!(again.operation_id, restored.operation_id);
+    assert!(!f.calls().contains("container stop"));
+}
+
 fn inspection(expected: &ExpectedContainer, ready: bool) -> Vec<u8> {
     let health = expected.healthcheck.as_ref().unwrap();
     serde_json::to_vec(&json!({

@@ -38,6 +38,12 @@ export async function testLogs({ page, open, calls }) {
   await page.evaluate(() => { window.mode = "logs_unsubscribe_failure"; });
   await page.getByRole("button", { name: "追従を停止", exact: true }).click();
   await page.getByRole("alert").waitFor();
+  const startsBeforeRetry = (await calls("subscribe_logs")).length;
+  await page.getByRole("button", { name: "再読込み", exact: true }).click();
+  await page.waitForFunction((id) => window.calls.filter((c) => c.command === "unsubscribe_logs" && c.request.subscriptionId === id).length >= 2, unconfirmed);
+  await page.getByRole("alert").waitFor();
+  assert.equal((await calls("subscribe_logs")).length, startsBeforeRetry, "continued cleanup failure blocks a new subscription");
+  assert.equal(await page.evaluate((id) => window.activeLogs.has(id), unconfirmed), true);
   await page.evaluate(() => { window.mode = "normal"; });
   await page.getByRole("button", { name: "再読込み", exact: true }).click(); await active(1);
   await page.waitForFunction((id) => !window.activeLogs.has(id), unconfirmed);

@@ -211,12 +211,16 @@ pub async fn retry_operation<J: RecoveryJournal, P: RecoveryProbe>(
 }
 
 /// Abandons an operation only after fresh target, resource and CLI checks prove absence.
+/// Delete operations require dedicated retirement recovery and cannot be abandoned.
 pub async fn abandon_operation<J: RecoveryJournal, P: RecoveryProbe>(
     journal: &J,
     operation_id: &str,
     probe: &P,
 ) -> Result<(), StoreConflict> {
     let operation = journal.recoverable(operation_id)?;
+    if operation.kind == OperationKind::Delete {
+        return Err(StoreConflict::InvalidLifecycle);
+    }
     let evidence = probe.inspect(&operation).await;
     let safe = matches!(
         operation.status,

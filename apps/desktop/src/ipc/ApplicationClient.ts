@@ -265,7 +265,11 @@ export class ApplicationClient {
   }
   /** Accepts one fixed lifecycle action with a stable request ID until reconciliation. */
   changeInstance(instanceId: string, expectedRevision: number, action: string): Promise<InstanceActionView> {
-    return this.beginInstanceChange("change_instance", { context: this.context(), instanceId, expectedRevision, action });
+    return this.beginInstanceChange("change_instance", { context: this.context(), instanceId, expectedRevision, action, retainDataConfirmed: false });
+  }
+  /** Deletes runtime resources while preserving data, using the explicitly confirmed revision. */
+  deleteInstance(instanceId: string, expectedRevision: number): Promise<InstanceActionView> {
+    return this.beginInstanceChange("change_instance", { context: this.context(), instanceId, expectedRevision, action: "delete", retainDataConfirmed: true });
   }
   /** Changes only the display name against the exact version shown by Core. */
   renameInstance(instanceId: string, expectedRevision: number, name: string): Promise<InstanceActionView> {

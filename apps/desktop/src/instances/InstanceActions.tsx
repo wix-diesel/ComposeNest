@@ -5,11 +5,12 @@ import { operationPhaseLabel } from "./operationPhase";
 import { InstanceEdit } from "./InstanceEdit";
 import { InstanceDetailTabs } from "./InstanceDetailTabs";
 import { Icon } from "../shell/Icon";
+import { DeleteDialog } from "./DeleteDialog";
 import "./instance-actions.css";
 
 const runtime: Record<string, string> = { ready: "利用可能", stopped: "停止中", absent: "コンテナ不在", preparing: "準備中", unhealthy: "異常", unknown: "未確認" };
 const operation: Record<string, string> = { Accepted: "受付済み", Executing: "実行中", Succeeded: "完了", Failed: "失敗・未解決", OutcomeUnknown: "結果不明", AwaitingDecision: "判断待ち", Abandoned: "解決済み" };
-const actionLabel: Record<string, string> = { start: "起動", stop: "停止", restart: "再起動", create: "作成", clone: "複製", rename: "名前変更" };
+const actionLabel: Record<string, string> = { start: "起動", stop: "停止", restart: "再起動", create: "作成", clone: "複製", rename: "名前変更", delete: "削除" };
 function failure(error: unknown): string {
   const code = typeof error === "object" && error !== null && "code" in error ? error.code : null;
   switch (code) {
@@ -35,6 +36,7 @@ function InstanceHeader({ client, instanceId, headingRef, onAbout }: { client: A
   const [busy, setBusy] = useState(false);
   const [uncertain, setUncertain] = useState(client.hasInstanceChange(instanceId));
   const [stale, setStale] = useState(false);
+  const [deletion, setDeletion] = useState<InstanceDetailView | null>(null);
   const gate = useRef(false);
   const epoch = useRef(0);
   const mounted = useRef(false);
@@ -61,13 +63,20 @@ function InstanceHeader({ client, instanceId, headingRef, onAbout }: { client: A
     return () => { active = false; mounted.current = false; clearTimeout(timer); };
   }, [client, instanceId]);
 
-  async function submit(action: string) {
+  function openDeleteProgress(current: InstanceActionView) {
+    if (current.operationKind === "delete" && current.operationId)
+      client.navigate({ page: "operation", operationId: current.operationId, instanceId });
+  }
+  async function submit(action: string, revision = view?.revision) {
     if (gate.current || !view || client.hasInstanceChange(instanceId) || stale) return;
+    if (revision !== view.revision || !view.actions.includes(action)) return;
     gate.current = true; epoch.current++; setBusy(true); setMessage(null); setDetail(null);
     try {
-      const current = await client.changeInstance(instanceId, view.revision, action);
+      const current = action === "delete" ? await client.deleteInstance(instanceId, revision)
+        : await client.changeInstance(instanceId, revision, action);
       if (!mounted.current) return;
       setView(current); draftRevision.current = current.revision; setStale(false);
+      openDeleteProgress(current);
     } catch (error) {
       if (mounted.current) { setMessage(failure(error)); setUncertain(client.hasInstanceChange(instanceId)); setStale(!client.hasInstanceChange(instanceId)); }
     } finally { gate.current = false; if (mounted.current) setBusy(false); }
@@ -76,8 +85,11 @@ function InstanceHeader({ client, instanceId, headingRef, onAbout }: { client: A
     if (gate.current) return;
     gate.current = true; epoch.current++; setBusy(true); setDetail(null);
     try {
-      await client.retryInstanceChange(instanceId);
+      const current = await client.retryInstanceChange(instanceId);
       if (!mounted.current) return;
+      if (current.operationKind === "delete" && current.operationId) {
+        setUncertain(false); openDeleteProgress(current); return;
+      }
       const snapshot = await client.getInstanceDetail(instanceId);
       if (!mounted.current) return;
       setView(snapshot.state); setDetail(snapshot); draftRevision.current = snapshot.state.revision;
@@ -104,6 +116,7 @@ function InstanceHeader({ client, instanceId, headingRef, onAbout }: { client: A
     {stale && <p className="notice">表示していた版が古くなりました。現在の状態を再確認してください。</p>}
     {(view?.runtimeStatus === "absent" || view?.operationPhase === "start_required") && <p className="notice">コンテナが不在です。再起動ではなく「起動」を選んでください。未解決の処理がある場合は先に解決してください。</p>}
     {unresolved && <p className="notice">未解決の処理があるため、別の変更は実行できません。</p>}
+    {busy && <p role="status">処理の受付を確認中です。画面を離れても送信した要求は取り消されません。</p>}
     <section className="panel" aria-label="環境の状態"><div className="panel-title"><h2>環境の状態</h2><small>最終観測（保存値） {view?.observedAt ? `${view.observedAt} UTC` : "未確認"}{detail?.instance.observation?.freshness !== "fresh" && view?.observedAt ? "（過去の観測）" : ""}</small></div>
       <dl className="instance-state"><div><dt>実行状態</dt><dd><span className="badge" data-runtime={view?.runtimeStatus}>{runtime[view?.runtimeStatus ?? "unknown"] ?? "未確認"}</span></dd></div>
         <div><dt>直前の処理</dt><dd aria-live="polite">{!view ? "未取得" : view.operationId ? `${actionLabel[view.operationKind ?? ""] ?? "処理"} · ${operation[view.operationStatus ?? ""] ?? "未確認"}` : "なし"}</dd></div>
@@ -111,6 +124,9 @@ function InstanceHeader({ client, instanceId, headingRef, onAbout }: { client: A
       {view?.operationId && <p className="operation-link">処理ID: <code>{view.operationId}</code> · 段階: {operationPhaseLabel(view.operationPhase)} <button className="btn small" onClick={() => client.navigate({ page: "operation", operationId: view.operationId!, instanceId })}>処理状況を開く</button></p>}
       <button className="btn small" disabled={busy} onClick={() => void refresh()}>{uncertain ? "受付を再確認" : "現在の状態を再確認"}</button>
     </section>
-    <InstanceDetailTabs detail={detail} />
+    <InstanceDetailTabs detail={detail} deleteAction={<div className="detail-danger"><div><h3>環境を削除</h3><p>コンテナと専用ネットワークを削除します。データは残ります。</p></div>
+      <button className="btn" disabled={!available("delete") || !detail} onClick={() => setDeletion(detail)}>環境を削除</button></div>} />
+    {deletion && <DeleteDialog detail={deletion} disabled={!available("delete") || deletion.state.revision !== view?.revision || !detail}
+      onClose={() => setDeletion(null)} onConfirm={() => void submit("delete", deletion.state.revision)} />}
   </div>;
 }

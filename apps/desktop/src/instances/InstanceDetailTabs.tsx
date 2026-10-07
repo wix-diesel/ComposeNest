@@ -1,4 +1,4 @@
-import { useRef, useState, type KeyboardEvent } from "react";
+import { useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { InstanceDetailView, JsonValue } from "../generated/template-form";
 import "./instance-detail.css";
 
@@ -8,7 +8,7 @@ const presenceLabels: Record<string, string> = { present: "存在を確認済み
 const valueText = (value: JsonValue | null) => value === null ? "未設定" : typeof value === "string" ? value : JSON.stringify(value);
 
 /** Keyboard-accessible detail panels; unconnected features remain explicitly unavailable. */
-export function InstanceDetailTabs({ detail }: { detail: InstanceDetailView | null }) {
+export function InstanceDetailTabs({ detail, deleteAction }: { detail: InstanceDetailView | null; deleteAction?: ReactNode }) {
   const [tab, setTab] = useState(0);
   const buttons = useRef<Array<HTMLButtonElement | null>>([]);
   function keyboard(event: KeyboardEvent<HTMLButtonElement>, index: number) {
@@ -28,6 +28,7 @@ export function InstanceDetailTabs({ detail }: { detail: InstanceDetailView | nu
       {index === 0 ? detail ? <Overview detail={detail} /> : <section className="panel"><p>詳細情報を取得できていません。現在の状態を再確認してください。</p></section>
         : index === 1 ? <section className="panel"><div className="panel-title"><h2>サービスログ</h2><div className="actions"><button className="btn" disabled>追従を開始</button><button className="btn" disabled>再読込み</button></div></div><p>ログ購読は未接続です。ログは取得していません。</p></section>
           : <section className="panel"><div className="panel-title"><h2>Compose</h2><button className="btn" disabled>原文を表示</button></div><p>Compose閲覧は未接続です。ファイルの内容は取得していません。</p></section>}
+      {index === 0 && deleteAction}
     </div>)}
   </div>;
 }
@@ -67,6 +68,5 @@ function Overview({ detail }: { detail: InstanceDetailView }) {
     </dl></section>
       <div className="notice"><strong>{localOnly ? "接続できるのは、この端末のみ" : "接続先アドレスを確認してください"}</strong><p>ホストとポートをお使いのアプリに設定してください。</p></div>
     </aside></div>
-    <div className="detail-danger"><div><h3>環境を削除</h3><p>削除操作は未接続です。</p></div><button className="btn" disabled>環境を削除</button></div>
   </>;
 }

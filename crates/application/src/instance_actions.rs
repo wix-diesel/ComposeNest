@@ -41,8 +41,11 @@ pub struct ChangeInstanceRequest {
     pub instance_id: String,
     /// Optimistic lock revision.
     pub expected_revision: u64,
-    /// Start, stop, or restart.
+    /// Start, stop, restart, or data-preserving delete.
     pub action: String,
+    /// Required explicit confirmation for Delete; omitted by older lifecycle clients.
+    #[serde(default)]
+    pub retain_data_confirmed: bool,
 }
 /// Non-sensitive state used by the header and name editor.
 #[derive(Debug, Serialize)]
@@ -78,7 +81,7 @@ impl From<InstanceView> for InstanceActionView {
                 .as_ref()
                 .is_none_or(|op| matches!(op.status.as_str(), "Succeeded" | "Abandoned"))
         {
-            actions.push("rename".into());
+            actions.extend(["rename".into(), "delete".into()]);
             if matches!(view.runtime_status.as_str(), "stopped" | "absent") {
                 actions.push("start".into());
             }
@@ -126,6 +129,7 @@ pub fn accept<S: QueryStore + StateStore + OperationJournal>(
         "start" => OperationKind::Start,
         "stop" => OperationKind::Stop,
         "restart" => OperationKind::Restart,
+        "delete" if request.retain_data_confirmed => OperationKind::Delete,
         _ => return Err(StoreConflict::InvalidInput),
     };
     let hash = format!(
@@ -181,7 +185,7 @@ pub fn accept<S: QueryStore + StateStore + OperationJournal>(
         kind,
         phase: "inspect".into(),
         expected_revision: request.expected_revision,
-        old_spec_revision: Some(current.spec_revision),
+        old_spec_revision: (kind != OperationKind::Delete).then_some(current.spec_revision),
         new_spec_revision: None,
     };
     store

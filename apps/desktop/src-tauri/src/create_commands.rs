@@ -28,6 +28,7 @@ pub struct CreateBackend {
     session: Mutex<CreateSession>,
     pub(super) clones: Mutex<composenest_application::clone_session::CloneSession>,
     pub(super) probe: Option<DockerProbe>,
+    pub(super) recovery: composenest_adapters::recovery_view::RecoverySession,
 }
 
 impl CreateBackend {
@@ -64,7 +65,10 @@ impl CreateBackend {
             directory: database.management_root().to_path_buf(),
             config_directory: home.join(".docker"),
         });
+        let recovery = composenest_adapters::recovery_view::RecoverySession::new(&database)
+            .map_err(|_| std::io::Error::other("recovery session unavailable"))?;
         Ok(Self {
+            recovery,
             database,
             runner,
             session: Mutex::new(CreateSession::new(scope.clone())),

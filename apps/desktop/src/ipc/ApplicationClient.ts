@@ -14,6 +14,50 @@ import {
 
 /** Typed boundary between React features and the Tauri transport. */
 export class ApplicationClient {
+  private recoveryChanges = new Map<string, import("../generated/template-form").RecoverOperationRequest>();
+
+  /** Collects fresh evidence; a lost restoration response is looked up by its stable identity. */
+  async resolveOperation(instanceId: string, operationId: string): Promise<import("../generated/template-form").RecoveryView> {
+    const pending = this.recoveryChanges.get(instanceId);
+    const external = pending?.action === "restore_external";
+    const view = await this.createCall<import("../generated/template-form").RecoveryView>("resolve_operation", { context: this.context(), instanceId, operationId,
+      recoveryRequestId: external ? pending.context.requestId : null } as import("../generated/template-form").RecoveryRequest);
+    this.validateRecovery(view, instanceId, external ? undefined : operationId);
+    if (view.operationId !== operationId && (!external || view.receiptRequestId !== pending.context.requestId)) throw new Error("invalid_recovery_response");
+    // Successful gated inspection establishes that no local change is still executing.
+    // It never implies success; Failed/Hold remain explicit in the returned evidence.
+    this.recoveryChanges.delete(instanceId);
+    return view;
+  }
+
+  private validateRecovery(view: import("../generated/template-form").RecoveryView, instanceId: string, operationId?: string) {
+    if (!view || view.instanceId !== instanceId || !view.operationId || (operationId && view.operationId !== operationId)
+      || !Number.isSafeInteger(view.attempt) || view.attempt < 0 || !Number.isSafeInteger(view.instanceRevision)
+      || view.instanceRevision < 1 || !Number.isSafeInteger(view.candidateRevision) || view.candidateRevision < 1
+      || !Array.isArray(view.actions) || !Array.isArray(view.holdReasons) || !Array.isArray(view.ports)
+      || !Array.isArray(view.originalPorts) || !Array.isArray(view.proposedPorts) || !Array.isArray(view.files)) throw new Error("invalid_recovery_response");
+  }
+
+  /** Sends one explicitly confirmed Core choice, keeping its identity until reconciliation. */
+  async recoverOperation(view: import("../generated/template-form").RecoveryView, action: string): Promise<import("../generated/template-form").RecoveryView> {
+    if (this.hasInstanceChange(view.instanceId)) throw new Error("instance_change_pending");
+    const request: import("../generated/template-form").RecoverOperationRequest = { context: this.context(), instanceId: view.instanceId,
+      operationId: view.operationId, expectedAttempt: view.attempt, expectedRevision: view.instanceRevision,
+      candidateRevision: view.candidateRevision, action, ports: action === "confirm_ports" ? Object.fromEntries(view.proposedPorts.map((p) => [p.slot, p.hostPort])) : {},
+      artifactId: action === "restore_external" ? view.artifactId : null, confirmationHash: action === "restore_external" ? view.confirmationHash : null };
+    this.recoveryChanges.set(view.instanceId, request);
+    try {
+      const result = await this.createCall<import("../generated/template-form").RecoveryView>("retry_operation", request);
+      this.validateRecovery(result, view.instanceId, action === "restore_external" ? undefined : view.operationId);
+      if (action === "restore_external" && (result.operationId === view.operationId || result.receiptRequestId !== request.context.requestId)) throw new Error("invalid_recovery_response");
+      this.recoveryChanges.delete(view.instanceId);
+      return result;
+    } catch (error) {
+      const code = typeof error === "object" && error !== null && "code" in error ? error.code : null;
+      if (action !== "restore_external" && ["INSTANCE_STALE", "INSTANCE_MISSING", "INSTANCE_INPUT_INVALID", "INSTANCE_ACTION_UNAVAILABLE"].includes(String(code))) this.recoveryChanges.delete(view.instanceId);
+      throw error;
+    }
+  }
   /** Reads durable state; notifications and elapsed time never establish success. */
   async getOperation(operationId: string): Promise<import("../generated/template-form").OperationProgressView> {
     const view = await this.createCall<import("../generated/template-form").OperationProgressView>("get_operation", { context: this.context(), operationId } as import("../generated/template-form").OperationRequest);
@@ -210,7 +254,7 @@ export class ApplicationClient {
     return detail;
   }
   /** Reports an in-flight or uncertain change across screen navigation. */
-  hasInstanceChange(instanceId: string): boolean { return this.instanceChanges.has(instanceId); }
+  hasInstanceChange(instanceId: string): boolean { return this.instanceChanges.has(instanceId) || this.recoveryChanges.has(instanceId); }
 
   /** Restores the user's original name draft while an uncertain rename is pending. */
   getPendingInstanceName(instanceId: string): string | null {

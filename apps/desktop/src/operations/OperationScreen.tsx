@@ -100,7 +100,7 @@ export function OperationScreen({ client, operationId, instanceId, headingRef }:
           <button className="btn" onClick={() => client.navigate({ page: "instance-detail", instanceId: target.id })}>対象の環境を確認</button></>}
     </div>
     {view.lastFailureStatus && <p className="notice">直前の失敗・処理結果: {statuses[view.lastFailureStatus] ?? "要確認"}。現在の処理結果: {statuses[operation.status] ?? "未確認"}。</p>}
-    {target.lifecycle !== "retired" && <RecoveryPanel client={client} instanceId={target.id} operationId={operationId} status={operation.status} onReconciled={() => refresh.current()} />}
+    {target.lifecycle !== "retired" && <RecoveryPanel client={client} instanceId={target.id} operationId={operationId} kind={operation.kind} status={operation.status} onReconciled={() => refresh.current()} />}
     </div><aside><section className="panel"><h2>対象の環境</h2><p>現在の保存設定</p><dl className="operation-summary">
       <div><dt>サービス</dt><dd>{target.templateId} {target.selectedVersion}</dd></div>
       <div><dt>接続ポート</dt><dd>{target.ports.map((port) => <div key={port.slot}><code>{port.hostIp}:{port.hostPort}</code></div>)}</dd></div>

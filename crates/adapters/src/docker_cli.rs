@@ -167,7 +167,7 @@ impl DockerCli {
     /// Runs a CLI attempt and drains both output streams within a fixed byte budget.
     ///
     /// The caller must reconcile Docker state after `outcome_unknown` before retrying
-    /// a change. A failed termination confirmation blocks subsequent attempts.
+    /// a change. A failed termination confirmation blocks subsequent changes, not reads.
     pub async fn run(
         &self,
         kind: CommandKind,
@@ -260,7 +260,7 @@ impl DockerCli {
         stdout_limit: usize,
     ) -> Result<CliOutcome, CliError> {
         let _guard = self.gate.lock().await;
-        if self.blocked.load(Ordering::Acquire) {
+        if kind == CommandKind::Change && self.blocked.load(Ordering::Acquire) {
             return Err(CliError::TerminationUnconfirmed("earlier attempt"));
         }
         let mut command = Command::new(&self.executable);
@@ -519,5 +519,45 @@ mod supervision_tests {
             )
             .await;
         assert!(matches!(outcome, Err(CliError::TerminationUnconfirmed(_))));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unconfirmed_termination_allows_reads_without_unlocking_changes() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join("docker");
+        std::fs::write(&executable, "#!/bin/sh\nprintf 'observed'\n").unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let create = || {
+            DockerCli::new(
+                executable.clone(),
+                root.path().into(),
+                root.path().into(),
+                "unix:///tmp/test.sock".into(),
+            )
+            .unwrap()
+        };
+        let cli = create();
+        cli.blocked.store(true, Ordering::Release);
+        let read = create()
+            .inspect_projected(
+                &["container".into(), "inspect".into()],
+                Duration::from_secs(1),
+            )
+            .await
+            .unwrap();
+        assert_eq!(read.stdout.bytes, b"observed");
+        assert!(!create().termination_verified());
+        assert!(matches!(
+            create()
+                .run(
+                    CommandKind::Change,
+                    &["compose".into(), "up".into()],
+                    Duration::from_secs(1)
+                )
+                .await,
+            Err(CliError::TerminationUnconfirmed(_))
+        ));
     }
 }

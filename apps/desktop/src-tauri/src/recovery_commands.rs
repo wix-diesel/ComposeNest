@@ -57,13 +57,22 @@ pub async fn resolve_operation(
                 backend
                     .runner
                     .run_exclusive(&request.instance_id, || async {
+                        let operation_id =
+                            composenest_adapters::recovery_view::inspection_operation(
+                                &backend.database,
+                                &backend.scope,
+                                &request.instance_id,
+                                &request.operation_id,
+                                request.recovery_request_id.as_deref(),
+                            )
+                            .map_err(PortEditError::Store)?;
                         composenest_adapters::recovery_view::inspect_recovery(
                             &backend.database,
                             probe,
                             &backend.recovery,
                             &backend.scope,
                             &request.instance_id,
-                            &request.operation_id,
+                            &operation_id,
                         )
                         .await
                         .map_err(PortEditError::Store)

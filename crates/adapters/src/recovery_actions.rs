@@ -25,7 +25,7 @@ use composenest_application::{
     recovery_view::{RecoverOperationRequest, RecoveryView},
     state_store::{PortAllocation, StoreConflict},
 };
-use composenest_domain::instance::RuntimeStatus;
+use composenest_domain::{clone_policy::RandomSource, instance::RuntimeStatus};
 
 /// Executes only a freshly permitted choice; caller-supplied allow flags are never trusted.
 pub async fn recover_operation(
@@ -109,6 +109,15 @@ async fn recover_locked(
                     confirmation_hash: record.confirmation_hash,
                 }
             } else {
+                let recovery_id = if let Some(receipt) = &known_receipt {
+                    receipt.operation_id.clone()
+                } else {
+                    let mut bytes = [0_u8; 16];
+                    crate::SystemRandom
+                        .fill_bytes(&mut bytes)
+                        .map_err(|_| PortEditError::Store(StoreConflict::Backend))?;
+                    format!("recover-{:032x}", u128::from_be_bytes(bytes))
+                };
                 let artifact = request.artifact_id.clone().ok_or(PortEditError::Rejected)?;
                 let hash = request
                     .confirmation_hash
@@ -128,7 +137,7 @@ async fn recover_locked(
                         confirmed_revision: request.expected_revision,
                         request_hash: String::new(),
                         instance_id: request.instance_id.clone(),
-                        operation_id: format!("recover-{}", request.context.request_id),
+                        operation_id: recovery_id,
                     },
                     spec_revision: request.candidate_revision,
                     source_artifact_id: artifact,

@@ -19,15 +19,11 @@ export class ApplicationClient {
   /** Collects fresh evidence; a lost restoration response is looked up by its stable identity. */
   async resolveOperation(instanceId: string, operationId: string): Promise<import("../generated/template-form").RecoveryView> {
     const pending = this.recoveryChanges.get(instanceId);
-    if (pending?.action === "restore_external") {
-      const restoredId = `recover-${pending.context.requestId}`;
-      try { await this.getOperation(restoredId); operationId = restoredId; }
-      catch (error) {
-        if (typeof error !== "object" || error === null || !("code" in error) || error.code !== "INSTANCE_MISSING") throw error;
-      }
-    }
-    const view = await this.createCall<import("../generated/template-form").RecoveryView>("resolve_operation", { context: this.context(), instanceId, operationId } as import("../generated/template-form").RecoveryRequest);
-    this.validateRecovery(view, instanceId, operationId);
+    const external = pending?.action === "restore_external";
+    const view = await this.createCall<import("../generated/template-form").RecoveryView>("resolve_operation", { context: this.context(), instanceId, operationId,
+      recoveryRequestId: external ? pending.context.requestId : null } as import("../generated/template-form").RecoveryRequest);
+    this.validateRecovery(view, instanceId, external ? undefined : operationId);
+    if (view.operationId !== operationId && (!external || view.receiptRequestId !== pending.context.requestId)) throw new Error("invalid_recovery_response");
     // Successful gated inspection establishes that no local change is still executing.
     // It never implies success; Failed/Hold remain explicit in the returned evidence.
     this.recoveryChanges.delete(instanceId);
@@ -52,12 +48,13 @@ export class ApplicationClient {
     this.recoveryChanges.set(view.instanceId, request);
     try {
       const result = await this.createCall<import("../generated/template-form").RecoveryView>("retry_operation", request);
-      this.validateRecovery(result, view.instanceId, action === "restore_external" ? `recover-${request.context.requestId}` : view.operationId);
+      this.validateRecovery(result, view.instanceId, action === "restore_external" ? undefined : view.operationId);
+      if (action === "restore_external" && (result.operationId === view.operationId || result.receiptRequestId !== request.context.requestId)) throw new Error("invalid_recovery_response");
       this.recoveryChanges.delete(view.instanceId);
       return result;
     } catch (error) {
       const code = typeof error === "object" && error !== null && "code" in error ? error.code : null;
-      if (["INSTANCE_STALE", "INSTANCE_MISSING", "INSTANCE_INPUT_INVALID", "INSTANCE_ACTION_UNAVAILABLE", "RECOVERY_HELD"].includes(String(code))) this.recoveryChanges.delete(view.instanceId);
+      if (action !== "restore_external" && ["INSTANCE_STALE", "INSTANCE_MISSING", "INSTANCE_INPUT_INVALID", "INSTANCE_ACTION_UNAVAILABLE"].includes(String(code))) this.recoveryChanges.delete(view.instanceId);
       throw error;
     }
   }

@@ -22,7 +22,7 @@ try {
     const port = { slot: "db", hostIp: "127.0.0.1", containerPort: 5432, hostPort: 15433 };
     window.progress = { operation: { id: "op", kind: "edit_port", status: "Failed", phase: "ports", startedAt: "2026-10-07 02:00:00" }, lastFailureStatus: "Failed",
       instance: { id: "target", name: "復旧対象DB", templateId: "custom.db", selectedVersion: "18", lifecycle: "managed", ports: [port], storageMethod: "bind", runtimeStatus: "stopped", lastOperation: { id: "op" }, connections: [] }, sequence: 1, completedAt: null };
-    window.recovery = { instanceId: "target", operationId: "op", attempt: 1, instanceRevision: 3, candidateRevision: 2, previousStatus: "Failed", currentRuntime: "stopped",
+    window.recovery = { instanceId: "target", operationId: "op", receiptRequestId: "original-request", attempt: 1, instanceRevision: 3, candidateRevision: 2, previousStatus: "Failed", currentRuntime: "stopped",
       actions: ["restore_ports", "retry_ports", "propose_ports", "abandon"], holdReasons: [], ports: [port], originalPorts: [{ ...port, hostPort: 15432 }], proposedPorts: [], artifactId: null, confirmationHash: null, files: [] };
     window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
     window.__TAURI_INTERNALS__ = { transformCallback: () => 1, invoke: async (command, args) => {
@@ -51,11 +51,18 @@ try {
         if (request.action === "propose_ports") {
           window.recovery.proposedPorts = window.recovery.ports.map((p) => ({ ...p, hostPort: 15434 }));
         } else if (request.action === "restore_external") {
-          const id = `recover-${request.context.requestId}`;
+          if (window.mode === "held_before_acceptance") return response(null, { code: "RECOVERY_HELD" });
+          const id = "recover-0123456789abcdef0123456789abcdef";
           window.recovery.operationId = id; window.recovery.actions = [];
+          window.recovery.receiptRequestId = request.context.requestId;
           window.progress.operation.id = id; window.progress.operation.kind = "recover"; window.progress.operation.status = "Succeeded";
           window.progress.instance.lastOperation.id = id; window.progress.sequence++; window.progress.completedAt = "2026-10-07 02:01:00";
           if (window.mode === "lost_external") throw new Error("private-backend-secret");
+          if (window.mode === "held_external") {
+            window.progress.operation.status = "OutcomeUnknown"; window.progress.completedAt = null;
+            window.recovery.holdReasons = ["CLI_TERMINATION_UNCONFIRMED"];
+            return response(null, { code: "RECOVERY_HELD" });
+          }
         } else {
           window.progress.operation.status = "OutcomeUnknown";
           window.recovery.actions = []; window.recovery.currentRuntime = "unknown";
@@ -88,6 +95,12 @@ try {
   assert.ok((await page.locator(".recovery-panel").innerText()).includes("Ready（利用可能）"));
   assert.ok((await page.locator(".recovery-panel").innerText()).includes("失敗"));
   assert.equal(await page.getByRole("heading", { name: "処理に失敗しました", exact: true }).count(), 1);
+  await open(); await page.evaluate(() => {
+    window.progress.operation.kind = "delete"; window.progress.instance.lifecycle = "retiring";
+    window.recovery.actions = ["abandon"]; window.recovery.currentRuntime = "absent";
+  }); await read();
+  assert.equal(await page.getByRole("button", { name: "安全に終了", exact: true }).count(), 0, "deleting a retiring instance cannot be abandoned by generic recovery");
+  assert.equal((await calls("retry_operation")).length, 0);
   for (const reason of ["CLI_TERMINATION_UNCONFIRMED", "STORAGE_MISSING", "OWNERSHIP_UNKNOWN", "RUNTIME_TARGET_MISMATCH"]) {
     await page.evaluate((reason) => { window.recovery.actions = []; window.recovery.holdReasons = [reason]; window.recovery.currentRuntime = "unknown"; }, reason); await read();
     assert.equal(await page.locator(".recovery-panel .actions button").count(), 0);
@@ -110,6 +123,7 @@ try {
   await page.evaluate(() => { window.mode = "normal"; }); await read();
   assert.equal((await calls("retry_operation")).length, 1, "reconciliation only reads; it never resends a change");
 
+  for (const failure of ["lost_external", "held_external", "held_before_acceptance"]) {
   await open(); await page.evaluate(() => {
     window.recovery.actions = ["restore_external"]; window.recovery.artifactId = "artifact"; window.recovery.confirmationHash = "confirmed-hash";
     window.recovery.files = [{ path: "compose.yaml", recordedHash: "a".repeat(64), observedHash: "b".repeat(64) }, { path: ".env", recordedHash: null, observedHash: "c".repeat(64) }];
@@ -127,14 +141,20 @@ try {
     await page.setViewportSize({ width, height: 900 }); assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     await page.screenshot({ path: `test-results/recovery-${width}.png`, fullPage: true });
   }
-  await page.evaluate(() => { window.mode = "lost_external"; }); await modal.getByRole("button", { name: "外部編集を退避して保存設定に戻す", exact: true }).click();
+  await page.evaluate((failure) => { window.mode = failure; }, failure); await modal.getByRole("button", { name: "外部編集を退避して保存設定に戻す", exact: true }).click();
   await page.getByText("復旧結果を確認できません。", { exact: false }).waitFor();
   const external = (await calls("retry_operation"))[0].request;
   assert.equal(external.artifactId, "artifact"); assert.equal(external.confirmationHash, "confirmed-hash");
   await page.evaluate(() => { window.mode = "normal"; }); await read();
-  await page.waitForURL(/operationId=recover-/);
+  const lookup = (await calls("resolve_operation")).at(-1).request;
+  assert.equal(lookup.recoveryRequestId, external.context.requestId, "uncertain receipt identity survives structured RECOVERY_HELD as well as lost replies");
+  if (failure === "held_before_acceptance") {
+    await page.getByRole("button", { name: "外部編集を退避して保存設定に戻す", exact: true }).waitFor();
+    assert.equal(await page.getByRole("button", { name: "外部編集を退避して保存設定に戻す", exact: true }).isDisabled(), false, "read-only inspection confirms non-acceptance");
+  } else { await page.waitForURL(/operationId=recover-/); }
   assert.equal((await calls("retry_operation")).length, 1);
   assert.equal(await page.getByText("private-backend-secret", { exact: false }).count(), 0);
+  }
   assert.deepEqual(errors, []);
   console.log("Recovery: Core holds, historical failure/current Ready, diffs, explicit confirmation, no optimistic success, duplicate guards, invalid responses and lost external receipt passed.");
 } finally { await browser?.close(); server.kill(); }

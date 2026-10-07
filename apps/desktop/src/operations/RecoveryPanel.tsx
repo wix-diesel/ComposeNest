@@ -10,6 +10,7 @@ const reasons: Record<string, string> = { CLI_TERMINATION_UNCONFIRMED: "前のCL
   RUNTIME_TARGET_MISMATCH: "記録済みのDocker接続先・Engineとの一致を確認できません。",
   STORAGE_MISSING: "以前存在した保存領域が見つかりません（Missing）。領域を作り直さず保留します。",
   STORAGE_UNVERIFIED: "保存領域の存在・所有情報を確認できません。",
+  SPEC_NOT_APPLIED: "保存設定は一度も適用されていないため、外部編集の復帰は利用できません。",
   OWNERSHIP_UNKNOWN: "実行資源の所有が不明です。名前だけでは変更を許可しません。",
   ARTIFACT_MODIFIED_OR_MISSING: "生成済み設定が外部編集されたか、所在を確認できません。",
   CONFIGURATION_MISMATCH: "コンテナの構成と保存設定が一致していません。",
@@ -20,8 +21,8 @@ const runtime: Record<string, string> = { ready: "Ready（利用可能）", stop
 const outcomes: Record<string, string> = { Failed: "失敗", OutcomeUnknown: "結果不明", AwaitingDecision: "判断待ち", Succeeded: "完了", Abandoned: "解決済み" };
 
 /** Displays fresh Core evidence and explicit choices, never optimistic mock success. */
-export function RecoveryPanel({ client, instanceId, operationId, status, onReconciled }: {
-  client: ApplicationClient; instanceId: string; operationId: string; status: string; onReconciled: () => void;
+export function RecoveryPanel({ client, instanceId, operationId, kind, status, onReconciled }: {
+  client: ApplicationClient; instanceId: string; operationId: string; kind: string; status: string; onReconciled: () => void;
 }) {
   const [view, setView] = useState<RecoveryView | null>(null);
   const [busy, setBusy] = useState(false);
@@ -67,7 +68,7 @@ export function RecoveryPanel({ client, instanceId, operationId, status, onRecon
     {view && <><dl className="operation-summary"><div><dt>直前の失敗・処理結果</dt><dd>{outcomes[view.previousStatus] ?? "未確認"}</dd></div>
       <div><dt>現在の実体（再確認結果）</dt><dd>{runtime[view.currentRuntime] ?? "未確認"}</dd></div><div><dt>処理ID / 試行</dt><dd>{view.operationId} / {view.attempt}</dd></div></dl>
       {view.holdReasons.length > 0 && <div className="notice warning"><strong>保留・確認が必要な理由</strong><ul>{view.holdReasons.map((reason) => <li key={reason}>{reasons[reason] ?? "安全条件を確認できません。変更は保留します。"}</li>)}</ul></div>}
-      <div className="actions">{view.actions.filter((action) => labels[action]).map((action) => <button className="btn" key={action} disabled={locked}
+      <div className="actions">{view.actions.filter((action) => labels[action] && !(kind === "delete" && action === "abandon")).map((action) => <button className="btn" key={action} disabled={locked}
         onClick={() => action === "propose_ports" ? void apply(view, action) : setConfirmation({ view, action })}>{labels[action]}</button>)}
         {view.proposedPorts.length > 0 && <button className="btn primary" disabled={locked || !view.actions.includes("propose_ports")}
           onClick={() => setConfirmation({ view, action: "confirm_ports" })}>候補ポートの差分を確認</button>}</div>

@@ -148,7 +148,7 @@ export function InstanceEdit({ client, instanceId }: { client: ApplicationClient
       <div><dt>構成の適用版</dt><dd>{view ? `保存 r${view.specRevision} / 適用 ${view.appliedSpecRevision === null ? "未確認" : `r${view.appliedSpecRevision}`}` : "未確認"}</dd></div>
       <div><dt>外部構成の照合</dt><dd>適用時に再確認</dd></div>
       <div><dt>直前の処理</dt><dd>{view?.state.operationId ? operation[view.state.operationStatus ?? ""] ?? "未確認" : "なし"}</dd></div>
-    </dl>{view?.state.operationId && <p className="operation-link">処理ID: <code>{view.state.operationId}</code> · {operationPhaseLabel(view.state.operationPhase)}</p>}
+    </dl>{view?.state.operationId && <p className="operation-link">処理ID: <code>{view.state.operationId}</code> · {operationPhaseLabel(view.state.operationPhase)} <button className="btn small" onClick={() => client.navigate({ page: "operation", operationId: view.state.operationId!, instanceId })}>復旧・結果確認</button></p>}
       <button className="btn small" disabled={busy} onClick={() => void refresh()}>{uncertain ? "受付を再確認" : "現在の状態を再確認"}</button>
     </section><section className="panel"><h2>ポート割当て</h2>{view?.ports.map((port) => <dl className="summary-list" key={port.slot}><div><dt>{port.slot} · 確定ポート</dt><dd>{port.committedPort}</dd></div><div><dt>元のポート / 予約</dt><dd>{port.oldPort} · {reservation[port.oldReservation] ?? "未確認"}</dd></div>{port.candidatePort !== null && <div><dt>変更候補 / 予約</dt><dd>{port.candidatePort} · {reservation[port.candidateReservation ?? "unknown"] ?? "未確認"}</dd></div>}</dl>)}</section>
       <div className="notice"><strong>ポート割当ては停止中も保持</strong><p>変更の適用を確認するまでは元の予約も保持します。途中失敗・結果不明の間は旧新予約を保持し、別の変更は実行できません。</p></div>

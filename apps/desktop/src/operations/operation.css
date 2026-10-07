@@ -19,3 +19,9 @@
 .operation-summary dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
 @media (max-width: 1050px) { .operation-columns { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 540px) { .operation-timeline li { gap: 8px; } .operation-timeline h3 { font-size: 12px; } .operation-screen .panel-title { flex-wrap: wrap; } }
+.recovery-panel { margin-top: 20px; }
+.recovery-panel .actions { flex-wrap: wrap; }
+.recovery-panel .btn { white-space: normal; }
+.recovery-panel ul { padding-left: 20px; }
+.recovery-diff { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 12px; }
+.recovery-diff th, .recovery-diff td { padding: 10px 6px; border-bottom: 1px solid var(--line); text-align: left; overflow-wrap: anywhere; }

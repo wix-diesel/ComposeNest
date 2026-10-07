@@ -9,6 +9,8 @@
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "allow-get-operation",
+    "allow-resolve-operation",
+    "allow-retry-operation",
     "allow-get-bootstrap",
     "allow-get-settings",
     "allow-save-settings",

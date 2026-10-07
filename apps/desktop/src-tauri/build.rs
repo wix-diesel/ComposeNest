@@ -3,6 +3,8 @@ fn main() {
         tauri_build::AppManifest::new().commands(&[
             "get_bootstrap",
             "get_operation",
+            "resolve_operation",
+            "retry_operation",
             "get_settings",
             "save_settings",
             "diagnose_runtime",

@@ -56,6 +56,8 @@ impl RecoverySession {
 pub(crate) struct Inspection {
     pub(crate) view: RecoveryView,
     pub(crate) evidence: RecoveryEvidence,
+    pub(crate) receipt: RequestReceipt,
+    pub(crate) container_id: Option<String>,
 }
 impl RecoveryProbe for Inspection {
     async fn inspect(&self, _: &RecoverableOperation) -> RecoveryEvidence {
@@ -111,7 +113,43 @@ pub(crate) async fn inspect_locked(
         "Succeeded" | "Abandoned"
     );
     let operation = database.recoverable(operation_id).ok();
-    let mut confirmed = database.confirmed_create(&receipt)?;
+    let mut confirmed = if unresolved {
+        database.confirmed_create(&receipt)?
+    } else {
+        use composenest_application::state_store::StateStore;
+        let saved = database
+            .clone_source(scope, instance)?
+            .ok_or(StoreConflict::UnresolvedOperation)?;
+        let target = database
+            .runtime_target(scope)?
+            .filter(|t| t.id == saved.target_id)
+            .ok_or(StoreConflict::Missing)?;
+        let snapshot_files = database.read(|db| {
+            let mut q = db.prepare("SELECT relative_path, contents FROM template_snapshot_files WHERE snapshot_id=(SELECT id FROM template_snapshots WHERE instance_id=?1) ORDER BY relative_path")?;
+            Ok(q.query_map([instance], |r| Ok(composenest_application::state_store::TemplateFile{relative_path:r.get(0)?,contents:r.get(1)?}))?.collect::<Result<Vec<_>,_>>()?)
+        }).map_err(|_| StoreConflict::Backend)?;
+        let storage = saved
+            .storage
+            .iter()
+            .map(|s| {
+                database
+                    .storage_allocation(instance, &s.slot)?
+                    .ok_or(StoreConflict::Missing)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        composenest_application::create_state::ConfirmedCreate {
+            instance_id: instance.into(),
+            scope_id: scope.into(),
+            project_name: progress.instance.project_name.clone(),
+            target,
+            spec_revision: saved.spec_revision,
+            selected_version: saved.selected_version,
+            snapshot_files,
+            inputs_json: saved.inputs_json,
+            ports: saved.ports,
+            storage,
+        }
+    };
     let original = database
         .port_change_revisions(operation_id)
         .ok()
@@ -352,6 +390,16 @@ pub(crate) async fn inspect_locked(
     {
         actions.push("restore_external".into());
     }
+    if unresolved
+        && kind == OperationKind::Recover
+        && previous_cli_exited
+        && target_matches
+        && storage_verified
+        && owned
+        && database.external_recovery(operation_id).is_ok()
+    {
+        actions.push("retry_external".into());
+    }
     if progress
         .instance
         .last_operation
@@ -370,6 +418,8 @@ pub(crate) async fn inspect_locked(
     })?;
     Ok(Inspection {
         evidence,
+        receipt,
+        container_id,
         view: RecoveryView {
             instance_id: instance.into(),
             operation_id: operation_id.into(),

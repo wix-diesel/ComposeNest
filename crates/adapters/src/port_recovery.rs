@@ -99,7 +99,7 @@ pub async fn recover_port_change<P: RecoveryProbe>(
         .map_err(PortEditError::Runner)?
 }
 
-async fn recover_locked(
+pub(crate) async fn recover_locked(
     database: &DatabaseWorker,
     probe: &DockerProbe,
     root: &Path,
@@ -301,7 +301,7 @@ async fn recover_locked(
         stages.confirmed = confirmed;
         select_revision(database, &mut stages, revision)?;
     }
-    if pending.is_none() && !confirming {
+    if pending.is_none() && !confirming && !complete {
         return Ok(PortRecoveryResult::Held);
     }
     for step in &operation.steps {
@@ -311,7 +311,13 @@ async fn recover_locked(
                 .map_err(PortEditError::Store)?;
         }
     }
-    let phase = if restore { "restore" } else { "ports" };
+    let phase = if restore {
+        "restore"
+    } else if complete && pending.is_none() {
+        "reconcile"
+    } else {
+        "ports"
+    };
     let attempt = database
         .retry(&operation.id, phase)
         .map_err(PortEditError::Store)?;
@@ -519,7 +525,13 @@ async fn apply(
     effects
         .run(
             StepCommand::Observe,
-            if ready {
+            if ready
+                && database
+                    .port_change_revisions(effects.operation_id)
+                    .is_err()
+            {
+                ExpectedResult::StateObserved
+            } else if ready {
                 ExpectedResult::ContainerRunning
             } else {
                 ExpectedResult::ContainerStopped
@@ -546,6 +558,12 @@ async fn apply(
         .await?;
     if restore {
         database.complete_port_restore(effects.operation_id, &id)
+    } else if ready
+        && database
+            .port_change_revisions(effects.operation_id)
+            .is_err()
+    {
+        database.complete_ready(effects.operation_id, &id)
     } else {
         database.complete_port_edit(effects.operation_id, &id)
     }

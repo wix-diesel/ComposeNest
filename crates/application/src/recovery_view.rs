@@ -1,6 +1,7 @@
 //! Non-sensitive recovery choices supplied by Core, never inferred by the UI.
 use crate::{RequestContext, query_service::PortView};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Fixed operation target for a fresh read-only recovery inspection.
 #[derive(Debug, Deserialize)]
@@ -12,6 +13,32 @@ pub struct RecoveryRequest {
     pub instance_id: String,
     /// Existing operation; rechecking never creates a replacement operation.
     pub operation_id: String,
+}
+
+/// Explicit confirmation of exactly one Core recovery choice and the inspected revisions.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecoverOperationRequest {
+    /// Stable request identity, reused until the response is reconciled.
+    pub context: RequestContext,
+    /// Fixed instance identity.
+    pub instance_id: String,
+    /// Existing operation identity.
+    pub operation_id: String,
+    /// Attempt shown by the fresh inspection.
+    pub expected_attempt: u64,
+    /// Instance version shown by the confirmation.
+    pub expected_revision: u64,
+    /// Candidate version shown by the confirmation.
+    pub candidate_revision: u64,
+    /// One of the permitted action identifiers returned by Core.
+    pub action: String,
+    /// Complete confirmed candidate ports, used only by confirm_ports.
+    pub ports: BTreeMap<String, u16>,
+    /// Artifact shown in the hash-only external edit preview.
+    pub artifact_id: Option<String>,
+    /// Exact external file-set hash confirmed by the user.
+    pub confirmation_hash: Option<String>,
 }
 
 /// Hash-only file change; file contents and credentials are never returned.

@@ -10,6 +10,19 @@ export interface RecoveryRequest {
   operationId: string;
 }
 
+export interface RecoverOperationRequest {
+  context: RequestContext;
+  instanceId: string;
+  operationId: string;
+  expectedAttempt: number;
+  expectedRevision: number;
+  candidateRevision: number;
+  action: string;
+  ports: Record<string, number>;
+  artifactId: string | null;
+  confirmationHash: string | null;
+}
+
 export interface RecoveryFileDiff {
   path: string;
   recordedHash: string | null;

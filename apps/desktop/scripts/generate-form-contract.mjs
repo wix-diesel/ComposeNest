@@ -3,7 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 // This deliberately supports only the simple public DTO shapes listed below.
 // Fail closed on an unfamiliar Rust field type or Serde attribute.
 const sources = {
-  recovery_view: ["RecoveryRequest", "RecoveryFileDiff", "RecoveryView"],
+  recovery_view: ["RecoveryRequest", "RecoverOperationRequest", "RecoveryFileDiff", "RecoveryView"],
   retained_storage: ["RetainedLocation", "RetainedArtifact", "RetainedInstance"],
   settings: ["SettingsView", "SaveSettingsRequest"],
   runtime_diagnostics: ["DiagnosticCheck", "RuntimeDiagnosis"],

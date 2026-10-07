@@ -505,6 +505,63 @@ fn available_fixture_port() -> u16 {
     }
 }
 
+#[tokio::test]
+async fn pending_change_read_failure_precedes_external_recovery_effects() {
+    let fixture = Fixture::new(OperationKind::EditPort).await;
+    let calls_before = fs::read_to_string(fixture.root.path().join("calls")).unwrap_or_default();
+    fixture
+        .db
+        .write(|db| {
+            db.execute_batch("ALTER TABLE pending_changes RENAME TO unavailable_pending_changes")?;
+            Ok(())
+        })
+        .unwrap();
+    let result = fixture.try_run(true, PortRecoveryAction::Restore).await;
+    assert!(matches!(
+        result,
+        Err(
+            composenest_adapters::port_edit_stages::PortEditError::Store(
+                composenest_application::state_store::StoreConflict::Backend
+            )
+        )
+    ));
+    assert_eq!(
+        fs::read_to_string(fixture.root.path().join("calls")).unwrap_or_default(),
+        calls_before
+    );
+    assert_eq!(fixture.db.recoverable("operation").unwrap().attempt, 1);
+}
+
+#[tokio::test]
+async fn confirming_original_create_ports_uses_the_new_pending_change() {
+    let fixture = Fixture::new(OperationKind::Create).await;
+    fixture.current(1);
+    let mut ports = fixture.db.confirmed_create(&fixture.receipt).unwrap().ports;
+    ports[0].host_port += 7;
+    fixture.prepare_confirmed_runtime(ports.clone()).await;
+    assert!(matches!(
+        fixture
+            .run(PortRecoveryAction::Confirm {
+                candidate_revision: 1,
+                ports
+            })
+            .await,
+        PortRecoveryResult::Completed(_)
+    ));
+    let applied: Option<u64> = fixture
+        .db
+        .read(|db| {
+            Ok(db.query_row(
+                "SELECT applied_spec_revision FROM instances WHERE id=?1",
+                [ID],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(applied, Some(2));
+    assert_eq!(fixture.active_reservations(), 1);
+}
+
 struct PriorCli(bool);
 impl RecoveryProbe for PriorCli {
     async fn inspect(&self, _: &RecoverableOperation) -> RecoveryEvidence {

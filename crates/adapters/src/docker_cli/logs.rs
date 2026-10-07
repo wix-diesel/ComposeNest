@@ -7,6 +7,7 @@ use tokio::sync::watch;
 pub struct LogSubscription {
     cancel: watch::Sender<bool>,
     buffer: Arc<StdMutex<LogBuffer>>,
+    termination_confirmed: Arc<AtomicBool>,
     task: Option<tokio::task::JoinHandle<Result<(), CliError>>>,
 }
 impl LogSubscription {
@@ -18,20 +19,45 @@ impl LogSubscription {
     pub fn snapshot<T>(&self, read: impl FnOnce(&LogBuffer) -> T) -> T {
         read(&self.buffer.lock().unwrap_or_else(|p| p.into_inner()))
     }
+    /// Reports confirmed cleanup separately from a supervisor that ended with an error.
+    pub fn termination_confirmed(&self) -> bool {
+        self.termination_confirmed.load(Ordering::Acquire)
+    }
     /// Confirms termination within the supervisor's fixed cleanup deadline.
-    pub async fn close(mut self) -> Result<(), CliError> {
-        let _ = self.cancel.send(true);
-        if let Some(task) = self.task.take() {
-            match task
+    /// An unconfirmed result stays unconfirmed on every subsequent call.
+    pub async fn close(&mut self) -> Result<(), CliError> {
+        self.cancel();
+        if let Some(task) = self.task.as_mut() {
+            let result = task
                 .await
-                .map_err(|_| CliError::TerminationUnconfirmed("log supervisor"))?
-            {
+                .map_err(|_| CliError::TerminationUnconfirmed("log supervisor"))
+                .and_then(|result| result);
+            self.task.take();
+            match result {
                 // A failed read still has confirmed cleanup; it remains visible in the snapshot.
-                Err(CliError::InvalidConfiguration("log read failed")) => (),
-                result => result?,
+                Err(CliError::InvalidConfiguration("log read failed")) => Ok(()),
+                result => result,
             }
+        } else if self.termination_confirmed() {
+            Ok(())
+        } else {
+            Err(CliError::TerminationUnconfirmed("log supervisor"))
         }
-        Ok(())
+    }
+    #[cfg(test)]
+    pub(crate) fn unconfirmed_for_test() -> Self {
+        let (cancel, _) = watch::channel(false);
+        let mut buffer = LogBuffer::default();
+        buffer.finished = true;
+        buffer.failed = true;
+        Self {
+            cancel,
+            buffer: Arc::new(StdMutex::new(buffer)),
+            termination_confirmed: Arc::new(AtomicBool::new(false)),
+            task: Some(tokio::spawn(async {
+                Err(CliError::TerminationUnconfirmed("test"))
+            })),
+        }
     }
 }
 impl Drop for LogSubscription {
@@ -54,12 +80,21 @@ impl DockerCli {
         let (cancel, receiver) = watch::channel(false);
         let buffer = Arc::new(StdMutex::new(LogBuffer::default()));
         let output = Arc::clone(&buffer);
+        let termination_confirmed = Arc::new(AtomicBool::new(false));
+        let confirmation = Arc::clone(&termination_confirmed);
         let cli = self.clone();
         let id = container_id.to_owned();
         let task = tokio::spawn(async move {
             let result = cli
                 .stream_logs(&id, receiver, out, err, Arc::clone(&output))
                 .await;
+            confirmation.store(
+                matches!(
+                    &result,
+                    Ok(()) | Err(CliError::InvalidConfiguration("log read failed"))
+                ),
+                Ordering::Release,
+            );
             let mut buffer = output.lock().unwrap_or_else(|p| p.into_inner());
             buffer.finished = true;
             buffer.failed = result.is_err();
@@ -68,6 +103,7 @@ impl DockerCli {
         Ok(LogSubscription {
             cancel,
             buffer,
+            termination_confirmed,
             task: Some(task),
         })
     }
@@ -114,7 +150,6 @@ impl DockerCli {
         let ended = tokio::select! {
             result = child.wait() => Some(result),
             _ = cancel.changed() => None,
-            _ = sleep(Duration::from_secs(24 * 60 * 60)) => None,
         };
         // Terminate this read-only group on every path, including a child that left pipes open.
         let terminated = group.terminate();
@@ -160,6 +195,13 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     #[tokio::test]
+    async fn repeated_close_preserves_unconfirmed_cleanup() {
+        let mut logs = LogSubscription::unconfirmed_for_test();
+        assert!(logs.close().await.is_err());
+        assert!(logs.close().await.is_err());
+        assert!(!logs.termination_confirmed());
+    }
+    #[tokio::test]
     async fn flood_is_masked_bounded_and_never_blocks_changes_or_stops_container() {
         let root = tempfile::tempdir().unwrap();
         let executable = root.path().join("docker");
@@ -191,7 +233,7 @@ while [ "$i" -lt 7000 ]; do printf 'diagnostic-line\n'; i=$((i+1)); done
             "unix:///tmp/log-test.sock".into(),
         )
         .unwrap();
-        let logs = cli
+        let mut logs = cli
             .follow_logs(&"a".repeat(64), &["secret-value".into()])
             .unwrap();
         timeout(Duration::from_secs(5), async {

@@ -20,6 +20,6 @@ export function DeleteDialog({ detail, disabled, onClose, onConfirm }: {
     <p>元の設定とComposeも残します。データの存在は削除処理で確認し、見つからない領域は再作成しません。</p>
     <label><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />データ・元の設定・Composeを残して環境を削除することを確認しました</label>
     {disabled && <p role="alert">現在の状態を再確認し、削除内容を確認し直してください。</p>}
-    <p>「取消し」は要求を送信しません。確定後に画面を閉じても処理は取り消されません。</p>
+    <p>「キャンセル」は要求を送信しません。確定後に画面を閉じても処理は取り消されません。</p>
   </ConfirmDialog>;
 }

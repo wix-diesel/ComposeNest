@@ -109,11 +109,11 @@ try {
     for (const value of ["/managed/data/target/data", "対象版 r3", "generic-service custom-17"])
       assert.ok((await page.getByRole("dialog").textContent()).includes(value), value);
     assert.equal(await confirm().isDisabled(), true);
-    assert.equal(await page.getByRole("button", { name: "取消し", exact: true }).evaluate((button) => document.activeElement === button), true);
+    assert.equal(await page.getByRole("button", { name: "キャンセル", exact: true }).evaluate((button) => document.activeElement === button), true);
     await acknowledge(); await page.keyboard.press("Escape");
     assert.equal((await calls("change_instance")).length, 0);
     assert.equal(await page.getByRole("button", { name: "環境を削除", exact: true }).evaluate((button) => document.activeElement === button), true);
-    await remove(); await acknowledge(); await page.getByRole("button", { name: "取消し", exact: true }).click();
+    await remove(); await acknowledge(); await page.getByRole("button", { name: "キャンセル", exact: true }).click();
     assert.equal((await calls("change_instance")).length, 0);
     await remove(); await acknowledge();
     await page.evaluate(() => { window.view.revision++; });

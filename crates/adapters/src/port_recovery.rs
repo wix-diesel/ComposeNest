@@ -326,6 +326,7 @@ pub(crate) async fn recover_locked(
         operation_id: &operation.id,
         attempt,
         sequence: operation.steps.last().map_or(1, |step| step.sequence + 1),
+        has_pending_change: pending.is_some() || confirming,
     };
     let result = apply(
         &mut effects,
@@ -361,6 +362,7 @@ struct Effects<'a> {
     operation_id: &'a str,
     attempt: u64,
     sequence: u64,
+    has_pending_change: bool,
 }
 
 impl Effects<'_> {
@@ -525,11 +527,7 @@ async fn apply(
     effects
         .run(
             StepCommand::Observe,
-            if ready
-                && database
-                    .port_change_revisions(effects.operation_id)
-                    .is_err()
-            {
+            if ready && !effects.has_pending_change {
                 ExpectedResult::StateObserved
             } else if ready {
                 ExpectedResult::ContainerRunning
@@ -558,11 +556,7 @@ async fn apply(
         .await?;
     if restore {
         database.complete_port_restore(effects.operation_id, &id)
-    } else if ready
-        && database
-            .port_change_revisions(effects.operation_id)
-            .is_err()
-    {
+    } else if ready && !effects.has_pending_change {
         database.complete_ready(effects.operation_id, &id)
     } else {
         database.complete_port_edit(effects.operation_id, &id)

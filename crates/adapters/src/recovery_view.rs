@@ -81,6 +81,28 @@ pub fn recovery_receipt(
         .ok_or(StoreConflict::Missing)
 }
 
+/// Resolves a lost external-restoration receipt without creating or replaying work.
+pub fn inspection_operation(
+    database: &DatabaseWorker,
+    scope: &str,
+    instance: &str,
+    original: &str,
+    recovery_request: Option<&str>,
+) -> Result<String, StoreConflict> {
+    recovery_receipt(database, scope, instance, original)?;
+    let Some(request) = recovery_request else {
+        return Ok(original.into());
+    };
+    let Some(receipt) = database.receipt(scope, request)? else {
+        return Ok(original.into());
+    };
+    if receipt.instance_id != instance {
+        return Err(StoreConflict::Missing);
+    }
+    database.external_recovery(&receipt.operation_id)?;
+    Ok(receipt.operation_id)
+}
+
 /// Inspects without changing files, Docker, reservations or historical outcome.
 /// The caller holds the instance gate until this evidence has been consumed.
 pub async fn inspect_recovery(
@@ -112,6 +134,15 @@ pub(crate) async fn inspect_locked(
         progress.operation.status.as_str(),
         "Succeeded" | "Abandoned"
     );
+    let applied_revision: Option<u64> = database
+        .read(|db| {
+            Ok(db.query_row(
+                "SELECT applied_spec_revision FROM instances WHERE id=?1",
+                [instance],
+                |r| r.get(0),
+            )?)
+        })
+        .map_err(|_| StoreConflict::Backend)?;
     let operation = database.recoverable(operation_id).ok();
     let mut confirmed = if unresolved {
         database.confirmed_create(&receipt)?
@@ -186,6 +217,9 @@ pub(crate) async fn inspect_locked(
         .await
         .is_ok();
     let mut reasons = Vec::new();
+    if !unresolved && applied_revision != Some(candidate_revision) {
+        reasons.push("SPEC_NOT_APPLIED".into());
+    }
     if !previous_cli_exited {
         reasons.push("CLI_TERMINATION_UNCONFIRMED".into());
     }
@@ -337,7 +371,8 @@ pub(crate) async fn inspect_locked(
                 && storage_verified
                 && owned
             {
-                if runtime == CurrentRuntime::Absent
+                if kind != OperationKind::Delete
+                    && runtime == CurrentRuntime::Absent
                     && operation.steps.iter().all(|s| {
                         matches!(
                             s.outcome,
@@ -382,6 +417,8 @@ pub(crate) async fn inspect_locked(
             .collect()
     });
     if !unresolved
+        && progress.instance.lifecycle == "managed"
+        && applied_revision == Some(candidate_revision)
         && previous_cli_exited
         && target_matches
         && storage_verified
@@ -418,11 +455,12 @@ pub(crate) async fn inspect_locked(
     })?;
     Ok(Inspection {
         evidence,
-        receipt,
+        receipt: receipt.clone(),
         container_id,
         view: RecoveryView {
             instance_id: instance.into(),
             operation_id: operation_id.into(),
+            receipt_request_id: receipt.request_id,
             attempt: operation.as_ref().map_or(0, |o| o.attempt),
             instance_revision: progress.instance.revision,
             candidate_revision,

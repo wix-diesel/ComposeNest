@@ -13,6 +13,8 @@ pub struct RecoveryRequest {
     pub instance_id: String,
     /// Existing operation; rechecking never creates a replacement operation.
     pub operation_id: String,
+    /// Optional accepted external-restoration request to look up in the trusted scope.
+    pub recovery_request_id: Option<String>,
 }
 
 /// Explicit confirmation of exactly one Core recovery choice and the inspected revisions.
@@ -61,6 +63,8 @@ pub struct RecoveryView {
     pub instance_id: String,
     /// Existing operation identity.
     pub operation_id: String,
+    /// Durable receipt identity, binding an independently allocated restoration operation.
+    pub receipt_request_id: String,
     /// Attempt observed by this inspection.
     pub attempt: u64,
     /// Current instance revision, checked on confirmation.

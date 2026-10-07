@@ -15,7 +15,7 @@ const storage = {
 export function TemplateForm({ initialPlan, onUpdate, onReview, locked = false }: {
   initialPlan: FormPlan;
   onUpdate: (plan: FormPlan, edit: PlanEdit | CloneEdit) => Promise<FormPlan>;
-  onReview?: (plan: FormPlan) => Promise<FormPlan>;
+  onReview?: (plan: FormPlan, trigger: HTMLButtonElement) => Promise<FormPlan>;
   locked?: boolean;
 }) {
   const [plan, setPlan] = useState(initialPlan);
@@ -45,7 +45,7 @@ export function TemplateForm({ initialPlan, onUpdate, onReview, locked = false }
     ?? form.ports.find((slot) => path === `ports.${slot.key}`)?.label
     ?? ({ displayName: "環境名", version: "バージョン", storageMethod: "保存方式", ports: "接続ポート" } as Record<string, string>)[path] ?? "設定";
 
-  async function apply(action: FormAction = {}, review = false) {
+  async function apply(action: FormAction = {}, reviewTrigger?: HTMLButtonElement) {
     if (inFlight.current) return;
     inFlight.current = true; setBusy(true); setFailure(null);
     let next = plan;
@@ -58,8 +58,8 @@ export function TemplateForm({ initialPlan, onUpdate, onReview, locked = false }
       // Flush edits against their original Version before requesting a switch.
       if (dirty) await update(planEdit(next, draft));
       if (action.version !== undefined || action.generate !== undefined || action.copy !== undefined || action.confirmSecret !== undefined) await update(planEdit(next, emptyDraft(), action));
-      if (review && onReview) {
-        const refreshed = await onReview(next);
+      if (reviewTrigger && onReview) {
+        const refreshed = await onReview(next, reviewTrigger);
         if (refreshed.kind !== next.kind || refreshed.view.planId !== next.view.planId || refreshed.view.planRevision < next.view.planRevision) throw new Error("invalid_plan_response");
         setPlan(refreshed);
       }
@@ -126,7 +126,7 @@ export function TemplateForm({ initialPlan, onUpdate, onReview, locked = false }
       </section>
       <div className="form-footer"><small>{busy ? "設定を確認しています…" : "確定前にポートと設定を再確認します。"}</small><div className="actions">
         <button className="btn" type="submit" disabled={!dirty}>入力を反映</button>
-        {onReview && <button className="btn primary" type="button" onClick={() => { void apply({}, true); }}>{plan.kind === "clone" ? "複製内容を確認" : "作成内容を確認"}</button>}
+        {onReview && <button className="btn primary" type="button" onClick={(event) => { void apply({}, event.currentTarget); }}>{plan.kind === "clone" ? "複製内容を確認" : "作成内容を確認"}</button>}
       </div></div>
     </div><aside><section className="panel"><h2>{plan.kind === "clone" ? "複製元の環境" : "設定する環境"}</h2><strong className="summary-title">{plan.kind === "clone" ? plan.view.sourceName : form.name}</strong><p>{form.description}</p>
       <dl className="summary-list"><div><dt>テンプレート</dt><dd>{form.templateVersion}</dd></div><div><dt>環境名</dt><dd>{plan.kind === "clone" ? plan.view.sourceName : draft.displayName ?? view.displayName}</dd></div>

@@ -25,7 +25,7 @@
 | [diagnostics.html](ui-mockups/diagnostics.html) | [#63](https://github.com/wix-diesel/ComposeNest/issues/63) | 実CLI・Compose・Engine・platform・管理ルート検査 |
 | [retained.html](ui-mockups/retained.html) | [#65](https://github.com/wix-diesel/ComposeNest/issues/65) | 実保存領域と元設定の所在、存在・所有状態の再確認 |
 | [settings.html](ui-mockups/settings.html) | [#64](https://github.com/wix-diesel/ComposeNest/issues/64) | 保存方式の永続化、実管理ルート、平文保存・手動更新の案内 |
-| 全10画面と確認dialog | [#68](https://github.com/wix-diesel/ComposeNest/issues/68) | 両テーマ・通常幅／狭幅・キーボード・例外状態の検証 |
+| 全10画面と確認dialog | [#68](https://github.com/wix-diesel/ComposeNest/issues/68)、[検証対応表](ui-validation.md) | 両テーマ・通常幅／狭幅・キーボード・例外状態の検証。未接続機能は対応表に記録 |
 
 ## 共通の実装条件
 

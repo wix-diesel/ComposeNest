@@ -2,23 +2,25 @@ import { useEffect, useId, useRef, type ReactNode } from "react";
 import { ja } from "../messages";
 
 /** Native modal with safe initial focus, Escape, focus trapping and focus restoration. */
-export function ConfirmDialog({ title, children, onClose, onConfirm, confirmLabel = ja.confirm, confirmDisabled = false }: {
+export function ConfirmDialog({ title, children, onClose, onConfirm, confirmLabel = ja.confirm, confirmDisabled = false, returnFocus }: {
   title: string; children: ReactNode; onClose: () => void;
   onConfirm?: () => void; confirmLabel?: string; confirmDisabled?: boolean;
+  /** Preserves the initiating control when asynchronous preparation temporarily disables it. */
+  returnFocus?: HTMLElement | null;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const bodyId = useId();
   useEffect(() => {
     const dialog = ref.current;
-    const opener = document.activeElement;
+    const opener = returnFocus ?? document.activeElement;
     dialog?.showModal();
     dialog?.querySelector<HTMLButtonElement>("button")?.focus();
     return () => {
       dialog?.close();
       if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
     };
-  }, []);
+  }, [returnFocus]);
   return <dialog ref={ref} className="dialog" aria-labelledby={titleId} aria-describedby={bodyId}
     onKeyDown={(event) => {
       if (event.key !== "Tab") return;

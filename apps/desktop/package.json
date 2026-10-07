@@ -5,6 +5,7 @@
   "type": "module",
   "packageManager": "pnpm@11.19.0",
   "scripts": {
+    "test:ui": "node scripts/ui-validation.test.mjs",
     "test:operation": "node scripts/operation-screen.test.mjs",
     "test:retained": "node scripts/retained.test.mjs",
     "test:settings": "node scripts/settings.test.mjs",

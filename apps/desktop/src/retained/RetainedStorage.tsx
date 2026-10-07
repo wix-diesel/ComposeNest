@@ -58,7 +58,7 @@ export function RetainedStorage({ client, headingRef, onAbout }: {
     <section className="panel" aria-label="削除した環境の保存領域">
       <div className="panel-title"><h2>削除した環境の保存領域</h2><small>{loaded ? `${count} 件` : "—"}</small></div>
       {loaded && (items.length === 0 ? <p>保持データはありません。</p> : count === 0 ? <p>削除した環境に保存領域の割当てはありません。元の設定の所在を確認できます。</p> :
-        <div className="table-wrap"><table><thead><tr>{["元の環境", "保存方式", "保存先・識別名", "環境の削除日", "状態・最終観測"].map((label) => <th key={label} scope="col">{label}</th>)}</tr></thead>
+        <div className="table-wrap" role="region" aria-label="保持データの表（横スクロール可能）" tabIndex={0}><table><thead><tr>{["元の環境", "保存方式", "保存先・識別名", "環境の削除日", "状態・最終観測"].map((label) => <th key={label} scope="col">{label}</th>)}</tr></thead>
           <tbody>{items.flatMap((item) => item.locations.map((location) => {
             const [label, style] = presence(location);
             return <tr key={`${item.instance.id}/${location.storage.slot}`}><td><strong>{item.instance.name}</strong><small>{item.serviceName} {item.instance.selectedVersion}</small><small>環境ID: <code>{item.instance.id}</code></small></td>

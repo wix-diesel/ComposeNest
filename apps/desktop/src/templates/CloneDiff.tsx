@@ -19,7 +19,7 @@ export function CloneDiff({ plan, draft, renderCandidate }: {
   const row = (path: string, label: string, source: ReactNode, candidate: ReactNode, labels: string[], editable = true) => <tr key={path} data-diff-path={path}>
     <th scope="row">{label}</th><td>{source}</td><td>{editable ? renderCandidate?.(path) ?? candidate : candidate}</td><td>{status(path, labels)}</td>
   </tr>;
-  return <div className="table-wrap clone-diff"><table><caption className="sr-only">複製元と複製先の設定差分</caption>
+  return <div className="table-wrap clone-diff" role="region" aria-label="複製元と複製先の設定差分（横スクロール可能）" tabIndex={0}><table><caption className="sr-only">複製元と複製先の設定差分</caption>
     <thead><tr><th>設定項目</th><th>複製元</th><th>複製先</th><th>変更内容</th></tr></thead><tbody>
       {row("displayName", "環境名・用途名", plan.sourceName, draft?.displayName ?? plan.displayName, [draft?.displayName !== undefined ? "ユーザー入力・未反映" : "用途名を指定"])}
       {row("version", "バージョン", plan.sourceVersion, plan.version, [plan.version === plan.sourceVersion ? "引継ぎ" : "変更", "保存済みSnapshot内のVersion"])}

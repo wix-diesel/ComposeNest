@@ -21,3 +21,7 @@
 .instance-actions h1, .instance-actions .subtitle { overflow-wrap: anywhere; }
 @media (max-width: 1000px) { .detail-columns { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 540px) { .instance-actions .instance-state { grid-template-columns: minmax(0, 1fr); } }
+
+.connection-value { white-space: pre-wrap; }
+.content-message { display: block; margin-top: 8px; }
+.detail-compose { background: var(--soft); border: 1px solid var(--line); border-radius: 8px; padding: 18px; font-size: 12px; line-height: 1.7; overflow: auto; max-height: 560px; white-space: pre; }

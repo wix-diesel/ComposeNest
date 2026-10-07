@@ -1,5 +1,7 @@
 import { useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { InstanceDetailView, JsonValue } from "../generated/template-form";
+import type { ApplicationClient } from "../ipc/ApplicationClient";
+import { ConnectionValue, InstanceCompose } from "./InstanceContent";
 import "./instance-detail.css";
 
 const tabs = ["概要・接続情報", "ログ", "Compose"];
@@ -7,8 +9,8 @@ const storageLabels: Record<string, string> = { bind: "bind mount", volume: "nam
 const presenceLabels: Record<string, string> = { present: "存在を確認済み", missing: "見つかりません", not_materialized: "未作成", unverified: "未確認" };
 const valueText = (value: JsonValue | null) => value === null ? "未設定" : typeof value === "string" ? value : JSON.stringify(value);
 
-/** Keyboard-accessible detail panels; unconnected features remain explicitly unavailable. */
-export function InstanceDetailTabs({ detail, deleteAction }: { detail: InstanceDetailView | null; deleteAction?: ReactNode }) {
+/** Keyboard-accessible panels with sensitive content scoped to the active tab and saved revision. */
+export function InstanceDetailTabs({ client, detail, deleteAction }: { client: ApplicationClient; detail: InstanceDetailView | null; deleteAction?: ReactNode }) {
   const [tab, setTab] = useState(0);
   const buttons = useRef<Array<HTMLButtonElement | null>>([]);
   function keyboard(event: KeyboardEvent<HTMLButtonElement>, index: number) {
@@ -25,15 +27,15 @@ export function InstanceDetailTabs({ detail, deleteAction }: { detail: InstanceD
         ref={(element) => { buttons.current[index] = element; }} onClick={() => setTab(index)} onKeyDown={(event) => keyboard(event, index)}>{label}</button>)}
     </div>
     {tabs.map((label, index) => <div key={label} role="tabpanel" id={`detail-panel-${index}`} aria-labelledby={`detail-tab-${index}`} hidden={tab !== index} tabIndex={0}>
-      {index === 0 ? detail ? <Overview detail={detail} /> : <section className="panel"><p>詳細情報を取得できていません。現在の状態を再確認してください。</p></section>
+      {tab === index && (index === 0 ? detail ? <Overview key={`${detail.instance.id}:${detail.instance.revision}:${detail.instance.specRevision}`} client={client} detail={detail} /> : <section className="panel"><p>詳細情報を取得できていません。現在の状態を再確認してください。</p></section>
         : index === 1 ? <section className="panel"><div className="panel-title"><h2>サービスログ</h2><div className="actions"><button className="btn" disabled>追従を開始</button><button className="btn" disabled>再読込み</button></div></div><p>ログ購読は未接続です。ログは取得していません。</p></section>
-          : <section className="panel"><div className="panel-title"><h2>Compose</h2><button className="btn" disabled>原文を表示</button></div><p>Compose閲覧は未接続です。ファイルの内容は取得していません。</p></section>}
+          : detail ? <InstanceCompose key={`${detail.instance.id}:${detail.instance.revision}:${detail.instance.specRevision}`} client={client} instanceId={detail.instance.id} revision={detail.instance.specRevision} /> : <section className="panel"><p>詳細情報を取得できていません。現在の状態を再確認してください。</p></section>)}
       {index === 0 && deleteAction}
     </div>)}
   </div>;
 }
 
-function Overview({ detail }: { detail: InstanceDetailView }) {
+function Overview({ client, detail }: { client: ApplicationClient; detail: InstanceDetailView }) {
   const view = detail.instance;
   const localOnly = view.connections.length > 0 && view.connections.every(({ port }) => port.hostIp === "127.0.0.1" || port.hostIp === "::1");
   return <>
@@ -41,21 +43,20 @@ function Overview({ detail }: { detail: InstanceDetailView }) {
       <section className="panel"><h2>接続情報</h2>
         {!view.connections.length && <p>接続情報は登録されていません。</p>}
         {view.connections.map((connection) => <div className="detail-connection" key={connection.slot}><h3>{connection.label}</h3><dl>
-          <div><dt>ホスト</dt><dd><code>{connection.port.hostIp}</code></dd></div>
-          <div><dt>ポート</dt><dd><code>{connection.port.hostPort}</code></dd></div>
+          <div><dt>ホスト</dt><dd><ConnectionValue client={client} instanceId={view.id} revision={view.specRevision} label="ホスト" text={connection.port.hostIp} /></dd></div>
+          <div><dt>ポート</dt><dd><ConnectionValue client={client} instanceId={view.id} revision={view.specRevision} label="ポート" text={String(connection.port.hostPort)} /></dd></div>
           {connection.inputSlots.map((slot) => {
             const input = view.inputs.find((item) => item.slot === slot);
-            return <div key={slot}><dt>{input?.label ?? slot}</dt><dd><span>{!input ? "未取得" : input.secret ? "••••••••（非表示）" : valueText(input.value)}</span>
-              {input?.secret && <button className="btn small" disabled>表示</button>}</dd></div>;
+            return <div key={slot}><dt>{input?.label ?? slot}</dt><dd>{input ? <ConnectionValue client={client} instanceId={view.id} revision={view.specRevision} label={input.label} slot={input.secret ? slot : undefined} text={valueText(input.value)} /> : "未取得"}</dd></div>;
           })}
         </dl></div>)}
-        <p className="detail-note">確定済みの接続設定です。接続の可否は実行状態を確認してください。秘密情報の表示・コピーは未接続です。</p>
+        <p className="detail-note">確定済みの接続設定です。接続の可否は実行状態を確認してください。秘密情報は明示操作で表示・コピーできます。</p>
       </section>
       <section className="panel"><h2>データの保存先</h2>
         {!view.storage.length && <p>保存領域は登録されていません。</p>}
         {view.storage.map((storage) => <div className="detail-storage" key={storage.slot}><h3>{storage.slot} · {storageLabels[storage.method] ?? storage.method}</h3>
           <code className="detail-path">{detail.locations.find((location) => location.slot === storage.slot)?.location ?? "保存先は未取得"}</code>
-          <p>{presenceLabels[storage.presence] ?? "未確認"}（保存値）</p>
+          <p>{presenceLabels[storage.presence] ?? "未確認"}（保存値）{storage.method === "volume" && " · Dockerが管理するボリューム名です。通常のフォルダーではありません。"}</p>
         </div>)}
         <p className="detail-note">環境を停止・削除してもデータは保持されます。保存先の存在を今回確認したものではありません。</p>
       </section>

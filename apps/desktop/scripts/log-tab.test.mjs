@@ -33,6 +33,16 @@ export async function testLogs({ page, open, calls }) {
   await tab("ログ").click(); await active(1);
   await page.evaluate(() => { location.hash = "#/instances"; }); await active(0);
 
+  await show(); await active(1);
+  const unconfirmed = (await calls("subscribe_logs"))[0].request.context.requestId;
+  await page.evaluate(() => { window.mode = "logs_unsubscribe_failure"; });
+  await page.getByRole("button", { name: "追従を停止", exact: true }).click();
+  await page.getByRole("alert").waitFor();
+  await page.evaluate(() => { window.mode = "normal"; });
+  await page.getByRole("button", { name: "再読込み", exact: true }).click(); await active(1);
+  await page.waitForFunction((id) => !window.activeLogs.has(id), unconfirmed);
+  assert.ok((await calls("unsubscribe_logs")).filter((c) => c.request.subscriptionId === unconfirmed).length >= 2, "unconfirmed cleanup is retried before starting another session");
+
   await show("logs_delay");
   await page.waitForFunction(() => typeof window.finishLogs === "function");
   await tab("Compose").click(); await active(0);

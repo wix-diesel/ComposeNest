@@ -52,7 +52,10 @@ try {
           droppedLines: window.mode === "logs_bad_count" ? -1 : window.logDropped ?? 0, truncatedLines: window.logTruncated ?? 0,
           finished: window.logFinished ?? false, failed: window.logFailed ?? false });
       }
-      if (command === "unsubscribe_logs") { window.activeLogs?.delete(request.subscriptionId); return response(true); }
+      if (command === "unsubscribe_logs") {
+        if (window.mode === "logs_unsubscribe_failure") throw new Error(window.secret);
+        window.activeLogs?.delete(request.subscriptionId); return response(true);
+      }
       if (command === "get_instance_secret") {
         if (window.mode === "secret_failure") throw new Error(window.secret);
         if (window.mode === "secret_delay") await new Promise((resolve) => { window.finishContent = resolve; });

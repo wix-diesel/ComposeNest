@@ -15,6 +15,7 @@ export function InstanceLogs({ client, instanceId, revision }: { client: Applica
   const mounted = useRef(false);
   const cleanup = useRef<Promise<void>>(Promise.resolve());
   const cleanupFailed = useRef(false);
+  const pendingReleases = useRef(new Set<string>());
 
   useEffect(() => {
     mounted.current = true;
@@ -29,7 +30,8 @@ export function InstanceLogs({ client, instanceId, revision }: { client: Applica
     let session: ReturnType<ApplicationClient["subscribeLogs"]> | undefined;
     setBusy(true); setMessage(null);
     function release(id: string) {
-      const result = client.unsubscribeLogs(id).catch(() => {
+      pendingReleases.current.add(id);
+      const result = client.unsubscribeLogs(id).then(() => { pendingReleases.current.delete(id); }).catch(() => {
         cleanupFailed.current = true;
         if (mounted.current) setMessage("購読解除を確認できませんでした。再読込みしてください。環境は停止しません。未取得の購読は自動解除されます。");
       });
@@ -53,6 +55,9 @@ export function InstanceLogs({ client, instanceId, revision }: { client: Applica
     void (async () => {
       await cleanup.current;
       if (disposed) return;
+      for (const id of pendingReleases.current) await release(id);
+      if (disposed) return;
+      cleanupFailed.current = pendingReleases.current.size > 0;
       if (cleanupFailed.current) { setBusy(false); setMessage("購読解除を確認できませんでした。再読込みしてください。環境は停止しません。未取得の購読は自動解除されます。"); return; }
       session = client.subscribeLogs(instanceId, revision);
       try {

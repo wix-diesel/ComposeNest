@@ -195,7 +195,7 @@ pub(super) fn update_clone(
     edit: CloneEdit,
     store: &DatabaseWorker,
     clock: &TestClock,
-    random: &mut TestRandom,
+    random: &mut impl RandomSource,
 ) -> composenest_application::clone_plan::ClonePlanView {
     plans
         .update_plan(

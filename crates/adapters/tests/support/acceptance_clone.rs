@@ -9,7 +9,7 @@ use composenest_application::{
     template_catalog::{TemplateOrigin, prepare_revision},
 };
 
-use super::{FreePorts, TestClock, TestRandom, clone_edit, store, update_clone};
+use super::{FreePorts, TestClock, clone_edit, store, update_clone};
 
 // Exercise the real Clone policy and durable confirmation before generating Compose.
 pub(crate) fn confirm_clone(
@@ -42,7 +42,7 @@ pub(crate) fn confirm_clone(
     db.commit_instance(&saved_source).unwrap();
     let before = db.clone_source("scope", &source.id).unwrap().unwrap();
     let clock = TestClock(Cell::new(0));
-    let mut random = TestRandom::default();
+    let mut random = composenest_adapters::SystemRandom;
     let mut plans = ClonePlans::default();
     let first = plans
         .prepare_clone(
@@ -99,7 +99,10 @@ pub(crate) fn confirm_clone(
         source.storage[0].resource_identity
     );
     let after = db.clone_source("scope", &source.id).unwrap().unwrap();
-    assert_eq!(before.inputs_json, after.inputs_json);
+    assert!(
+        before.inputs_json == after.inputs_json,
+        "Source inputs changed"
+    );
     assert_eq!(before.revision, after.revision);
     assert_eq!(
         before.storage[0].resource_identity,

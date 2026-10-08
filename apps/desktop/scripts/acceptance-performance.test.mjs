@@ -45,8 +45,9 @@ try {
       const response = await window.__TAURI_INTERNALS__.invoke("list_instances", { request: { apiVersion: 1, requestId: "fixture" } });
       window.uiRows = Array.from({ length: 30 }, (_, index) => ({ ...response.result[0],
         id: `instance-${index}`, name: `受入環境 ${String(index).padStart(2, "0")}`,
-        templateId: index % 2 ? "redis" : "postgresql", storageMethod: index % 2 ? "volume" : "bind",
+        templateId: index % 2 ? "redis" : "postgresql", selectedVersion: index % 2 ? "8.2" : "18", storageMethod: index % 2 ? "volume" : "bind",
         runtimeStatus: index % 2 ? "stopped" : "ready",
+        observation: { ...response.result[0].observation, runtimeState: index % 2 ? "stopped" : "running", health: index % 2 ? null : "healthy" },
       }));
     });
     await page.getByRole("button", { name: "更新", exact: true }).click();
@@ -67,10 +68,10 @@ try {
         await page.getByText("1 / 30 環境", { exact: true }).waitFor(); await count(1)();
       });
       await search.fill("");
-      await measure(page, `${theme}/${view}/filter`, () => filters.getByRole("button", { name: "停止中", exact: true }).click(), async () => {
+      await measure(page, `${theme}/${view}/filter`, () => filters.getByRole("button", { name: "停止中" }).click(), async () => {
         await page.getByText("15 / 30 環境", { exact: true }).waitFor(); await count(15)();
       });
-      await filters.getByRole("button", { name: "すべて", exact: true }).click();
+      await filters.getByRole("button", { name: "すべて" }).click();
       if (view === "grid") await measure(page, `${theme}/${view}/sort`, () => page.getByRole("button", { name: "環境名", exact: true }).click(), async () => {
         assert.equal(await rows.first().locator(".environment-name").textContent(), run % 2 ? "受入環境 29" : "受入環境 00");
       });
@@ -90,7 +91,7 @@ try {
   const labels = [...new Set(samples.map((sample) => sample.label))];
   const summary = labels.map((label) => {
     const values = samples.filter((sample) => sample.label === label).map((sample) => sample.ms).sort((a, b) => a - b);
-    return { label, count: values.length, medianMs: values[Math.floor(values.length / 2)], p95Ms: values[Math.ceil(values.length * 0.95) - 1], maxMs: values.at(-1) };
+    return { label, count: values.length, medianMs: (values[Math.floor((values.length - 1) / 2)] + values[Math.floor(values.length / 2)]) / 2, p95Ms: values[Math.ceil(values.length * 0.95) - 1], maxMs: values.at(-1) };
   });
   await mkdir("test-results", { recursive: true });
   await writeFile(output, JSON.stringify({ status, timestamp: new Date().toISOString(), commit: process.env.GITHUB_SHA ?? null,

@@ -177,7 +177,7 @@ Image取得待ちが発生した場合は実経過と取得待ちを別記し、
 | 実施 | 結果・理由 |
 | --- | --- |
 | frozen lockfile取得・frontend build/型検査・check:contracts | 成功 |
-| test:security / test:navigation / formModel・listModel | 成功（個別件数はPR検証欄） |
+| test:security / test:navigation / formModel・listModel | 成功（2 / 3 / 10テスト） |
 | Rust fmt | 成功。ローカルRustは通常codegenでゼロ長objectによるarchive生成失敗の後、CARGO_INCREMENTAL=0・CODEGEN_UNITS=1・DEBUG=0で再実行し成功 |
 | Rust test/clippy | Domain/Application/Adaptersの336テスト成功、Docker必要5件ignore。3 crateのall-targets clippy（-D warnings）成功。native workspaceはCIで確認する |
 | SQLite保存30件のquery測定 | 一覧20回: 中央値5.304ms / p95 6.659ms / max 8.555ms。詳細20回: 中央値0.876ms / p95 1.153ms / max 1.351ms。コンテナ/GUIを除く |
@@ -186,3 +186,13 @@ Image取得待ちが発生した場合は実経過と取得待ちを別記し、
 | 対象3OSのnative主要フロー・期限実測・初心者観察 | 未実施。上記票へ環境と結果を追記する |
 
 CIの成功だけで最後の行を合格に変更しない。配布受入とTemplate昇格の未完了は維持する。
+
+### CI初回の部分確認（2026-10-08）
+
+[CI #395](https://github.com/wix-diesel/ComposeNest/actions/runs/37742242937)、head `31fbb434`。15 job中14成功、frontend jobは追加した性能計測の「停止中」ボタンlocatorで失敗。件数付きのaccessible nameを完全一致で検索したことが原因で、部分一致へ修正して再実行する。
+
+- Ubuntu 24.04.5 x86_64、Docker Engine/CLI 28.0.4、Compose 2.38.2でPostgreSQL 17/18・Redis 8.2のbind/named作成・認証・stop/start・再作成と全4方向のClone分離が成功。元marker欠如と先書込みの元無影響を確認した。
+- digest: PostgreSQL 18 `postgres@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336`、17 `postgres@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3`、Redis `redis@sha256:47670742d7924adbcdb404d1288b6327815b23141969c0939b8e5d61f78c2634`。
+- Windows x86_64 / macOS ARM64 / Ubuntu x86_64のCore境界・30件SQLite計測、3OS root権限、native workspace test/Clippy、障害注入、Docker復旧・保持削除、Compose契約が成功。CI root権限の成功は通常利用者のnative全フローの代替ではない。
+- frontend build/型検査・契約・全画面別test・52組のmock/React比較は成功。新しい30件UI計測は失敗のため合格に数えない。結果JSONと画像は同runのartifactを参照する。
+- Clone受入のID生成は実OS乱数を使い、並行実行で固定volume名を共有しない。

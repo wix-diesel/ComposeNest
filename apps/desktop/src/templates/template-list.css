@@ -6,7 +6,7 @@
 .template-add { margin-top: 24px; }
 .template-add > div { min-width: 0; }
 .template-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; }
-.template-card { padding: 26px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); min-width: 0; overflow-wrap: anywhere; }
+.template-card { padding: 26px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); min-width: 0; overflow-wrap: anywhere; }
 .template-card-top, .template-bottom { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .template-service { width: 46px; height: 46px; background: var(--soft); border-radius: 12px; display: grid; place-items: center; color: var(--green); }
 .template-card h2 { font-size: 22px; margin: 17px 0 7px; }

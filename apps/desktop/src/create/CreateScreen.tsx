@@ -58,6 +58,7 @@ function PlanScreen({ client, selectionId, kind, returnTo = "instances" }: {
   const [notice, setNotice] = useState<string | null>(null);
   const inFlight = useRef(false);
   const active = useRef(false);
+  const reviewTrigger = useRef<HTMLButtonElement | null>(null);
 
   function remember(next: PlanView) { saved.plan = next; if (active.current) setPlan(next); }
   function accepted(receipt: CreateReceipt) {
@@ -205,7 +206,8 @@ function PlanScreen({ client, selectionId, kind, returnTo = "instances" }: {
             remember(next); return "sourceId" in next ? { kind: "clone", view: next } : { kind: "create", view: next };
           } catch (error) { sourceFailure(error); throw error; }
         }}
-        onReview={async (current) => {
+        onReview={async (current, trigger) => {
+          reviewTrigger.current = trigger;
           const next = await refreshed(current.view.planId);
           remember(next); setConsent(false); setConfigurationOnly(false);
           if (next.concerns.length === 0) { setNotice(null); setReview(next); }
@@ -219,7 +221,7 @@ function PlanScreen({ client, selectionId, kind, returnTo = "instances" }: {
         <button className="btn primary" disabled={busy} onClick={() => { void confirm(); }}>同じ内容で再送</button></div>
     </section>}
     <button className="btn" disabled={busy || uncertain} onClick={() => { void cancel(); }}>作成を取り消す</button>
-    {review && <ConfirmDialog title={clone ? "設定を複製して環境を作成しますか？" : "この内容で環境を作成しますか？"} onClose={() => setReview(null)}
+    {review && <ConfirmDialog title={clone ? "設定を複製して環境を作成しますか？" : "この内容で環境を作成しますか？"} onClose={() => setReview(null)} returnFocus={reviewTrigger.current}
       confirmLabel="作成・起動を確定" confirmDisabled={!consent || (clone && !configurationOnly) || busy} onConfirm={() => { void confirm(); }}>
       <dl className="create-summary"><div><dt>環境名</dt><dd>{review.displayName}</dd></div>
         <div><dt>テンプレート</dt><dd>{review.templateForm.name} / {review.templateForm.templateVersion}</dd></div>

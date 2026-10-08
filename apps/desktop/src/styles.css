@@ -10,6 +10,7 @@
 body { margin: 0; }
 button { font: inherit; color: inherit; cursor: pointer; }
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--green); outline-offset: 4px; }
+.table-wrap:focus-visible { outline: 2px solid var(--green); outline-offset: 4px; }
 button:hover:not(:disabled) { filter: brightness(.97); }
 h1, h2, h3, p { margin: 0; }
 h1 { font-size: 28px; letter-spacing: -1px; font-weight: 650; }

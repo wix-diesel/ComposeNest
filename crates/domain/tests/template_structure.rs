@@ -140,3 +140,59 @@ fn reports_the_failing_field_and_one_based_line() {
     );
     assert_eq!(error.position.unwrap().line, 5);
 }
+
+#[test]
+fn rejects_host_privileges_inheritance_and_distributed_secrets() {
+    for setting in [
+        "privileged: true",
+        "network_mode: host",
+        "pid: host",
+        "devices: []",
+        "volumes: ['/var/run/docker.sock:/var/run/docker.sock']",
+        "shell: sh",
+        "entrypoint: [sh, -c, id]",
+        "cap_add: [SYS_ADMIN]",
+        "compose: {}",
+    ] {
+        let source = VERSION.replace("service:\n", &format!("service:\n  {setting}\n"));
+        assert!(
+            parse_version("test", "1", "versions/1.yaml", source.as_bytes()).is_err(),
+            "{setting}"
+        );
+    }
+    for setting in ["host: /tmp/data", "volume: shared", "clone: copy"] {
+        let source = VERSION.replace(
+            "container: /data",
+            &format!("container: /data\n      {setting}"),
+        );
+        assert!(
+            parse_version("test", "1", "versions/1.yaml", source.as_bytes()).is_err(),
+            "{setting}"
+        );
+    }
+    for setting in [
+        "inputs: {}",
+        "service: {}",
+        "extends: other",
+        "include: other.yaml",
+    ] {
+        assert!(
+            parse_manifest("test", format!("{MANIFEST}{setting}\n").as_bytes()).is_err(),
+            "{setting}"
+        );
+        assert!(
+            parse_version(
+                "test",
+                "1",
+                "versions/1.yaml",
+                format!("{VERSION}{setting}\n").as_bytes()
+            )
+            .is_err(),
+            "{setting}"
+        );
+    }
+    let secret_default = VERSION.replace("type: secret", "type: secret\n    default: fixed-secret");
+    assert!(parse_version("test", "1", "versions/1.yaml", secret_default.as_bytes()).is_err());
+    let legacy = MANIFEST.replace("versions/8.2.yaml", "{ image: redis:8.2, service: {} }");
+    assert!(parse_manifest("test", legacy.as_bytes()).is_err());
+}

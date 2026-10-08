@@ -1,6 +1,8 @@
 // Each integration test binary uses a different subset of these shared fixtures.
 #![allow(dead_code)]
 
+pub(super) mod interruption;
+
 use std::{cell::Cell, collections::BTreeMap, fs, time::SystemTime};
 
 use composenest_adapters::sqlite::DatabaseWorker;

@@ -512,8 +512,9 @@ async fn uncertain_prerequisites_do_not_archive_stop_or_recreate() {
 
 #[tokio::test]
 async fn interrupted_archive_and_unknown_recreate_resume_the_original_operation() {
-    for interrupted_archive in [true, false] {
-        let f = Fixture::new().await;
+    for boundary in ["archive", "recreate", "full"] {
+        let interrupted_archive = boundary == "archive";
+        let mut f = Fixture::new().await;
         if interrupted_archive {
             f.db.begin_external_recovery(&f.request).unwrap();
             f.db.set_status("restore", OperationStatus::Executing, "generate")
@@ -537,10 +538,28 @@ async fn interrupted_archive_and_unknown_recreate_resume_the_original_operation(
             f.db.recover_on_startup().unwrap();
         } else {
             f.drift(false);
-            fs::write(f.root.path().join("create-fail"), "").unwrap();
+            if boundary == "full" {
+                support::interruption::full_at_completion(&f.db);
+            } else {
+                fs::write(f.root.path().join("create-fail"), "").unwrap();
+            }
             assert!(f.run(true).await.is_err());
-            fs::remove_file(f.root.path().join("create-fail")).unwrap();
+            if boundary == "full" {
+                support::interruption::restore_capacity(&f.db);
+            } else {
+                fs::remove_file(f.root.path().join("create-fail")).unwrap();
+            }
         }
+        let saved = f.db.confirmed_create(&f.request.receipt).unwrap();
+        drop(f.db);
+        f.db = DatabaseWorker::start(f.root.path()).unwrap();
+        f.db.recover_on_startup().unwrap();
+        assert_eq!(
+            f.db.confirmed_create(&f.request.receipt)
+                .unwrap()
+                .inputs_json,
+            saved.inputs_json
+        );
         let before = f.calls().matches(" create ").count();
         assert_eq!(
             f.run(true).await.unwrap(),

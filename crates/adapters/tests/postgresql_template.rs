@@ -1,20 +1,31 @@
-use composenest_adapters::template_package::read_packages;
+mod support;
+
+use composenest_adapters::{
+    template_catalog_view::{catalog_view, reload_results},
+    template_package::read_packages,
+};
 use composenest_application::template_catalog::{TemplateOrigin, prepare_revision};
 use composenest_domain::{
     compose::{ConfirmedCompose, InputValue, Storage, generate, to_yaml},
     identity::InstanceId,
     instance::StoragePresence,
-    template::{ResolvedTemplate, parse_manifest, parse_version, resolve_template},
+    template::{
+        ResolvedTemplate, ResolvedVersion, parse_manifest, parse_version, resolve_template,
+    },
 };
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, fs, net::TcpListener, path::PathBuf, process::Command};
 
 fn package_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/template-examples")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../resources/templates")
 }
 
 fn snapshot() -> ResolvedTemplate {
-    let package = read_packages(&package_root(), TemplateOrigin::Local)
+    snapshot_at(&package_root(), TemplateOrigin::Bundled)
+}
+
+fn snapshot_at(root: &std::path::Path, origin: TemplateOrigin) -> ResolvedTemplate {
+    let package = read_packages(root, origin)
         .unwrap()
         .into_iter()
         .map(Result::unwrap)
@@ -59,7 +70,29 @@ fn snapshot() -> ResolvedTemplate {
 
 #[test]
 fn postgresql_package_contains_all_independent_versions() {
-    snapshot();
+    let bundled = snapshot();
+    let example_root =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/template-examples");
+    let example = snapshot_at(&example_root, TemplateOrigin::Local);
+    assert_eq!(
+        bundled.versions, example.versions,
+        "Bundled definitions drifted from the accepted candidates"
+    );
+    assert_eq!(bundled.manifest.id, "composenest.postgresql");
+    let (root, store, _) = support::store();
+    let local = root.path().join("local");
+    fs::create_dir(&local).unwrap();
+    let results = reload_results(&store, &package_root(), &local).unwrap();
+    let view = catalog_view(&store, &local, results).unwrap();
+    let card = view
+        .templates
+        .iter()
+        .find(|card| card.template_id == "composenest.postgresql")
+        .unwrap();
+    assert!(card.loaded);
+    assert_eq!(card.origin, "bundled");
+    assert_eq!(card.versions, ["18", "17"]);
+    assert_eq!(card.storage_methods.len(), 2);
 }
 
 fn docker(args: &[&str]) -> String {
@@ -194,6 +227,7 @@ fn psql(fixture: &Fixture, port: u16, password: Option<&str>, query: &str) -> st
         .env("PGUSER", "acceptance_user")
         .env("PGCONNECT_TIMEOUT", "5")
         .env("PGSSLMODE", "disable")
+        .env("PGCLIENTENCODING", "UTF8")
         .env("LC_ALL", "C")
         .env("PGPASSFILE", fixture.root.path().join("absent.pgpass"))
         .env_remove("PGPASSWORD")
@@ -232,6 +266,7 @@ fn check_container(
         ),
         platform
     );
+    assert_eq!(container["Image"], image[0]["Id"]);
     let mounts = container["Mounts"].as_array().unwrap();
     assert_eq!(mounts.len(), 1, "Unexpected implicit or anonymous mount");
     assert_eq!(mounts[0]["Destination"], mount_target);
@@ -301,6 +336,119 @@ fn check_container(
     }
 }
 
+const PASSWORD: &str = "$' \"日本語 acceptance";
+
+fn create_fixture(
+    snapshot: &ResolvedTemplate,
+    version: &ResolvedVersion,
+    image: &str,
+    platform: &str,
+    bind: bool,
+) -> (Fixture, u16) {
+    let root = tempfile::tempdir().unwrap();
+    let id = InstanceId::from_u128(
+        root.path()
+            .to_string_lossy()
+            .bytes()
+            .fold(std::process::id() as u128, |value, byte| {
+                value.wrapping_mul(31).wrapping_add(byte as u128)
+            }),
+    );
+    let volume = format!("cn-{:032x}-data", id.as_u128());
+    let fixture = Fixture {
+        root,
+        volume,
+        image: image.to_owned(),
+        bind,
+    };
+    fs::create_dir(fixture.root.path().join("data")).unwrap();
+    let storage = if bind {
+        Storage::Bind(fixture.root.path().join("data").to_str().unwrap().into())
+    } else {
+        docker(&["volume", "create", &fixture.volume]);
+        Storage::Volume {
+            name: fixture.volume.clone(),
+            presence: StoragePresence::Present,
+        }
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let inputs = BTreeMap::from([
+        (
+            "database".into(),
+            InputValue::String("acceptance_db".into()),
+        ),
+        (
+            "username".into(),
+            InputValue::String("acceptance_user".into()),
+        ),
+        ("password".into(), InputValue::String(PASSWORD.into())),
+    ]);
+    let ports = BTreeMap::from([("database".into(), port)]);
+    let storage = BTreeMap::from([("data".into(), storage)]);
+    let model = generate(&ConfirmedCompose {
+        snapshot,
+        version: &version.key,
+        instance_id: id,
+        scope_id: "postgresql-acceptance",
+        spec_revision: 1,
+        inputs: &inputs,
+        ports: &ports,
+        storage: &storage,
+        source_image: &version.definition.image,
+        execution_image: image,
+        platform,
+    })
+    .unwrap();
+    fs::write(
+        fixture.root.path().join("compose.yaml"),
+        to_yaml(&model).unwrap(),
+    )
+    .unwrap();
+    fixture.compose(&["config", "--quiet"]);
+    drop(listener);
+    fixture.up(false);
+    (fixture, port)
+}
+
+fn check_lifecycle(
+    fixture: &Fixture,
+    version: &str,
+    platform: &str,
+    target: &str,
+    port: u16,
+    password: &str,
+) {
+    check_container(fixture, platform, target, port, password);
+    assert_eq!(
+        query(
+            fixture,
+            port,
+            password,
+            "SELECT current_setting('server_version_num')::int / 10000"
+        ),
+        version
+    );
+    query(
+        fixture,
+        port,
+        password,
+        "CREATE TABLE acceptance (id integer PRIMARY KEY, value text); INSERT INTO acceptance VALUES (1, 'persistent_日本語')",
+    );
+    let original = fixture.container();
+    fixture.compose(&["stop", "--timeout", "30"]);
+    let stopped: Value = serde_json::from_str(&docker(&["inspect", &original])).unwrap();
+    assert_eq!(stopped[0]["State"]["Running"], false);
+    fixture.up(false);
+    assert_eq!(fixture.container(), original);
+    check_container(fixture, platform, target, port, password);
+    fixture.check_data(port, password);
+    fixture.up(true);
+    assert_ne!(fixture.container(), original);
+    check_container(fixture, platform, target, port, password);
+    fixture.check_data(port, password);
+}
+
 #[test]
 #[ignore = "requires a local Docker Engine, Compose, psql, and permission to pull postgres:17/18"]
 fn docker_postgresql_versions_preserve_authenticated_data_in_both_storage_modes() {
@@ -337,98 +485,8 @@ fn docker_postgresql_versions_preserve_authenticated_data_in_both_storage_modes(
             "/var/lib/postgresql"
         };
         for bind in [true, false] {
-            let root = tempfile::tempdir().unwrap();
-            let id = InstanceId::from_u128(
-                root.path()
-                    .to_string_lossy()
-                    .bytes()
-                    .fold(std::process::id() as u128, |value, byte| {
-                        value.wrapping_mul(31).wrapping_add(byte as u128)
-                    }),
-            );
-            let volume = format!("cn-{:032x}-data", id.as_u128());
-            let fixture = Fixture {
-                root,
-                volume,
-                image: image.clone(),
-                bind,
-            };
-            fs::create_dir(fixture.root.path().join("data")).unwrap();
-            let storage = if bind {
-                Storage::Bind(fixture.root.path().join("data").to_str().unwrap().into())
-            } else {
-                docker(&["volume", "create", &fixture.volume]);
-                Storage::Volume {
-                    name: fixture.volume.clone(),
-                    presence: StoragePresence::Present,
-                }
-            };
-            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-            let port = listener.local_addr().unwrap().port();
-            let password = "$' \"日本語 acceptance";
-            let inputs = BTreeMap::from([
-                (
-                    "database".into(),
-                    InputValue::String("acceptance_db".into()),
-                ),
-                (
-                    "username".into(),
-                    InputValue::String("acceptance_user".into()),
-                ),
-                ("password".into(), InputValue::String(password.into())),
-            ]);
-            let ports = BTreeMap::from([("database".into(), port)]);
-            let storage = BTreeMap::from([("data".into(), storage)]);
-            let model = generate(&ConfirmedCompose {
-                snapshot: &snapshot,
-                version: &version.key,
-                instance_id: id,
-                scope_id: "postgresql-acceptance",
-                spec_revision: 1,
-                inputs: &inputs,
-                ports: &ports,
-                storage: &storage,
-                source_image: tag,
-                execution_image: &image,
-                platform: &platform,
-            })
-            .unwrap();
-            fs::write(
-                fixture.root.path().join("compose.yaml"),
-                to_yaml(&model).unwrap(),
-            )
-            .unwrap();
-            fixture.compose(&["config", "--quiet"]);
-            drop(listener);
-            fixture.up(false);
-            check_container(&fixture, &platform, target, port, password);
-            assert_eq!(
-                query(
-                    &fixture,
-                    port,
-                    password,
-                    "SELECT current_setting('server_version_num')::int / 10000"
-                ),
-                version.key
-            );
-            query(
-                &fixture,
-                port,
-                password,
-                "CREATE TABLE acceptance (id integer PRIMARY KEY, value text); INSERT INTO acceptance VALUES (1, 'persistent_日本語')",
-            );
-            let original = fixture.container();
-            fixture.compose(&["stop", "--timeout", "30"]);
-            let stopped: Value = serde_json::from_str(&docker(&["inspect", &original])).unwrap();
-            assert_eq!(stopped[0]["State"]["Running"], false);
-            fixture.up(false);
-            assert_eq!(fixture.container(), original);
-            check_container(&fixture, &platform, target, port, password);
-            fixture.check_data(port, password);
-            fixture.up(true);
-            assert_ne!(fixture.container(), original);
-            check_container(&fixture, &platform, target, port, password);
-            fixture.check_data(port, password);
+            let (fixture, port) = create_fixture(&snapshot, version, &image, &platform, bind);
+            check_lifecycle(&fixture, &version.key, &platform, target, port, PASSWORD);
             println!(
                 "PASS PostgreSQL {} {} {}; digest={image}; all mounts, inputs, TCP authentication, health, stop/start, recreate and persistence",
                 version.key,

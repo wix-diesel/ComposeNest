@@ -1,0 +1,13 @@
+# See VALIDATION.md for actual Docker acceptance evidence and unverified hosts.
+schemaVersion: 1
+id: composenest.postgresql
+templateVersion: "1.0.0"
+name: PostgreSQL
+description: アプリ開発用のPostgreSQL環境です。複製では設定だけを引き継ぎます。実Docker検証はUbuntu 24.04 x86_64のみ。Windows・macOS・Ubuntu 26.04は未検証です。
+author: ComposeNest
+homepage: https://hub.docker.com/_/postgres
+
+defaultVersion: "18"
+versions:
+  "18": versions/18.yaml
+  "17": versions/17.yaml

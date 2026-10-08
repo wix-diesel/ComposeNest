@@ -238,11 +238,12 @@ fn registers_only_validated_captured_bytes_without_execution_or_partial_updates(
 fn rejects_junctioned_versions_directory_without_symlink_privileges() {
     let root = tempfile::tempdir().unwrap();
     write_package(root.path(), "real");
-    let versions = root.path().join("real/versions");
+    // cmd's mklink treats forward slashes as switches, so use native separators.
+    let versions = root.path().join("real").join("versions");
     let outside = root.path().join("outside");
     fs::rename(&versions, &outside).unwrap();
     let status = std::process::Command::new("cmd")
-        .args(["/C", "mklink", "/J"])
+        .args(["/D", "/C", "mklink", "/J"])
         .arg(&versions)
         .arg(&outside)
         .status()

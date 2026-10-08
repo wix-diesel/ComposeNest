@@ -179,17 +179,17 @@ Image取得待ちが発生した場合は実経過と取得待ちを別記し、
 | frozen lockfile取得・frontend build/型検査・check:contracts | 成功 |
 | test:security / test:navigation / formModel・listModel | 成功（2 / 3 / 10テスト） |
 | Rust fmt | 成功。ローカルRustは通常codegenでゼロ長objectによるarchive生成失敗の後、CARGO_INCREMENTAL=0・CODEGEN_UNITS=1・DEBUG=0で再実行し成功 |
-| Rust test/clippy | Domain/Application/Adaptersの336テスト成功、Docker必要5件ignore。3 crateのall-targets clippy（-D warnings）成功。native workspaceはCIで確認する |
+| Rust test/clippy | Domain/Application/Adaptersの336テスト成功、Docker必要5件ignore。3 crateのall-targets clippy（-D warnings）成功。native workspaceは下記CI #397でも成功 |
 | SQLite保存30件のquery測定 | 一覧20回: 中央値5.304ms / p95 6.659ms / max 8.555ms。詳細20回: 中央値0.876ms / p95 1.153ms / max 1.351ms。コンテナ/GUIを除く |
-| production UIの30件測定 | ローカルChrome起動がsocket権限エラーで失敗。測定値なし。CIで実行する |
-| Docker両Template×両方式Clone | ローカル未実施（Dockerなし）。既存CIの専用受入jobで実行する |
+| production UIの30件測定 | ローカルChrome起動がsocket権限エラーで失敗。ローカル測定値なし。下記CI #396で実測、#397でも成功 |
+| Docker両Template×両方式Clone | ローカル未実施（Dockerなし）。下記CI #395・#396・#397の専用受入jobで成功 |
 | 対象3OSのnative主要フロー・期限実測・初心者観察 | 未実施。上記票へ環境と結果を追記する |
 
 CIの成功だけで最後の行を合格に変更しない。配布受入とTemplate昇格の未完了は維持する。
 
 ### CI初回の部分確認（2026-10-08）
 
-[CI #395](https://github.com/wix-diesel/ComposeNest/actions/runs/37742242937)、head `31fbb434`。15 job中14成功、frontend jobは追加した性能計測の「停止中」ボタンlocatorで失敗。件数付きのaccessible nameを完全一致で検索したことが原因で、部分一致へ修正して再実行する。
+[CI #395](https://github.com/wix-diesel/ComposeNest/actions/runs/37742242937)、head `31fbb434`。15 job中14成功、frontend jobは追加した性能計測の「停止中」ボタンlocatorで失敗。件数付きのaccessible nameを完全一致で検索したことが原因で、部分一致へ修正し、下記CI #396・#397で成功した。
 
 - Ubuntu 24.04.5 x86_64、Docker Engine/CLI 28.0.4、Compose 2.38.2でPostgreSQL 17/18・Redis 8.2のbind/named作成・認証・stop/start・再作成と全4方向のClone分離が成功。元marker欠如と先書込みの元無影響を確認した。
 - digest: PostgreSQL 18 `postgres@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336`、17 `postgres@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3`、Redis `redis@sha256:47670742d7924adbcdb404d1288b6327815b23141969c0939b8e5d61f78c2634`。
@@ -210,4 +210,14 @@ CIの成功だけで最後の行を合格に変更しない。配布受入とTem
 | dark/cards | 56.40 / 75.60 | 32.30 / 32.50 | 69.40 / 70.80 | — | 87.70 / 87.70 |
 | dark/grid | 65.85 / 83.40 | 32.50 / 32.60 | 56.35 / 70.40 | 56.85 / 58.00 | 81.40 / 81.40 |
 
-同runのUbuntu Core jobは既存の `docker_cli::timeout_is_unknown_and_reaped_before_next_change` の実行時に `ExecutableFileBusy (Text file busy)` で失敗した。初回CI・ローカルでは成功しており、失敗理由を残して最新commitで再確認する。Clippy jobはTauri依存取得段階で7分以上進んでおらず、完了扱いにせず文書更新後のCIへ引き継ぐ。他の実Docker Clone・Windows/macOS Core・workspace test・全画面は成功している。これらも対象3OSのnative受入・初心者観察へは拡張しない。
+同runのUbuntu Core jobは既存の `docker_cli::timeout_is_unknown_and_reaped_before_next_change` の実行時に `ExecutableFileBusy (Text file busy)` で失敗した。初回CI・ローカルでは成功しており、失敗理由を残して下記CI #397で再確認した。Clippy jobはTauri依存取得段階で7分以上進まなかったため、そのrunでは完了扱いにせず、下記CI #397で再確認した。他の実Docker Clone・Windows/macOS Core・workspace test・全画面は成功した。これらも対象3OSのnative受入・初心者観察へは拡張しない。
+
+### CI再確認の完了（2026-10-08）
+
+[CI #397](https://github.com/wix-diesel/ComposeNest/actions/runs/37743731446)は、PR head [`98762aa32dffa3929466bfd6d170dd7b55e05069`](https://github.com/wix-diesel/ComposeNest/commit/98762aa32dffa3929466bfd6d170dd7b55e05069)を対象に全15 jobが成功し、2026-10-08 07:34 UTCに完了した。#395・#396の失敗履歴と、完了済みの再確認を区別するために記録する。
+
+- [Ubuntu Core・IPC受入job](https://github.com/wix-diesel/ComposeNest/actions/runs/37743731446/job/113200429831)で、#396の `Text file busy` により失敗した既存CLIテストを含む検証と30件SQLite query計測が成功した。[native workspace Clippy job](https://github.com/wix-diesel/ComposeNest/actions/runs/37743731446/job/113200429712)も依存取得・`-D warnings`の検証を完了した。この2件の再確認は完了済みとする。
+- [frontend job](https://github.com/wix-diesel/ComposeNest/actions/runs/37743731446/job/113200430037)で全52組のUI比較と30件UI計測が再び成功した。証跡は同runの `common-shell-screenshots` artifact（ID 11534963563）。上表の144 sampleと数値は取得済みの#396の実測として保持し、#397の値へ置き換えない。
+- PostgreSQL 17/18・Redis 8.2の両保存方式と全4方向Clone、3OSのCore・IPC受入とroot権限、workspace test、fmt、障害注入、Docker復旧・保持削除、Compose契約も成功した。3OS queryの証跡は同runの `acceptance-performance-windows-2025`（ID 11535331590）、`acceptance-performance-macos-15`（ID 11534459228）、`acceptance-performance-ubuntu-24.04`（ID 11534772206）の各artifactを参照する。
+
+この成功はCIで実施した範囲に限る。対象Windows/macOS/Ubuntu 26.04の通常利用者によるnative主要フロー、OS固有のパス/権限/ポート、30実コンテナと暫定期限の実測、初心者5〜8名の観察は引き続き未実施であり、Issue #50の受入完了・配布受入・Template昇格として扱わない。

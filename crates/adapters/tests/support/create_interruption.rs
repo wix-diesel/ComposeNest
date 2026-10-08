@@ -2,83 +2,22 @@ use std::{fs, path::Path};
 
 use composenest_adapters::sqlite::DatabaseWorker;
 use composenest_application::{
-    OperationEvent, OperationEventKind,
-    create_operation::{CreateEffectError, CreateOperation, CreateOperationError, CreateStages},
-    create_state::{ConfirmedCreate, CreateStateStore},
+    create_operation::{CreateOperation, CreateOperationError},
+    create_state::CreateStateStore,
     operation_journal::{OperationJournal, OperationStatus},
     operation_recovery::{
         CurrentRuntime, RecoveryDecision, RecoveryEvidence, RecoveryJournal, classify_recovery,
     },
-    operation_runner::{OperationRunner, ProgressSink},
+    operation_runner::OperationRunner,
     state_store::StoreConflict,
 };
 
 #[path = "interruption.rs"]
-mod crash;
-
-struct Stages<'a>(&'a Path);
-impl Stages<'_> {
-    fn effect(&self, name: &str) {
-        crash::checkpoint(&format!("before:{name}"));
-        // Mark external results independently of the process and database journal.
-        fs::write(self.0.join(name), name).unwrap();
-        crash::checkpoint(&format!("after:{name}"));
-    }
-}
-impl CreateStages for Stages<'_> {
-    async fn prepare_storage(
-        &self,
-        _: &ConfirmedCreate,
-        _: &str,
-        sequence: u64,
-    ) -> Result<u64, CreateEffectError> {
-        self.effect("storage");
-        Ok(sequence)
-    }
-    async fn resolve_image(&self, _: &ConfirmedCreate) -> Result<(), CreateEffectError> {
-        self.effect("image");
-        Ok(())
-    }
-    async fn publish_artifact(&self, _: &ConfirmedCreate) -> Result<(), CreateEffectError> {
-        self.effect("artifact");
-        Ok(())
-    }
-    async fn validate_config(&self) -> Result<(), CreateEffectError> {
-        self.effect("config");
-        Ok(())
-    }
-    async fn create_stopped(&self) -> Result<(), CreateEffectError> {
-        self.effect("create");
-        Ok(())
-    }
-    async fn inspect_created(&self) -> Result<String, CreateEffectError> {
-        self.effect("inspect");
-        Ok("a".repeat(64))
-    }
-    async fn start(&self, _: &str) -> Result<(), CreateEffectError> {
-        self.effect("start");
-        Ok(())
-    }
-    async fn wait_ready(&self, _: &str) -> Result<(), CreateEffectError> {
-        self.effect("ready");
-        Ok(())
-    }
-}
-
-struct Progress<'a>(&'a DatabaseWorker);
-impl ProgressSink for Progress<'_> {
-    fn send(&self, event: OperationEvent) {
-        if event.kind == OperationEventKind::Progress && event.sequence == 7 {
-            crash::checkpoint("before:commit");
-            if std::env::var("COMPOSENEST_CRASH_BOUNDARY").as_deref() == Ok("full") {
-                crash::full_at_completion(self.0);
-            }
-        }
-        if event.kind == OperationEventKind::Completed {
-            crash::checkpoint("after:commit");
-        }
-    }
-}
+mod interruption;
+use interruption as crash;
+#[path = "create_stages.rs"]
+mod create_stages;
+use create_stages::{Progress, Stages};
 
 #[tokio::test]
 async fn worker() {
@@ -91,7 +30,7 @@ async fn worker() {
         state: &db,
         journal: &db,
         runner: &OperationRunner::new(),
-        stages: &Stages(Path::new(&root)),
+        stages: &Stages(Path::new(&root), &"a".repeat(64)),
         progress: &Progress(&db),
     }
     .run(&receipt)
@@ -105,7 +44,7 @@ async fn worker() {
 }
 
 #[test]
-fn create_and_clone_crashes_preserve_confirmed_identity_and_reconcile_ready() {
+fn create_and_clone_crashes_preserve_confirmed_identity_and_ready_evidence() {
     for kind in ["create", "clone"] {
         for boundary in [
             "storage", "image", "artifact", "config", "create", "inspect", "start", "ready",
@@ -127,7 +66,7 @@ fn create_and_clone_crashes_preserve_confirmed_identity_and_reconcile_ready() {
             fs::write(root.path().join("source-data"), "original").unwrap();
             fs::write(root.path().join("other-data"), "unrelated").unwrap();
             drop(db);
-            crash::child("interruption::worker", root.path(), &boundary);
+            crash::child("create_interruption::worker", root.path(), &boundary);
             let db = DatabaseWorker::start(root.path()).unwrap();
             assert_eq!(
                 db.plan_receipt("scope", "plan").unwrap(),
@@ -166,24 +105,9 @@ fn create_and_clone_crashes_preserve_confirmed_identity_and_reconcile_ready() {
                         RecoveryDecision::Hold
                     }
                 );
-                if ready {
-                    if boundary == "full" {
-                        crash::restore_capacity(&db);
-                    }
-                    for step in &operation.steps {
-                        if step.outcome.is_none() {
-                            db.reconcile_step(
-                                &operation.id,
-                                step.sequence,
-                                composenest_application::operation_journal::StepOutcome::Succeeded,
-                            )
-                            .unwrap();
-                        }
-                    }
-                    db.set_status(&operation.id, OperationStatus::Executing, "reconcile")
-                        .unwrap();
-                    db.complete_ready(&operation.id, &"a".repeat(64)).unwrap();
-                }
+            }
+            if boundary == "full" {
+                crash::restore_capacity(&db);
             }
             db.read(|db| {
                 assert_eq!(db.query_row("SELECT count(*) FROM instances", [], |r| r.get::<_, i64>(0))?, 3);

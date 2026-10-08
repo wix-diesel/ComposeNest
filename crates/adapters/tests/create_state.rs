@@ -12,7 +12,7 @@ use composenest_domain::instance::RuntimeStatus;
 use tempfile::TempDir;
 
 #[path = "support/create_interruption.rs"]
-mod interruption;
+mod create_interruption;
 
 fn fixture(kind: &str) -> (TempDir, DatabaseWorker, RequestReceipt) {
     let root = tempfile::tempdir().unwrap();

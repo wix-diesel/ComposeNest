@@ -390,6 +390,140 @@ async fn original_create_ready_is_committed_without_recreating_or_starting() {
 }
 
 #[tokio::test]
+async fn ready_recovery_worker() {
+    use composenest_application::create_operation::{CreateOperation, CreateOperationError};
+    use support::create_stages::{Progress, Stages};
+    let Some(root) = std::env::var_os("COMPOSENEST_CRASH_ROOT") else {
+        return;
+    };
+    let root = std::path::Path::new(&root);
+    let db = DatabaseWorker::start(root).unwrap();
+    let receipt = db.receipt("scope", "request").unwrap().unwrap();
+    let result = CreateOperation {
+        state: &db,
+        journal: &db,
+        runner: &OperationRunner::new(),
+        stages: &Stages(root, CONTAINER),
+        progress: &Progress(&db),
+    }
+    .run(&receipt)
+    .await;
+    assert_eq!(
+        result,
+        Err(CreateOperationError::Store(
+            composenest_application::state_store::StoreConflict::Backend
+        ))
+    );
+    support::interruption::checkpoint("full");
+    panic!("crash boundary was not reached");
+}
+
+#[tokio::test]
+async fn ready_create_and_clone_crashes_recover_through_the_public_api_without_effects() {
+    use composenest_adapters::{
+        recovery_actions::recover_operation,
+        recovery_view::{RecoverySession, inspect_recovery},
+    };
+    use composenest_application::{RequestContext, recovery_view::RecoverOperationRequest};
+    for kind in [OperationKind::Create, OperationKind::Clone] {
+        for boundary in ["after:ready", "before:commit", "full"] {
+            let mut f = Fixture::new(kind).await;
+            fs::copy(
+                f.root.path().join("ready.json"),
+                f.root.path().join("current.json"),
+            )
+            .unwrap();
+            let saved = f.db.confirmed_create(&f.receipt).unwrap();
+            drop(f.db);
+            support::interruption::child("ready_recovery_worker", f.root.path(), boundary);
+            f.db = DatabaseWorker::start(f.root.path()).unwrap();
+            f.db.recover_on_startup().unwrap();
+            if boundary == "full" {
+                support::interruption::restore_capacity(&f.db);
+            }
+            let session = RecoverySession::new(&f.db).unwrap();
+            let view = inspect_recovery(&f.db, &f.probe, &session, "scope", ID, "operation")
+                .await
+                .unwrap();
+            assert_eq!(view.current_runtime, "ready");
+            let held = boundary == "after:ready";
+            assert_eq!(view.actions.contains(&"reconcile_ports".into()), !held);
+            let calls_before = fs::read_to_string(f.root.path().join("calls")).unwrap();
+            let result = recover_operation(
+                &f.db,
+                &f.probe,
+                &session,
+                &OperationRunner::new(),
+                "scope",
+                &RecoverOperationRequest {
+                    context: RequestContext {
+                        api_version: 1,
+                        request_id: "complete-ready".into(),
+                    },
+                    instance_id: ID.into(),
+                    operation_id: "operation".into(),
+                    expected_attempt: view.attempt,
+                    expected_revision: view.instance_revision,
+                    candidate_revision: view.candidate_revision,
+                    action: "reconcile_ports".into(),
+                    ports: BTreeMap::new(),
+                    artifact_id: None,
+                    confirmation_hash: None,
+                },
+            )
+            .await;
+            if held {
+                assert!(matches!(
+                    result,
+                    Err(composenest_adapters::port_edit_stages::PortEditError::Rejected)
+                ));
+                assert!(
+                    view.hold_reasons
+                        .contains(&"CLI_TERMINATION_UNCONFIRMED".into())
+                );
+                assert!(
+                    f.db.recoverable("operation")
+                        .unwrap()
+                        .steps
+                        .last()
+                        .unwrap()
+                        .outcome
+                        .is_none()
+                );
+            } else {
+                let completed = result.unwrap();
+                assert_eq!(completed.operation_id, "operation");
+                assert_eq!(completed.previous_status, view.previous_status);
+                assert_eq!(completed.current_runtime, "ready");
+                assert!(f.db.recover_on_startup().unwrap().is_empty());
+            }
+            let calls = fs::read_to_string(f.root.path().join("calls")).unwrap();
+            for command in [
+                " create ",
+                "container start",
+                "container stop",
+                "container rm",
+            ] {
+                assert_eq!(
+                    calls.matches(command).count(),
+                    calls_before.matches(command).count()
+                );
+            }
+            assert_eq!(f.active_reservations(), 1);
+            f.db.read(|db| {
+                let (secret, storage, count, applied, status): (String, String, i64, Option<i64>, String) = db.query_row("SELECT s.inputs_json, a.resource_identity, (SELECT count(*) FROM operations), i.applied_spec_revision, (SELECT status FROM operations WHERE id='operation') FROM instance_specs s JOIN storage_allocations a ON a.instance_id=s.instance_id JOIN instances i ON i.id=s.instance_id WHERE s.instance_id=?1", [ID], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?;
+                assert_eq!(secret, saved.inputs_json);
+                assert_eq!(storage, saved.storage[0].allocation.resource_identity);
+                assert_eq!(count, 1);
+                assert_eq!(applied, if held { None } else { Some(1) });
+                assert_eq!(status, if held { "OutcomeUnknown" } else { "Succeeded" });
+                Ok(())
+            }).unwrap();
+        }
+    }
+}
+
+#[tokio::test]
 async fn failed_start_retries_the_same_operation_and_retains_the_failed_step() {
     use composenest_adapters::{
         recovery_actions::recover_operation,

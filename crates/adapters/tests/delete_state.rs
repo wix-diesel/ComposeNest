@@ -52,6 +52,131 @@ impl DeleteStages for Stages {
     }
 }
 
+struct CrashStages<'a>(&'a composenest_adapters::sqlite::DatabaseWorker);
+impl DeleteStages for CrashStages<'_> {
+    async fn remove_runtime(&self, receipt: &RequestReceipt) -> Result<(), LifecycleEffectError> {
+        for (sequence, name, command) in [
+            (1, "container", StepCommand::RemoveContainer),
+            (2, "network", StepCommand::RemoveNetwork),
+        ] {
+            self.0
+                .record_step(&StepIntent {
+                    operation_id: receipt.operation_id.clone(),
+                    sequence,
+                    attempt: 1,
+                    command_kind: command,
+                    resource_id: name.into(),
+                    expected_result: ExpectedResult::ContainerAbsent,
+                })
+                .unwrap();
+            support::interruption::checkpoint(&format!("before:{name}"));
+            std::fs::write(self.0.management_root().join(name), "absent").unwrap();
+            support::interruption::checkpoint(&format!("after:{name}"));
+            self.0
+                .finish_step(&receipt.operation_id, sequence, StepOutcome::Succeeded)
+                .unwrap();
+        }
+        Ok(())
+    }
+    async fn inspect_storage(&self) -> Result<Vec<StorageCheck>, LifecycleEffectError> {
+        support::interruption::checkpoint("before:storage");
+        let checks = vec![StorageCheck {
+            slot: "data".into(),
+            presence: StoragePresence::Present,
+        }];
+        support::interruption::checkpoint("after:storage");
+        Ok(checks)
+    }
+    async fn runtime_absent(&self) -> Result<(), LifecycleEffectError> {
+        support::interruption::checkpoint("before:absence");
+        support::interruption::checkpoint("after:absence");
+        support::interruption::checkpoint("before:commit");
+        if std::env::var("COMPOSENEST_CRASH_BOUNDARY").as_deref() == Ok("full") {
+            support::interruption::full_at_completion(self.0);
+        }
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn delete_interruption_worker() {
+    let Some(root) = std::env::var_os("COMPOSENEST_CRASH_ROOT") else {
+        return;
+    };
+    let db =
+        composenest_adapters::sqlite::DatabaseWorker::start(std::path::Path::new(&root)).unwrap();
+    let (intent, receipt) = request();
+    let result = DeleteOperation {
+        state: &db,
+        runner: &OperationRunner::new(),
+        stages: &CrashStages(&db),
+    }
+    .run(&intent, &receipt, true)
+    .await;
+    if result.is_ok() {
+        support::interruption::checkpoint("after:commit");
+    }
+    assert_eq!(result, Err(DeleteError::Store(StoreConflict::Backend)));
+    support::interruption::checkpoint("full");
+    panic!("crash boundary was not reached");
+}
+
+#[test]
+fn delete_crashes_never_release_reservations_before_atomic_retirement() {
+    use composenest_application::operation_recovery::RecoveryJournal;
+    for boundary in [
+        "before:container",
+        "after:container",
+        "before:network",
+        "after:network",
+        "before:storage",
+        "after:storage",
+        "before:absence",
+        "after:absence",
+        "before:commit",
+        "after:commit",
+        "full",
+    ] {
+        let (root, db, template) = store();
+        setup_source(&db, &template);
+        std::fs::write(root.path().join("data-sentinel"), "retained").unwrap();
+        drop(db);
+        support::interruption::child("delete_interruption_worker", root.path(), boundary);
+        let db = composenest_adapters::sqlite::DatabaseWorker::start(root.path()).unwrap();
+        let operations = db.recover_on_startup().unwrap();
+        let completed = boundary == "after:commit";
+        assert_eq!(operations.len(), usize::from(!completed));
+        db.read(|db| {
+            let (lifecycle, reservation, secret): (String, String, String) = db.query_row(
+                "SELECT i.lifecycle, p.status, s.inputs_json FROM instances i JOIN port_reservations p ON p.instance_id=i.id JOIN instance_specs s ON s.instance_id=i.id WHERE i.id='source'", [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            assert_eq!(lifecycle, if completed { "retired" } else { "retiring" });
+            assert_eq!(reservation, if completed { "released" } else { "committed" });
+            assert!(secret.contains(&"p".repeat(32)));
+            Ok(())
+        }).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("data-sentinel")).unwrap(),
+            "retained"
+        );
+        if boundary == "full" {
+            support::interruption::restore_capacity(&db);
+            let (_, receipt) = request();
+            db.set_status("delete", OperationStatus::Executing, "reconcile")
+                .unwrap();
+            db.complete_delete(
+                &receipt,
+                &[StorageCheck {
+                    slot: "data".into(),
+                    presence: StoragePresence::Present,
+                }],
+            )
+            .unwrap();
+            assert!(!db.delete_pending(&receipt).unwrap());
+        }
+    }
+}
+
 #[tokio::test]
 async fn retirement_preserves_history_reports_actual_presence_and_replays_receipt() {
     for presence in [

@@ -30,7 +30,7 @@ use composenest_application::{
         CurrentRuntime, RecoverableOperation, RecoveryEvidence, RecoveryJournal, RecoveryProbe,
     },
     operation_runner::OperationRunner,
-    port_edit::{PortEditRequest, PortEditStore},
+    port_edit::{PortEditRequest, PortEditStore, PortRecoveryStore},
     state_store::StateStore,
     storage::StoragePort,
 };
@@ -387,6 +387,140 @@ async fn original_create_ready_is_committed_without_recreating_or_starting() {
     let calls = fs::read_to_string(fixture.root.path().join("calls")).unwrap();
     assert!(!calls.contains("container start"));
     assert!(!calls.contains("compose create"));
+}
+
+#[tokio::test]
+async fn ready_recovery_worker() {
+    use composenest_application::create_operation::{CreateOperation, CreateOperationError};
+    use support::create_stages::{Progress, Stages};
+    let Some(root) = std::env::var_os("COMPOSENEST_CRASH_ROOT") else {
+        return;
+    };
+    let root = std::path::Path::new(&root);
+    let db = DatabaseWorker::start(root).unwrap();
+    let receipt = db.receipt("scope", "request").unwrap().unwrap();
+    let result = CreateOperation {
+        state: &db,
+        journal: &db,
+        runner: &OperationRunner::new(),
+        stages: &Stages(root, CONTAINER),
+        progress: &Progress(&db),
+    }
+    .run(&receipt)
+    .await;
+    assert_eq!(
+        result,
+        Err(CreateOperationError::Store(
+            composenest_application::state_store::StoreConflict::Backend
+        ))
+    );
+    support::interruption::checkpoint("full");
+    panic!("crash boundary was not reached");
+}
+
+#[tokio::test]
+async fn ready_create_and_clone_crashes_recover_through_the_public_api_without_effects() {
+    use composenest_adapters::{
+        recovery_actions::recover_operation,
+        recovery_view::{RecoverySession, inspect_recovery},
+    };
+    use composenest_application::{RequestContext, recovery_view::RecoverOperationRequest};
+    for kind in [OperationKind::Create, OperationKind::Clone] {
+        for boundary in ["after:ready", "before:commit", "full"] {
+            let mut f = Fixture::new(kind).await;
+            fs::copy(
+                f.root.path().join("ready.json"),
+                f.root.path().join("current.json"),
+            )
+            .unwrap();
+            let saved = f.db.confirmed_create(&f.receipt).unwrap();
+            drop(f.db);
+            support::interruption::child("ready_recovery_worker", f.root.path(), boundary);
+            f.db = DatabaseWorker::start(f.root.path()).unwrap();
+            f.db.recover_on_startup().unwrap();
+            if boundary == "full" {
+                support::interruption::restore_capacity(&f.db);
+            }
+            let session = RecoverySession::new(&f.db).unwrap();
+            let view = inspect_recovery(&f.db, &f.probe, &session, "scope", ID, "operation")
+                .await
+                .unwrap();
+            assert_eq!(view.current_runtime, "ready");
+            let held = boundary == "after:ready";
+            assert_eq!(view.actions.contains(&"reconcile_ports".into()), !held);
+            let calls_before = fs::read_to_string(f.root.path().join("calls")).unwrap();
+            let result = recover_operation(
+                &f.db,
+                &f.probe,
+                &session,
+                &OperationRunner::new(),
+                "scope",
+                &RecoverOperationRequest {
+                    context: RequestContext {
+                        api_version: 1,
+                        request_id: "complete-ready".into(),
+                    },
+                    instance_id: ID.into(),
+                    operation_id: "operation".into(),
+                    expected_attempt: view.attempt,
+                    expected_revision: view.instance_revision,
+                    candidate_revision: view.candidate_revision,
+                    action: "reconcile_ports".into(),
+                    ports: BTreeMap::new(),
+                    artifact_id: None,
+                    confirmation_hash: None,
+                },
+            )
+            .await;
+            if held {
+                assert!(matches!(
+                    result,
+                    Err(composenest_adapters::port_edit_stages::PortEditError::Rejected)
+                ));
+                assert!(
+                    view.hold_reasons
+                        .contains(&"CLI_TERMINATION_UNCONFIRMED".into())
+                );
+                assert!(
+                    f.db.recoverable("operation")
+                        .unwrap()
+                        .steps
+                        .last()
+                        .unwrap()
+                        .outcome
+                        .is_none()
+                );
+            } else {
+                let completed = result.unwrap();
+                assert_eq!(completed.operation_id, "operation");
+                assert_eq!(completed.previous_status, view.previous_status);
+                assert_eq!(completed.current_runtime, "ready");
+                assert!(f.db.recover_on_startup().unwrap().is_empty());
+            }
+            let calls = fs::read_to_string(f.root.path().join("calls")).unwrap();
+            for command in [
+                " create ",
+                "container start",
+                "container stop",
+                "container rm",
+            ] {
+                assert_eq!(
+                    calls.matches(command).count(),
+                    calls_before.matches(command).count()
+                );
+            }
+            assert_eq!(f.active_reservations(), 1);
+            f.db.read(|db| {
+                let (secret, storage, count, applied, status): (String, String, i64, Option<i64>, String) = db.query_row("SELECT s.inputs_json, a.resource_identity, (SELECT count(*) FROM operations), i.applied_spec_revision, (SELECT status FROM operations WHERE id='operation') FROM instance_specs s JOIN storage_allocations a ON a.instance_id=s.instance_id JOIN instances i ON i.id=s.instance_id WHERE s.instance_id=?1", [ID], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?;
+                assert_eq!(secret, saved.inputs_json);
+                assert_eq!(storage, saved.storage[0].allocation.resource_identity);
+                assert_eq!(count, 1);
+                assert_eq!(applied, if held { None } else { Some(1) });
+                assert_eq!(status, if held { "OutcomeUnknown" } else { "Succeeded" });
+                Ok(())
+            }).unwrap();
+        }
+    }
 }
 
 #[tokio::test]
@@ -819,6 +953,118 @@ fn inspection(expected: &ExpectedContainer, ready: bool) -> Vec<u8> {
 }
 
 #[tokio::test]
+async fn port_interruption_worker() {
+    let Some(root) = std::env::var_os("COMPOSENEST_CRASH_ROOT") else {
+        return;
+    };
+    let root = std::path::Path::new(&root);
+    let db = DatabaseWorker::start(root).unwrap();
+    let receipt = db.receipt("scope", "request").unwrap().unwrap();
+    let probe = DockerProbe {
+        executable: root.join("docker"),
+        directory: root.into(),
+        config_directory: root.into(),
+    };
+    let boundary = std::env::var("COMPOSENEST_CRASH_BOUNDARY").unwrap();
+    if boundary == "full" {
+        support::interruption::full_at_completion(&db);
+    } else {
+        let effect = "/bin/cp target.json current.json; exit 0";
+        let kill = format!("kill -KILL {}; exit 0", std::process::id());
+        let replacement = if boundary == "before:create" {
+            kill
+        } else {
+            format!("/bin/cp target.json current.json; {kill}")
+        };
+        let script = fs::read_to_string(&probe.executable).unwrap();
+        assert!(script.contains(effect));
+        fs::write(&probe.executable, script.replace(effect, &replacement)).unwrap();
+    }
+    let request = PortEditRequest {
+        receipt: receipt.clone(),
+        expected_instance_revision: 1,
+        old_spec_revision: 1,
+        ports: db.confirmed_create(&receipt).unwrap().ports,
+    };
+    let runner = std::sync::Arc::new(OperationRunner::new());
+    let reservation = runner.reserve().unwrap();
+    let result = composenest_adapters::port_edit_stages::run_accepted_port_edit_reserved(
+        &db,
+        &probe,
+        root,
+        &runner,
+        &request,
+        reservation,
+    )
+    .await;
+    assert_eq!(
+        result,
+        Err(
+            composenest_adapters::port_edit_stages::PortEditError::Store(
+                composenest_application::state_store::StoreConflict::Backend
+            )
+        )
+    );
+    support::interruption::checkpoint("full");
+    panic!("crash boundary was not reached");
+}
+
+#[tokio::test]
+async fn port_edit_crash_and_full_database_keep_old_and_new_reservations_until_reconciled() {
+    for boundary in ["before:create", "after:create", "full"] {
+        let mut fixture = Fixture::new(OperationKind::EditPort).await;
+        fixture.current(1);
+        fixture.db.write(|db| {
+            db.execute_batch("INSERT INTO image_resolutions SELECT instance_id, 2, image_ref, digest, image_id, platform, first_operation_id FROM image_resolutions WHERE spec_revision=1;")?;
+            db.execute("INSERT INTO runtime_observations (instance_id, container_id, runtime_state, freshness) VALUES (?1, ?2, 'stopped', 'fresh')", [ID, CONTAINER])?;
+            Ok(())
+        }).unwrap();
+        fs::copy(
+            fixture.root.path().join("r2.json"),
+            fixture.root.path().join("target.json"),
+        )
+        .unwrap();
+        let saved = fixture.db.confirmed_create(&fixture.receipt).unwrap();
+        // Release the backend lock before the independent process starts.
+        drop(fixture.db);
+        support::interruption::child("port_interruption_worker", fixture.root.path(), boundary);
+        fixture.db = DatabaseWorker::start(fixture.root.path()).unwrap();
+        fixture.db.recover_on_startup().unwrap();
+        assert_eq!(fixture.active_reservations(), 2);
+        assert_eq!(
+            fixture.db.port_change_revisions("operation").unwrap(),
+            (1, 2)
+        );
+        let after = fixture.db.confirmed_create(&fixture.receipt).unwrap();
+        assert_eq!(after.inputs_json, saved.inputs_json);
+        assert_eq!(after.storage[0].allocation, saved.storage[0].allocation);
+        let calls = fs::read_to_string(fixture.root.path().join("calls")).unwrap();
+        if boundary == "before:create" {
+            assert!(matches!(
+                fixture.run(PortRecoveryAction::Reconcile).await,
+                PortRecoveryResult::Held
+            ));
+            assert_eq!(fixture.active_reservations(), 2);
+        } else {
+            if boundary == "full" {
+                support::interruption::restore_capacity(&fixture.db);
+            }
+            assert!(matches!(
+                fixture.run(PortRecoveryAction::Reconcile).await,
+                PortRecoveryResult::Completed(_)
+            ));
+            assert_eq!(fixture.active_reservations(), 1);
+        }
+        let reconciled = fs::read_to_string(fixture.root.path().join("calls")).unwrap();
+        assert_eq!(
+            calls.matches("create --force-recreate").count(),
+            reconciled.matches("create --force-recreate").count()
+        );
+        assert!(!reconciled.contains("container start"));
+    }
+}
+
+#[tokio::test]
 async fn interrupted_application_completes_without_another_create_or_start() {
     let fixture = Fixture::new(OperationKind::EditPort).await;
     fixture.current(2);
@@ -857,7 +1103,14 @@ async fn interrupted_application_completes_without_another_create_or_start() {
 
 #[tokio::test]
 async fn ambiguous_ownership_artifact_and_storage_never_release_reservations() {
-    for failure in ["owner", "artifact", "storage", "engine", "old-container"] {
+    for failure in [
+        "owner",
+        "artifact",
+        "storage",
+        "engine",
+        "offline",
+        "old-container",
+    ] {
         let fixture = Fixture::new(OperationKind::EditPort).await;
         fixture.current(2);
         match failure {
@@ -885,10 +1138,18 @@ async fn ambiguous_ownership_artifact_and_storage_never_release_reservations() {
                     })
                     .unwrap();
             }
-            "engine" => {
+            "engine" | "offline" => {
                 let script = fs::read_to_string(&fixture.probe.executable)
                     .unwrap()
                     .replace("\"ID\":\"engine\"", "\"ID\":\"foreign\"");
+                let script = if failure == "offline" {
+                    script.replace(
+                        "if [ \"$1\" = info ]; then printf",
+                        "if [ \"$1\" = info ]; then exit 1; printf",
+                    )
+                } else {
+                    script
+                };
                 fs::write(&fixture.probe.executable, script).unwrap();
             }
             "old-container" => {
@@ -1070,15 +1331,39 @@ async fn creation_conflict_proposes_without_changes_and_rechecks_confirmation() 
         let mut ports = fixture.db.confirmed_create(&fixture.receipt).unwrap().ports;
         ports[0].host_port = next["db"];
         fixture.prepare_confirmed_runtime(ports.clone()).await;
-        assert!(matches!(
+        fs::write(fixture.root.path().join("start-fail"), "").unwrap();
+        assert!(
             fixture
-                .run(PortRecoveryAction::Confirm {
-                    candidate_revision: 1,
-                    ports
-                })
-                .await,
+                .try_run(
+                    true,
+                    PortRecoveryAction::Confirm {
+                        candidate_revision: 1,
+                        ports,
+                    }
+                )
+                .await
+                .is_err()
+        );
+        let failed = fixture.db.recoverable("operation").unwrap();
+        assert_eq!(failed.attempt, 2);
+        assert_eq!(fixture.active_reservations(), 2);
+        fs::remove_file(fixture.root.path().join("start-fail")).unwrap();
+        // Resume the confirmed candidate, without generating a new plan or operation.
+        assert!(matches!(
+            fixture.run(PortRecoveryAction::Retry).await,
             PortRecoveryResult::Completed(_)
         ));
+        assert_eq!(
+            fixture
+                .db
+                .read(|db| Ok(db.query_row(
+                    "SELECT attempt FROM operations WHERE id='operation'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )?))
+                .unwrap(),
+            3
+        );
         let result: (String, String, String, String) = fixture.db.read(|db| Ok(db.query_row("SELECT o.phase, s.inputs_json, a.resource_identity, a.initialization FROM operations o JOIN instance_specs s ON s.instance_id = o.instance_id AND s.revision = o.new_spec_revision JOIN storage_allocations a ON a.instance_id = o.instance_id", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))?)).unwrap();
         assert_eq!(result.0, "ready");
         assert_eq!(

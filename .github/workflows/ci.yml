@@ -66,6 +66,34 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.98.1
       - run: docker compose version
       - run: cargo test -p composenest-domain --test compose docker_config_and_container_preserve_actual_values -- --ignored
+
+  recovery-faults:
+    name: Recovery interruption and database-full regression
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: Swatinem/rust-cache@v2
+      - name: Run fake adapters and real SQLite interruption boundaries
+        run: |
+          set -o pipefail
+          cargo test -p composenest-adapters --locked \
+            --test create_state --test delete_state --test port_recovery --test external_recovery \
+            -- --nocapture 2>&1 | tee recovery-faults.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: recovery-fault-results
+          path: recovery-faults.log
+
+  recovery-docker:
+    name: Dedicated-scope Docker recovery acceptance
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: Swatinem/rust-cache@v2
+      - run: docker compose version
       - name: Test external artifact recovery on Docker Engine
         run: |
           docker version --format 'Engine {{.Server.Version}} ({{.Server.Os}}/{{.Server.Arch}})'

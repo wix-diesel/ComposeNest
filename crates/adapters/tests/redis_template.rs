@@ -8,7 +8,7 @@ use composenest_application::{
     RequestContext,
     instance_content::InstanceSecretRequest,
     query_service::QueryService,
-    state_store::{StateStore, StorageMethod},
+    state_store::{InstanceRecord, PortAllocation, StateStore, StorageMethod},
     template_catalog::{TemplateOrigin, prepare_revision},
 };
 use composenest_domain::{
@@ -217,6 +217,7 @@ fn docker(args: &[&str]) -> String {
 }
 
 struct Fixture {
+    record: InstanceRecord,
     root: tempfile::TempDir,
     volume: String,
     image: String,
@@ -344,6 +345,7 @@ fn create_fixture(
     image: &str,
     platform: &str,
     bind: bool,
+    source: Option<&Fixture>,
 ) -> Fixture {
     let root = tempfile::tempdir().unwrap();
     let id = InstanceId::from_u128(
@@ -356,14 +358,66 @@ fn create_fixture(
     );
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
+    let mut id = id;
+    let mut inputs = BTreeMap::from([(
+        "password".into(),
+        InputValue::String(connection_password(port, bind)),
+    )]);
+    let mut volume = format!("cn-{:032x}-data", id.as_u128());
+    if let Some(source) = source {
+        let confirmed = support::acceptance_clone::confirm_clone(
+            "redis",
+            &source.record,
+            if bind {
+                StorageMethod::Bind
+            } else {
+                StorageMethod::Volume
+            },
+            port,
+            &root.path().join("data"),
+        );
+        id = InstanceId::from_u128(u128::from_str_radix(&confirmed.instance_id, 16).unwrap());
+        volume = format!("cn-{:032x}-data", id.as_u128());
+        let values: BTreeMap<String, String> =
+            serde_json::from_str(&confirmed.inputs_json).unwrap();
+        inputs = values
+            .into_iter()
+            .map(|(key, value)| (key, InputValue::String(value)))
+            .collect();
+        assert_eq!(confirmed.ports[0].host_port, port);
+    }
+    let password = match &inputs["password"] {
+        InputValue::String(value) => value.clone(),
+        _ => unreachable!(),
+    };
+    let storage_identity = if bind {
+        root.path().join("data").to_str().unwrap().into()
+    } else {
+        volume.clone()
+    };
+    let record = support::acceptance_clone::source_record(
+        id,
+        &version.key,
+        &inputs,
+        PortAllocation {
+            slot: "redis".into(),
+            host_ip: "127.0.0.1".into(),
+            host_port: port,
+            container_port: 6379,
+        },
+        bind,
+        storage_identity,
+    );
     let fixture = Fixture {
         root,
-        volume: format!("cn-{:032x}-data", id.as_u128()),
+        volume,
         image: image.into(),
         bind,
+        record,
         port,
-        password: connection_password(port, bind),
+        password,
     };
+
     fs::create_dir(fixture.root.path().join("data")).unwrap();
     let storage = if bind {
         Storage::Bind(fixture.root.path().join("data").to_str().unwrap().into())
@@ -374,10 +428,6 @@ fn create_fixture(
             presence: StoragePresence::Present,
         }
     };
-    let inputs = BTreeMap::from([(
-        "password".into(),
-        InputValue::String(fixture.password.clone()),
-    )]);
     let ports = BTreeMap::from([("redis".into(), port)]);
     let storage = BTreeMap::from([("data".into(), storage)]);
     let model = generate(&ConfirmedCompose {
@@ -551,7 +601,7 @@ fn docker_redis_preserves_authenticated_aof_data_in_both_storage_modes() {
         "{{index .RepoDigests 0}}",
     ]);
     for bind in [true, false] {
-        let fixture = create_fixture(&snapshot, version, &image, &platform, bind);
+        let fixture = create_fixture(&snapshot, version, &image, &platform, bind, None);
         check_container(&fixture, &platform);
         assert_eq!(fixture.query(&["SET", "acceptance", DATA]), "OK");
         fixture.check_data();
@@ -567,6 +617,27 @@ fn docker_redis_preserves_authenticated_aof_data_in_both_storage_modes() {
         assert_ne!(fixture.container(), original);
         check_container(&fixture, &platform);
         fixture.check_data();
+        for clone_bind in [true, false] {
+            let clone = create_fixture(
+                &snapshot,
+                version,
+                &image,
+                &platform,
+                clone_bind,
+                Some(&fixture),
+            );
+            check_container(&clone, &platform);
+            assert_eq!(clone.query(&["EXISTS", "acceptance"]), "0");
+            assert_eq!(clone.query(&["SET", "acceptance", "clone_only"]), "OK");
+            assert_eq!(clone.query(&["GET", "acceptance"]), "clone_only");
+            fixture.check_data();
+            assert_ne!(clone.record.project_name, fixture.record.project_name);
+            println!(
+                "PASS Redis 8.2 Clone {}->{}; source data absent and destination writes isolated",
+                if bind { "bind" } else { "named" },
+                if clone_bind { "bind" } else { "named" }
+            );
+        }
         println!(
             "PASS Redis 8.2 {} {platform}; digest={image}; connection secret, argv, environment, TCP authentication, health, AOF without RDB, mounts, stop/start and recreate",
             if bind { "bind" } else { "named" }

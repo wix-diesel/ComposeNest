@@ -56,6 +56,51 @@ fn fixture() -> (TempDir, DatabaseWorker) {
 }
 
 #[test]
+fn thirty_instance_queries_record_response_times_without_exposing_secrets() {
+    let (_root, db) = fixture();
+    db.write(|db| {
+        for index in 1..30 {
+            let id = format!("acceptance-{index:02}");
+            db.execute("INSERT INTO instances (id, scope_id, target_id, display_name, normalized_name, project_name, applied_spec_revision) VALUES (?1, 'scope', 'target', ?1, ?1, ?2, 1)", rusqlite::params![id, format!("cn-{id}")])?;
+            db.execute("INSERT INTO template_snapshots (id, instance_id, template_id, template_version, selected_version, schema_version, normalization, semantic_hash, canonical_json) SELECT ?1, ?1, template_id, template_version, selected_version, schema_version, normalization, semantic_hash, canonical_json FROM template_snapshots WHERE id='snapshot'", [&id])?;
+            db.execute("INSERT INTO instance_specs (instance_id, revision, selected_version, storage_method, inputs_json) SELECT ?1, 1, selected_version, storage_method, inputs_json FROM instance_specs WHERE instance_id='one' AND revision=1", [&id])?;
+            db.execute("INSERT INTO port_bindings VALUES (?1, 1, 'database', '127.0.0.1', ?2, 5432)", rusqlite::params![id, 15432 + index])?;
+            db.execute("INSERT INTO storage_allocations (instance_id, slot, method, resource_identity, ownership_evidence, ownership, presence, initialization) VALUES (?1, 'data', 'bind', ?2, ?1, 'assigned', 'present', 'ready_observed')", rusqlite::params![id, format!("data/{id}/data")])?;
+        }
+        Ok(())
+    }).unwrap();
+    let query = QueryService::new(&db);
+    // Warm the local cache once, then retain all samples instead of enforcing a host-specific limit.
+    assert_eq!(query.list_instances("scope").unwrap().len(), 30);
+    let mut samples = Vec::new();
+    for _ in 0..20 {
+        let started = std::time::Instant::now();
+        let list = query.list_instances("scope").unwrap();
+        let list_ms = started.elapsed().as_secs_f64() * 1000.0;
+        assert_eq!(list.len(), 30);
+        let started = std::time::Instant::now();
+        assert!(
+            query
+                .get_instance("scope", "acceptance-29")
+                .unwrap()
+                .is_some()
+        );
+        let detail_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let serialized = serde_json::to_string(&list).unwrap();
+        assert!(!serialized.contains("top-secret"));
+        assert!(query.list_instances("other").unwrap().is_empty());
+        samples.push(serde_json::json!({"listMs": list_ms, "detailMs": detail_ms}));
+    }
+    println!(
+        "ACCEPTANCE_PERFORMANCE {}",
+        serde_json::json!({
+            "scope": "real SQLite and QueryService, 30 saved instances, no Docker or native UI",
+            "os": std::env::consts::OS, "arch": std::env::consts::ARCH, "samples": samples
+        })
+    );
+}
+
+#[test]
 fn explicit_secret_is_scoped_committed_and_connection_slot_only() {
     use composenest_adapters::instance_content::secret;
     use composenest_application::{RequestContext, instance_content::InstanceSecretRequest};

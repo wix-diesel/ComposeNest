@@ -6,7 +6,18 @@
 
 ## 実測環境・証跡
 
-実Docker受入の結果はCI実行後に追記する。この作業コンテナはUbuntu 24.04.3 LTS x86_64、Rust 1.98.1で、Docker CLI/Engine/socketがなく、実Dockerの成功結果として扱わない。
+2026-10-08、GitHub ActionsのUbuntu **24.04.5 LTS x86_64**（runner image `20260927.320.1`）で実行した。Docker CLI/Engine **28.0.4**、Compose **2.38.2**、Rust **1.98.1**、ホストredis-cli **7.0.15**。
+
+commit `c55f690e56e5f651b70df7693bab2c07db73de1e`の[Redis受入ジョブ](https://github.com/wix-diesel/ComposeNest/actions/runs/37713872152/job/113105772695)で両保存方式とも成功した。分割YAMLの構文確認ではなく、下記の全項目を同じ完全定義から生成したComposeで実行した。
+
+| Version | 実行platform | 保存方式 | マウント先 | TCP認証・Health・秘密一致・AOF | 停止起動・再作成後のデータ |
+| --- | --- | --- | --- | --- | --- |
+| 8.2 | linux/amd64 | bind | `/data` | 成功 | AOFから復元・保持 |
+| 8.2 | linux/amd64 | named | `/data` | 成功 | AOFから復元・保持 |
+
+検証時に`redis:8.2`をpullして解決したRepoDigestは`redis@sha256:47670742d7924adbcdb404d1288b6327815b23141969c0939b8e5d61f78c2634`。生成Composeはタグではなく、このdigestを使い、停止起動・再作成で再pullしない。タグは更新され得るため、再検証ログにその回のdigestを出力する。
+
+ローカルの作業コンテナはUbuntu 24.04.3 LTS x86_64、Rust 1.98.1で、Docker CLI/Engine/socketがない。Core 3 crateの319テスト（Docker依存等5件はignored）、整形、全targetsのclippy、フロントエンドのIPC契約・型検査・ビルドは成功した。ローカル結果を実Dockerの成功証拠としては扱わない。
 
 CIの`Redis 8.2 bind and named acceptance`はUbuntu 24.04 x86_64でignoredテストを明示的に実行する。ホストOS、Docker CLI/Engine・Compose版、解決したRepoDigestと両保存方式の結果をログに残す。通常テストはDockerへ接続せず、仕様例との完全定義の一致、配布resourceからの除外、明示的なローカル追加の出所、既存の接続表示・秘密取得APIを検証する。
 
@@ -25,7 +36,7 @@ CIの`Redis 8.2 bind and named acceptance`はUbuntu 24.04 x86_64でignoredテス
 
 WindowsのDocker Desktop、macOSのDocker Desktop、Ubuntu **26.04**の実機、`linux/arm64`の実行は未検証。`platforms: [linux/amd64, linux/arm64]`はコンテナの対応宣言であり、ホストOSの検証済み表示ではない。配布resourceへ移す前に各対象OSで下記テストを実行し、OS/Desktop/Engine/Compose版、digest、bind/namedの結果を追記する。
 
-別digest・別OS・別アーキテクチャの検証証拠としてこの記録を使わない。基準版Dockerでの配布受入、Redisの更新、Clone、アプリGUI全経路の受入を完了したことは意味しない。
+別digest・別OS・別アーキテクチャの検証証拠としてこの記録を使わない。このCIのDocker版は設計上の候補基準29.8.1/5.5.1より古い。基準版Dockerでの配布受入、Redisの更新、Clone、アプリGUI全経路の受入を完了したことは意味しない。
 
 ## 再実行
 

@@ -37,6 +37,16 @@ jobs:
           cargo test -p composenest-domain -p composenest-application --locked 2>&1 | tee template-security.log
           cargo test -p composenest-adapters --locked --test template_package --test template_catalog_view --test clone_plan --test create_plan --test query_service --test docker_target --test docker_cli 2>&1 | tee -a template-security.log
           cargo test -p composenest-adapters --locked --lib 2>&1 | tee -a template-security.log
+      - name: Measure saved-instance queries at 30 instances
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test -p composenest-adapters --locked --test query_service thirty_instance_queries_record_response_times_without_exposing_secrets -- --exact --nocapture 2>&1 | tee acceptance-performance.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: acceptance-performance-${{ matrix.os }}
+          path: acceptance-performance.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -282,6 +292,7 @@ jobs:
           pnpm run test:list
           pnpm run test:templates
           pnpm run test:ui
+          pnpm run test:acceptance-performance
       - uses: actions/upload-artifact@v4
         if: always()
         with:

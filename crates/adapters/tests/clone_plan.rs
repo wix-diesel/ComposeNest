@@ -11,6 +11,59 @@ mod support;
 use support::*;
 
 #[test]
+fn candidate_templates_confirm_independent_clones_in_all_storage_combinations() {
+    use composenest_application::state_store::PortAllocation;
+    for (package, version, inputs, slot, container_port) in [
+        (
+            "postgresql",
+            "18",
+            json!({"database": "app", "username": "app", "password": "p".repeat(32)}),
+            "database",
+            5432,
+        ),
+        (
+            "redis",
+            "8.2",
+            json!({"password": "p".repeat(32)}),
+            "redis",
+            6379,
+        ),
+    ] {
+        for source_method in [StorageMethod::Bind, StorageMethod::Volume] {
+            for method in [StorageMethod::Bind, StorageMethod::Volume] {
+                let root = tempfile::tempdir().unwrap();
+                let mut source = source_instance("");
+                source.selected_version = version.into();
+                source.inputs_json = inputs.to_string();
+                source.storage_method = source_method;
+                source.ports = vec![PortAllocation {
+                    slot: slot.into(),
+                    host_ip: "127.0.0.1".into(),
+                    host_port: container_port,
+                    container_port,
+                }];
+                source.storage[0].resource_identity = if source_method == StorageMethod::Bind {
+                    root.path().join("source").to_str().unwrap().into()
+                } else {
+                    "cn-source-data".into()
+                };
+                let clone = acceptance_clone::confirm_clone(
+                    package,
+                    &source,
+                    method,
+                    16379,
+                    &root.path().join("destination"),
+                );
+                assert_eq!(clone.storage[0].method, method);
+                let values: serde_json::Value = serde_json::from_str(&clone.inputs_json).unwrap();
+                assert_ne!(values["password"], inputs["password"]);
+                assert_eq!(clone.selected_version, version);
+            }
+        }
+    }
+}
+
+#[test]
 fn clone_version_switch_uses_snapshot_and_shows_removed_fields_and_slots() {
     let (_root, store, template) = store();
     setup_source(&store, &template);

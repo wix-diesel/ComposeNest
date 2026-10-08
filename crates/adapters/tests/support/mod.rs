@@ -1,6 +1,7 @@
 // Each integration test binary uses a different subset of these shared fixtures.
 #![allow(dead_code)]
 
+pub(super) mod acceptance_clone;
 pub(super) mod create_stages;
 pub(super) mod interruption;
 
@@ -194,7 +195,7 @@ pub(super) fn update_clone(
     edit: CloneEdit,
     store: &DatabaseWorker,
     clock: &TestClock,
-    random: &mut TestRandom,
+    random: &mut impl RandomSource,
 ) -> composenest_application::clone_plan::ClonePlanView {
     plans
         .update_plan(

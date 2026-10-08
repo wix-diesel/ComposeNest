@@ -4,6 +4,7 @@ export async function installValidationFixture(page, plans) {
     window.uiMode = "normal";
     window.uiCalls = [];
     window.uiSubscriptions = new Set();
+    window.uiRows = null;
     const port = { slot: "db", hostIp: "127.0.0.1", hostPort: 15432, containerPort: 5432 };
     const state = { id: "target", name: "検証用データベース", revision: 3, lifecycle: "managed", runtimeStatus: "stopped",
       observedAt: "2026-10-07 01:00:00", operationId: null, operationStatus: null, operationKind: null, operationPhase: null,
@@ -35,7 +36,7 @@ export async function installValidationFixture(page, plans) {
       if (command === "discard_create_plan" || command === "discard_clone_plan") return response(null);
       if (window.uiMode === "loading") await new Promise((resolve) => { window.releaseUi = resolve; });
       if (window.uiMode === "failure") throw new Error("private-backend-error");
-      if (command === "list_instances") return response(window.uiMode === "empty" ? [] : [instance, { ...instance, id: "unknown", name: "未確認の環境", runtimeStatus: "unknown", observation: null }]);
+      if (command === "list_instances") return response(window.uiMode === "empty" ? [] : window.uiRows ?? [instance, { ...instance, id: "unknown", name: "未確認の環境", runtimeStatus: "unknown", observation: null }]);
       if (command === "list_templates") return response(window.uiMode === "empty" ? { ...catalog, templates: [] } : catalog);
       if (command === "get_settings") return response({ storageMethod: "bind", managementRoot: "/managed" });
       if (command === "diagnose_runtime") return response({ observedAt: 1791334800, checks: ["cli", "compose", "engine", "linux", "platform", "endpoint", "root"].map((name) => ({ name, status: "ready", version: null })),

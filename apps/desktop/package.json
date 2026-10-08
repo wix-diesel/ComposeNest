@@ -6,6 +6,7 @@
   "packageManager": "pnpm@11.19.0",
   "scripts": {
     "test:security": "node --test scripts/security.test.mjs",
+    "test:acceptance-performance": "node scripts/acceptance-performance.test.mjs",
     "test:ui": "node scripts/ui-validation.test.mjs",
     "test:logs": "node scripts/instance-actions.test.mjs --logs",
     "test:operation": "node scripts/operation-screen.test.mjs",

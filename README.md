@@ -12,6 +12,7 @@ Dockerを管理するためのアプリ
 - [v1 Clone Policy仕様](docs/clone-policy-spec.md)
 - [v1 Template Schema仕様](docs/template-schema-spec.md)
 - [v1 アーキテクチャ設計](docs/architecture-v1.md)
+- [v1 受入マトリクス・実機/初心者観察の記録](docs/acceptance-v1.md)
 - [TemplateのVersion別ファイル設計（採用済み）](docs/template-version-files-design.md)
 - Schema 1パッケージ例: [PostgreSQL](docs/template-examples/postgresql/template.yaml)、[Redis](docs/template-examples/redis/template.yaml)
 

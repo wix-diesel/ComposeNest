@@ -4,7 +4,10 @@ use composenest_adapters::{
     template_catalog_view::{catalog_view, reload_results},
     template_package::read_packages,
 };
-use composenest_application::template_catalog::{TemplateOrigin, prepare_revision};
+use composenest_application::{
+    state_store::{InstanceRecord, PortAllocation, StorageMethod},
+    template_catalog::{TemplateOrigin, prepare_revision},
+};
 use composenest_domain::{
     compose::{ConfirmedCompose, InputValue, Storage, generate, to_yaml},
     identity::InstanceId,
@@ -139,6 +142,7 @@ fn docker(args: &[&str]) -> String {
 }
 
 struct Fixture {
+    record: InstanceRecord,
     root: tempfile::TempDir,
     volume: String,
     image: String,
@@ -376,6 +380,7 @@ fn create_fixture(
     image: &str,
     platform: &str,
     bind: bool,
+    source: Option<&Fixture>,
 ) -> (Fixture, u16) {
     let root = tempfile::tempdir().unwrap();
     let id = InstanceId::from_u128(
@@ -386,12 +391,67 @@ fn create_fixture(
                 value.wrapping_mul(31).wrapping_add(byte as u128)
             }),
     );
-    let volume = format!("cn-{:032x}-data", id.as_u128());
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let mut id = id;
+    let mut inputs = BTreeMap::from([
+        (
+            "database".into(),
+            InputValue::String("acceptance_db".into()),
+        ),
+        (
+            "username".into(),
+            InputValue::String("acceptance_user".into()),
+        ),
+        ("password".into(), InputValue::String(PASSWORD.into())),
+    ]);
+    let mut volume = format!("cn-{:032x}-data", id.as_u128());
+    if let Some(source) = source {
+        let confirmed = support::acceptance_clone::confirm_clone(
+            "postgresql",
+            &source.record,
+            if bind {
+                StorageMethod::Bind
+            } else {
+                StorageMethod::Volume
+            },
+            port,
+            &root.path().join("data"),
+        );
+        id = InstanceId::from_u128(u128::from_str_radix(&confirmed.instance_id, 16).unwrap());
+        volume = format!("cn-{:032x}-data", id.as_u128());
+        let values: BTreeMap<String, String> =
+            serde_json::from_str(&confirmed.inputs_json).unwrap();
+        inputs = values
+            .into_iter()
+            .map(|(key, value)| (key, InputValue::String(value)))
+            .collect();
+        assert_eq!(confirmed.ports[0].host_port, port);
+    }
+    let storage_identity = if bind {
+        root.path().join("data").to_str().unwrap().into()
+    } else {
+        volume.clone()
+    };
+    let record = support::acceptance_clone::source_record(
+        id,
+        &version.key,
+        &inputs,
+        PortAllocation {
+            slot: "database".into(),
+            host_ip: "127.0.0.1".into(),
+            host_port: port,
+            container_port: 5432,
+        },
+        bind,
+        storage_identity,
+    );
     let fixture = Fixture {
         root,
         volume,
-        image: image.to_owned(),
+        image: image.into(),
         bind,
+        record,
     };
     fs::create_dir(fixture.root.path().join("data")).unwrap();
     let storage = if bind {
@@ -403,19 +463,6 @@ fn create_fixture(
             presence: StoragePresence::Present,
         }
     };
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let inputs = BTreeMap::from([
-        (
-            "database".into(),
-            InputValue::String("acceptance_db".into()),
-        ),
-        (
-            "username".into(),
-            InputValue::String("acceptance_user".into()),
-        ),
-        ("password".into(), InputValue::String(PASSWORD.into())),
-    ]);
     let ports = BTreeMap::from([("database".into(), port)]);
     let storage = BTreeMap::from([("data".into(), storage)]);
     let model = generate(&ConfirmedCompose {
@@ -517,8 +564,54 @@ fn docker_postgresql_versions_preserve_authenticated_data_in_both_storage_modes(
             "/var/lib/postgresql"
         };
         for bind in [true, false] {
-            let (fixture, port) = create_fixture(&snapshot, version, &image, &platform, bind);
+            let (fixture, port) = create_fixture(&snapshot, version, &image, &platform, bind, None);
             check_lifecycle(&fixture, &version.key, &platform, target, port, PASSWORD);
+            for clone_bind in [true, false] {
+                let (clone, clone_port) = create_fixture(
+                    &snapshot,
+                    version,
+                    &image,
+                    &platform,
+                    clone_bind,
+                    Some(&fixture),
+                );
+                let values: BTreeMap<String, String> =
+                    serde_json::from_str(&clone.record.inputs_json).unwrap();
+                let password = &values["password"];
+                check_container(&clone, &platform, target, clone_port, password);
+                assert_eq!(
+                    query(
+                        &clone,
+                        clone_port,
+                        password,
+                        "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='acceptance'"
+                    ),
+                    "0"
+                );
+                query(
+                    &clone,
+                    clone_port,
+                    password,
+                    "CREATE TABLE acceptance (id integer PRIMARY KEY, value text); INSERT INTO acceptance VALUES (1, 'clone_only')",
+                );
+                assert_eq!(
+                    query(
+                        &clone,
+                        clone_port,
+                        password,
+                        "SELECT value FROM acceptance WHERE id=1"
+                    ),
+                    "clone_only"
+                );
+                fixture.check_data(port, PASSWORD);
+                assert_ne!(clone.record.project_name, fixture.record.project_name);
+                println!(
+                    "PASS PostgreSQL {} Clone {}->{}; source data absent and destination writes isolated",
+                    version.key,
+                    if bind { "bind" } else { "named" },
+                    if clone_bind { "bind" } else { "named" }
+                );
+            }
             println!(
                 "PASS PostgreSQL {} {} {}; digest={image}; all mounts, inputs, TCP authentication, health, stop/start, recreate and persistence",
                 version.key,

@@ -1,0 +1,12 @@
+# Candidate only; do not bundle before all target hosts pass the acceptance in VALIDATION.md.
+schemaVersion: 1
+id: composenest.redis
+templateVersion: "1.0.0"
+name: Redis
+description: 認証とAOF永続化を有効にした、配布前のRedis検証用候補です。
+author: ComposeNest
+homepage: https://hub.docker.com/_/redis
+
+defaultVersion: "8.2"
+versions:
+  "8.2": versions/8.2.yaml

@@ -4,11 +4,13 @@ use std::path::Path;
 use composenest_adapters::sqlite::DatabaseWorker;
 use composenest_adapters::template_package::{ReloadEntry, read_packages, reload_catalog};
 use composenest_application::state_store::StateStore;
-use composenest_application::template_catalog::{CatalogError, TemplateOrigin};
+use composenest_application::template_catalog::{CatalogError, TemplateOrigin, register_packages};
 
 const MANIFEST: &str = "schemaVersion: 1\nid: example.test\ntemplateVersion: \"1.0.0\"\nname: Test\ndescription: Test template\ndefaultVersion: \"2\"\nversions:\n  \"2\": versions/2.yaml\n  \"1\": versions/1.yaml\n";
 const VERSION: &str =
     "image: example:1\nplatforms: [linux/amd64]\nservice:\n  healthcheck:\n    command: [check]\n";
+
+mod support;
 
 fn write_package(root: &Path, name: &str) {
     let package = root.join(name);
@@ -89,6 +91,16 @@ fn rejects_unsafe_references_and_duplicate_physical_files() {
         "C:/absolute.yaml",
         "https://example.com/version.yaml",
         "versions/CON.yaml",
+        "versions/con.txt.yaml",
+        "versions/NUL.yaml",
+        "versions/AUX.yaml",
+        "versions/COM1.yaml",
+        "versions/LPT9.yaml",
+        "versions/trailing..yaml",
+        "versions/../1.yaml",
+        "versions\\1.yaml",
+        "//server/share.yaml",
+        "versions/1.yaml:stream",
         "versions/nested/1.yaml",
         "versions/2.yaml",
     ] {
@@ -117,6 +129,136 @@ fn rejects_unsafe_references_and_duplicate_physical_files() {
             .reason
             .contains("same physical file")
     );
+}
+
+#[test]
+fn rejects_more_than_thirty_two_versions_and_non_regular_documents() {
+    let root = tempfile::tempdir().unwrap();
+    write_package(root.path(), "invalid");
+    let mut manifest = MANIFEST.split("versions:\n").next().unwrap().to_owned();
+    manifest.push_str("versions:\n");
+    for index in 0..33 {
+        manifest.push_str(&format!("  \"{index}\": versions/{index}.yaml\n"));
+    }
+    fs::write(root.path().join("invalid/template.yaml"), manifest).unwrap();
+    assert!(read_packages(root.path(), TemplateOrigin::Local).unwrap()[0].is_err());
+    fs::write(root.path().join("invalid/template.yaml"), MANIFEST).unwrap();
+    fs::remove_file(root.path().join("invalid/versions/1.yaml")).unwrap();
+    fs::create_dir(root.path().join("invalid/versions/1.yaml")).unwrap();
+    assert!(read_packages(root.path(), TemplateOrigin::Local).unwrap()[0].is_err());
+}
+
+#[test]
+fn registers_only_validated_captured_bytes_without_execution_or_partial_updates() {
+    let root = tempfile::tempdir().unwrap();
+    let catalog = root.path().join("catalog");
+    let management = root.path().join("management");
+    fs::create_dir(&catalog).unwrap();
+    for path in [
+        &management,
+        &management.join("state"),
+        &management.join("locks"),
+    ] {
+        fs::create_dir(path).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+    }
+    write_package(&catalog, "captured");
+    let spoofed = MANIFEST.replace("example.test", "composenest.redis") + "author: ComposeNest\n";
+    fs::write(catalog.join("captured/template.yaml"), &spoofed).unwrap();
+    let captured = read_packages(&catalog, TemplateOrigin::Local)
+        .unwrap()
+        .pop()
+        .unwrap()
+        .unwrap();
+    let worker = DatabaseWorker::start(&management).unwrap();
+    let validated = composenest_application::template_catalog::prepare_revision(captured).unwrap();
+    fs::write(
+        catalog.join("captured/versions/1.yaml"),
+        "malicious replacement",
+    )
+    .unwrap();
+    worker.register_template(&validated).unwrap();
+    worker.create_scope("scope", "owner", "root").unwrap();
+    let form = composenest_application::create_plan::CreatePlans::default()
+        .prepare_create(
+            &support::request(&validated.id),
+            &worker,
+            &support::TestClock(std::cell::Cell::new(0)),
+            &mut support::TestRandom::default(),
+            &support::FreePorts,
+        )
+        .unwrap();
+    assert_eq!(form.versions, ["2", "1"]);
+    assert!(form.template_form.inputs.is_empty());
+    assert!(form.template_form.ports.is_empty());
+    assert!(form.template_form.storage.is_empty());
+    let (origin, contents, hash): (String, Vec<u8>, String) = worker.read(|db| Ok(db.query_row(
+        "SELECT r.origin, f.contents, f.sha256 FROM template_revisions r JOIN template_revision_files f ON r.id=f.revision_id WHERE f.relative_path='versions/1.yaml'", [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?)).unwrap();
+    assert_eq!(origin, "local");
+    assert_eq!(contents, VERSION.as_bytes());
+    use sha2::{Digest, Sha256};
+    assert_eq!(hash, format!("{:x}", Sha256::digest(VERSION.as_bytes())));
+    let bad = read_packages(&catalog, TemplateOrigin::Local)
+        .unwrap()
+        .pop()
+        .unwrap()
+        .unwrap();
+    assert!(register_packages(&worker, vec![bad])[0].result.is_err());
+    assert_eq!(worker.list_templates().unwrap().len(), 1);
+    for table in [
+        "instances",
+        "template_snapshots",
+        "image_resolutions",
+        "storage_allocations",
+        "operations",
+    ] {
+        let count: i64 = worker
+            .read(move |db| {
+                Ok(
+                    db.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                        row.get(0)
+                    })?,
+                )
+            })
+            .unwrap();
+        assert_eq!(count, 0, "registration changed {table}");
+    }
+    assert!(!management.join("data").exists());
+    assert!(!management.join("instances").exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn rejects_junctioned_versions_directory_without_symlink_privileges() {
+    let root = tempfile::tempdir().unwrap();
+    write_package(root.path(), "real");
+    // cmd's mklink treats forward slashes as switches, so use native separators.
+    let versions = root.path().join("real").join("versions");
+    let outside = root.path().join("outside");
+    fs::rename(&versions, &outside).unwrap();
+    let status = std::process::Command::new("cmd")
+        .args(["/D", "/C", "mklink", "/J"])
+        .arg(&versions)
+        .arg(&outside)
+        .status()
+        .unwrap();
+    assert!(status.success(), "junction fixture could not be created");
+    assert!(
+        read_packages(root.path(), TemplateOrigin::Local)
+            .unwrap()
+            .iter()
+            .any(|result| result
+                .as_ref()
+                .err()
+                .is_some_and(|error| error.package == "real"))
+    );
+    fs::remove_dir(&versions).unwrap();
 }
 
 #[test]
@@ -232,4 +374,16 @@ fn rejects_symlinked_package_and_version_file() {
             .err()
             .is_some_and(|error| error.package == "real")
     }));
+    fs::remove_dir_all(root.path().join("real/versions")).unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    symlink(outside.path(), root.path().join("real/versions")).unwrap();
+    assert!(
+        read_packages(root.path(), TemplateOrigin::Local)
+            .unwrap()
+            .iter()
+            .any(|result| result
+                .as_ref()
+                .err()
+                .is_some_and(|error| error.package == "real"))
+    );
 }

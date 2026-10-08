@@ -14,6 +14,32 @@ use support::*;
 fn clone_version_switch_uses_snapshot_and_shows_removed_fields_and_slots() {
     let (_root, store, template) = store();
     setup_source(&store, &template);
+    let newer = composenest_application::template_catalog::prepare_revision(
+        composenest_application::template_catalog::TemplatePackage {
+            name: "newer".into(),
+            origin: composenest_application::template_catalog::TemplateOrigin::Local,
+            files: [
+                (
+                    "template.yaml",
+                    MANIFEST.replace("1.0.0", "1.0.1") + "  \"3\": versions/3.yaml\n",
+                ),
+                ("versions/1.yaml", V1.into()),
+                ("versions/2.yaml", V2.into()),
+                ("versions/3.yaml", V1.into()),
+            ]
+            .into_iter()
+            .map(
+                |(relative_path, contents)| composenest_application::state_store::TemplateFile {
+                    relative_path: relative_path.into(),
+                    contents: contents.into_bytes(),
+                },
+            )
+            .collect(),
+            warnings: Vec::new(),
+        },
+    )
+    .unwrap();
+    store.register_template(&newer).unwrap();
     store
         .set_default_storage_method("scope", StorageMethod::Volume)
         .unwrap();
@@ -36,6 +62,23 @@ fn clone_version_switch_uses_snapshot_and_shows_removed_fields_and_slots() {
     assert_eq!(first.storage_method, StorageMethod::Bind);
     assert_eq!(first.ports["db"], 5433);
     assert_eq!(first.versions, ["1", "2"]);
+    let mut invalid = clone_edit(1);
+    invalid.version = Some("3".into());
+    assert!(
+        plans
+            .update_plan(
+                UpdateClone {
+                    scope_id: "scope".into(),
+                    plan_id: first.plan_id.clone(),
+                    edit: invalid
+                },
+                &store,
+                &clock,
+                &mut random,
+                &FreePorts
+            )
+            .is_err()
+    );
     assert!(first.concerns.is_empty());
     assert_eq!(
         first
@@ -79,6 +122,17 @@ fn clone_version_switch_uses_snapshot_and_shows_removed_fields_and_slots() {
         &mut random,
     );
     assert_eq!(next.added_ports, ["api"]);
+    assert_eq!(next.versions, ["1", "2"]);
+    let snapshot_files: i64 = store
+        .read(|db| {
+            Ok(db.query_row(
+                "SELECT count(*) FROM template_snapshot_files f JOIN template_snapshots s ON s.id=f.snapshot_id WHERE s.instance_id='source'",
+                [],
+                |row| row.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(snapshot_files, 3);
     assert_eq!(
         next.template_form
             .inputs

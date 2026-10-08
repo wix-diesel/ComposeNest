@@ -59,6 +59,11 @@ fn comments_whitespace_and_file_names_do_not_change_meaning() {
     assert_eq!(revision.semantic_hash, original.semantic_hash);
     assert_eq!(revision.id, original.id);
     assert_ne!(revision.files[0].contents, original.files[0].contents);
+    use sha2::{Digest, Sha256};
+    assert_ne!(
+        Sha256::digest(&revision.files[0].contents),
+        Sha256::digest(&original.files[0].contents)
+    );
     assert_ne!(
         revision.files[1].relative_path,
         original.files[1].relative_path

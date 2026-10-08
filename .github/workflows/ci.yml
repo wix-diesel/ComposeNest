@@ -19,6 +19,30 @@ env:
   NODE_VERSION: 24.19.0
 
 jobs:
+  template-security:
+    name: Template and IPC acceptance (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify structure, registration, file capture and scoped IPC boundaries
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test -p composenest-domain -p composenest-application --locked 2>&1 | tee template-security.log
+          cargo test -p composenest-adapters --locked --test template_package --test template_catalog_view --test clone_plan --test create_plan --test query_service --test docker_target --test docker_cli 2>&1 | tee -a template-security.log
+          cargo test -p composenest-adapters --locked --lib 2>&1 | tee -a template-security.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: template-security-${{ matrix.os }}
+          path: template-security.log
+
   windows-root-permissions:
     name: Windows management root permissions
     runs-on: windows-2025
@@ -226,6 +250,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Check IPC contract
         run: pnpm run check:contracts
+      - name: Check frontend privilege and persistence boundaries
+        run: pnpm run test:security
       - name: Frontend build
         run: pnpm run build
       - uses: dtolnay/rust-toolchain@1.98.1

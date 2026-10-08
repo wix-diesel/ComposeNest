@@ -242,4 +242,31 @@ mod tests {
         std::fs::write(package_path.join("template.yaml"), b"after this write").unwrap();
         assert!(package.finish().is_err());
     }
+
+    #[test]
+    fn discards_collection_when_opened_file_or_directory_is_replaced() {
+        for replace_directory in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("package");
+            std::fs::create_dir(&path).unwrap();
+            std::fs::write(path.join("template.yaml"), b"same bytes").unwrap();
+            let mut package =
+                platform::SafePackage::open(root.path(), OsStr::new("package")).unwrap();
+            package.read("template.yaml", &mut 0).unwrap();
+            let replaced = if replace_directory {
+                path.clone()
+            } else {
+                path.join("template.yaml")
+            };
+            std::fs::rename(&replaced, root.path().join("old")).unwrap();
+            if replace_directory {
+                std::fs::create_dir(&path).unwrap();
+            }
+            std::fs::write(path.join("template.yaml"), b"same bytes").unwrap();
+            assert!(
+                package.finish().is_err(),
+                "accepted a replacement with identical bytes"
+            );
+        }
+    }
 }

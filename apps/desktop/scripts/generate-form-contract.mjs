@@ -62,7 +62,7 @@ for (const [file, name, casing] of [["state_store", "StorageMethod", "snake_case
   output += `export type ${name} = ${variants.join(" | ")};\n\n`;
 }
 const cloneSource = await readFile(new URL("../../../crates/application/src/clone_plan.rs", import.meta.url), "utf8");
-if (!/#\[serde\(tag = "action", content = "value", rename_all = "snake_case"\)\]\npub enum CloneAnswer \{\s*(?:\/\/\/[^\n]+\n\s*)?Copy,\s*(?:\/\/\/[^\n]+\n\s*)?Generate,\s*(?:\/\/\/[^\n]+\n\s*)?Input\(Value\),\s*(?:\/\/\/[^\n]+\n\s*)?Clear,\s*\}/.test(cloneSource)) throw new Error("CloneAnswer contract changed");
+if (!/#\[serde\(\s*tag = "action",\s*content = "value",\s*rename_all = "snake_case",\s*deny_unknown_fields\s*\)\]\npub enum CloneAnswer \{\s*(?:\/\/\/[^\n]+\n\s*)?Copy,\s*(?:\/\/\/[^\n]+\n\s*)?Generate,\s*(?:\/\/\/[^\n]+\n\s*)?Input\(Value\),\s*(?:\/\/\/[^\n]+\n\s*)?Clear,\s*\}/.test(cloneSource)) throw new Error("CloneAnswer contract changed");
 output += 'export type CloneAnswer = { action: "copy" | "generate" | "clear" } | { action: "input"; value: JsonValue };\n';
 const destination = new URL("../src/generated/template-form.ts", import.meta.url);
 if (process.argv.includes("--check")) {

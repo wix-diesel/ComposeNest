@@ -41,7 +41,12 @@ pub struct PrepareClone {
 
 /// Explicit response to a Clone Policy.
 #[derive(Clone, Deserialize)]
-#[serde(tag = "action", content = "value", rename_all = "snake_case")]
+#[serde(
+    tag = "action",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum CloneAnswer {
     /// Copy the committed source value.
     Copy,

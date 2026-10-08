@@ -115,6 +115,40 @@ fn each_snapshot_version_uses_its_own_storage_target_and_preserves_values() {
 }
 
 #[test]
+fn optional_environment_omits_unset_input_but_preserves_empty_string() {
+    let manifest = parse_manifest("optional", b"schemaVersion: 1\nid: example.optional\ntemplateVersion: \"1.0.0\"\nname: Optional\ndescription: Test\ndefaultVersion: \"1\"\nversions:\n  \"1\": versions/1.yaml\n").unwrap();
+    let definition = parse_version("optional", "1", "versions/1.yaml", b"image: example:1\nplatforms: [linux/amd64]\ninputs:\n  note:\n    label: Note\n    type: string\n    required: false\nservice:\n  environment:\n    NOTE: { input: note, onMissing: omit }\n  healthcheck:\n    command: [check]\n").unwrap();
+    let snapshot = resolve_template(manifest, &[("1".into(), definition)]).unwrap();
+    let ports = BTreeMap::new();
+    let storage = BTreeMap::new();
+    let digest = format!("example@sha256:{}", "a".repeat(64));
+    for value in [None, Some(InputValue::String(String::new()))] {
+        let inputs = value
+            .clone()
+            .map(|value| BTreeMap::from([("note".into(), value)]))
+            .unwrap_or_default();
+        let model = generate(&ConfirmedCompose {
+            snapshot: &snapshot,
+            version: "1",
+            instance_id: InstanceId::from_u128(42),
+            scope_id: "scope",
+            spec_revision: 1,
+            inputs: &inputs,
+            ports: &ports,
+            storage: &storage,
+            source_image: "example:1",
+            execution_image: &digest,
+            platform: "linux/amd64",
+        })
+        .unwrap();
+        assert_eq!(
+            model.service.environment.get("NOTE").map(String::as_str),
+            value.map(|_| "")
+        );
+    }
+}
+
+#[test]
 fn rejects_stale_slots_inputs_and_unverified_image_or_storage() {
     let snapshot = snapshot();
     let mut inputs = inputs();

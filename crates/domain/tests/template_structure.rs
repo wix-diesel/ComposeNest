@@ -140,3 +140,61 @@ fn reports_the_failing_field_and_one_based_line() {
     );
     assert_eq!(error.position.unwrap().line, 5);
 }
+
+#[test]
+fn rejects_host_privileges_inheritance_and_distributed_secrets() {
+    let version = VERSION.replace("\r\n", "\n");
+    let manifest = MANIFEST.replace("\r\n", "\n");
+    for setting in [
+        "privileged: true",
+        "network_mode: host",
+        "pid: host",
+        "devices: []",
+        "volumes: ['/var/run/docker.sock:/var/run/docker.sock']",
+        "shell: sh",
+        "entrypoint: [sh, -c, id]",
+        "cap_add: [SYS_ADMIN]",
+        "compose: {}",
+    ] {
+        let source = version.replace("service:\n", &format!("service:\n  {setting}\n"));
+        assert!(
+            parse_version("test", "1", "versions/1.yaml", source.as_bytes()).is_err(),
+            "{setting}"
+        );
+    }
+    for setting in ["host: /tmp/data", "volume: shared", "clone: copy"] {
+        let source = version.replace(
+            "container: /data",
+            &format!("container: /data\n      {setting}"),
+        );
+        assert!(
+            parse_version("test", "1", "versions/1.yaml", source.as_bytes()).is_err(),
+            "{setting}"
+        );
+    }
+    for setting in [
+        "inputs: {}",
+        "service: {}",
+        "extends: other",
+        "include: other.yaml",
+    ] {
+        assert!(
+            parse_manifest("test", format!("{manifest}{setting}\n").as_bytes()).is_err(),
+            "{setting}"
+        );
+        assert!(
+            parse_version(
+                "test",
+                "1",
+                "versions/1.yaml",
+                format!("{version}{setting}\n").as_bytes()
+            )
+            .is_err(),
+            "{setting}"
+        );
+    }
+    let secret_default = version.replace("type: secret", "type: secret\n    default: fixed-secret");
+    assert!(parse_version("test", "1", "versions/1.yaml", secret_default.as_bytes()).is_err());
+    let legacy = manifest.replace("versions/8.2.yaml", "{ image: redis:8.2, service: {} }");
+    assert!(parse_manifest("test", legacy.as_bytes()).is_err());
+}

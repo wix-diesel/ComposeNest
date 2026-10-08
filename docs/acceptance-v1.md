@@ -196,3 +196,18 @@ CIの成功だけで最後の行を合格に変更しない。配布受入とTem
 - Windows x86_64 / macOS ARM64 / Ubuntu x86_64のCore境界・30件SQLite計測、3OS root権限、native workspace test/Clippy、障害注入、Docker復旧・保持削除、Compose契約が成功。CI root権限の成功は通常利用者のnative全フローの代替ではない。
 - frontend build/型検査・契約・全画面別test・52組のmock/React比較は成功。新しい30件UI計測は失敗のため合格に数えない。結果JSONと画像は同runのartifactを参照する。
 - Clone受入のID生成は実OS乱数を使い、並行実行で固定volume名を共有しない。
+
+### 修正後のUI実測（2026-10-08）
+
+[CI #396](https://github.com/wix-diesel/ComposeNest/actions/runs/37742810427)、head `362b7868`、merge `aa42ba39` のfrontend jobで全52組の比較と30件UI計測が成功。144 sampleのJSONを `common-shell-screenshots` artifact（ID 11533984238）から取得し確認した。Linux 6.17.0-1022-azure x64、AMD EPYC 7763、Node 24.19.0、Chromium 151.0.7922.34。production React＋fake IPCの測定で、native WebView/SQLite/Docker時間は含まない。
+
+下表は中央値 / p95（ms）。各操作10回、受付表示のみ各1回。10回のnearest-rank p95はmaxと一致する。
+
+| テーマ/表示 | 更新 | 検索 | 絞り込み | 名前ソート | IPC待ち受付表示（1回） |
+| --- | --- | --- | --- | --- | --- |
+| light/cards | 56.35 / 75.40 | 32.35 / 32.50 | 69.15 / 84.40 | — | 71.90 / 71.90 |
+| light/grid | 65.70 / 80.70 | 32.40 / 32.60 | 55.85 / 71.00 | 56.95 / 57.60 | 81.60 / 81.60 |
+| dark/cards | 56.40 / 75.60 | 32.30 / 32.50 | 69.40 / 70.80 | — | 87.70 / 87.70 |
+| dark/grid | 65.85 / 83.40 | 32.50 / 32.60 | 56.35 / 70.40 | 56.85 / 58.00 | 81.40 / 81.40 |
+
+同runのUbuntu Core jobは既存の `docker_cli::timeout_is_unknown_and_reaped_before_next_change` の実行時に `ExecutableFileBusy (Text file busy)` で失敗した。初回CI・ローカルでは成功しており、失敗理由を残して最新commitで再確認する。Clippy jobはTauri依存取得段階で7分以上進んでおらず、完了扱いにせず文書更新後のCIへ引き継ぐ。他の実Docker Clone・Windows/macOS Core・workspace test・全画面は成功している。これらも対象3OSのnative受入・初心者観察へは拡張しない。

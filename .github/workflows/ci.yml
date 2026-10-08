@@ -111,6 +111,24 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
 
+  postgresql-template:
+    name: PostgreSQL 17/18 bind and named acceptance
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: Swatinem/rust-cache@v2
+      - name: Install TCP client and record validation host
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes postgresql-client
+          cat /etc/os-release
+          docker version
+          docker compose version
+          psql --version
+      - name: Accept both full versions through generated Compose
+        run: cargo test -p composenest-adapters --test postgresql_template --locked docker_postgresql_versions_preserve_authenticated_data_in_both_storage_modes -- --ignored --exact --nocapture
+
   rust-clippy:
     name: Rust clippy
     runs-on: ubuntu-24.04

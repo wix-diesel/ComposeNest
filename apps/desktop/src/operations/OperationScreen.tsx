@@ -4,6 +4,7 @@ import type { ApplicationClient } from "../ipc/ApplicationClient";
 import type { OperationProgressView } from "../generated/template-form";
 import { operationPhaseLabel } from "../instances/operationPhase";
 import "./operation.css";
+import { RecoveryPanel } from "./RecoveryPanel";
 
 const stages = ["設定と保存領域を準備", "イメージを取得", "Composeを検証・コンテナを作成", "起動・準備完了を確認", "接続情報を案内"];
 const phases: Record<string, number> = { accepted: 0, prepare: 0, storage: 0, image: 1, artifact: 2, config: 2, create: 2, inspect_created: 2, start: 3, ready: 3 };
@@ -97,7 +98,10 @@ export function OperationScreen({ client, operationId, instanceId, headingRef }:
         : <><strong>{notice ? "現在の結果は未確認です" : succeeded ? "処理の完了記録があります" : failed ? "処理は完了していません" : terminal(operation.status) ? "実際の結果を確認してください" : "準備完了の確認を待っています"}</strong>
           <p>{failed || terminal(operation.status) ? "対象の環境と保存データは保持されます。現在の状態は環境の詳細で確認できます。" : "起動や時間の経過だけでは利用可能と表示しません。"}</p>
           <button className="btn" onClick={() => client.navigate({ page: "instance-detail", instanceId: target.id })}>対象の環境を確認</button></>}
-    </div></div><aside><section className="panel"><h2>対象の環境</h2><p>現在の保存設定</p><dl className="operation-summary">
+    </div>
+    {view.lastFailureStatus && <p className="notice">直前の失敗・処理結果: {statuses[view.lastFailureStatus] ?? "要確認"}。現在の処理結果: {statuses[operation.status] ?? "未確認"}。</p>}
+    {target.lifecycle !== "retired" && <RecoveryPanel client={client} instanceId={target.id} operationId={operationId} kind={operation.kind} status={operation.status} onReconciled={() => refresh.current()} />}
+    </div><aside><section className="panel"><h2>対象の環境</h2><p>現在の保存設定</p><dl className="operation-summary">
       <div><dt>サービス</dt><dd>{target.templateId} {target.selectedVersion}</dd></div>
       <div><dt>接続ポート</dt><dd>{target.ports.map((port) => <div key={port.slot}><code>{port.hostIp}:{port.hostPort}</code></div>)}</dd></div>
       <div><dt>保存方式</dt><dd>{target.storageMethod === "bind" ? "bind mount" : target.storageMethod === "volume" ? "named volume" : "未確認"}</dd></div>

@@ -175,11 +175,14 @@ jobs:
           pnpm run test:settings
           pnpm run test:retained
           pnpm run test:operation
+          pnpm run test:recovery
           pnpm run test:forms
           pnpm run test:create
           pnpm run test:clone
           pnpm run test:delete
           pnpm run test:instances
+          pnpm run test:content
+          pnpm run test:logs
           pnpm run test:list
           pnpm run test:templates
           pnpm run test:ui

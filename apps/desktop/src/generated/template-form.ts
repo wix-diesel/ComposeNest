@@ -4,6 +4,73 @@ import type { RequestContext } from "./ipc";
 
 export type JsonValue = null | boolean | number | string | Array<JsonValue> | { [key: string]: JsonValue };
 
+export interface SubscribeLogsRequest {
+  context: RequestContext;
+  instanceId: string;
+  expectedSpecRevision: number;
+}
+
+export interface LogSubscriptionRequest {
+  context: RequestContext;
+  subscriptionId: string;
+}
+
+export interface LogsView {
+  subscriptionId: string;
+  instanceId: string;
+  specRevision: number;
+  lines: Array<string>;
+  droppedLines: number;
+  truncatedLines: number;
+  finished: boolean;
+  failed: boolean;
+}
+
+export interface RecoveryRequest {
+  context: RequestContext;
+  instanceId: string;
+  operationId: string;
+  recoveryRequestId: string | null;
+}
+
+export interface RecoverOperationRequest {
+  context: RequestContext;
+  instanceId: string;
+  operationId: string;
+  expectedAttempt: number;
+  expectedRevision: number;
+  candidateRevision: number;
+  action: string;
+  ports: Record<string, number>;
+  artifactId: string | null;
+  confirmationHash: string | null;
+}
+
+export interface RecoveryFileDiff {
+  path: string;
+  recordedHash: string | null;
+  observedHash: string | null;
+}
+
+export interface RecoveryView {
+  instanceId: string;
+  operationId: string;
+  receiptRequestId: string;
+  attempt: number;
+  instanceRevision: number;
+  candidateRevision: number;
+  previousStatus: string;
+  currentRuntime: string;
+  actions: Array<string>;
+  holdReasons: Array<string>;
+  ports: Array<PortView>;
+  originalPorts: Array<PortView>;
+  proposedPorts: Array<PortView>;
+  artifactId: string | null;
+  confirmationHash: string | null;
+  files: Array<RecoveryFileDiff>;
+}
+
 export interface RetainedLocation {
   storage: StorageView;
   location: string;
@@ -132,6 +199,7 @@ export interface OperationRequest {
 }
 
 export interface OperationProgressView {
+  lastFailureStatus: string | null;
   operation: OperationView;
   instance: InstanceView;
   sequence: number;
@@ -186,6 +254,35 @@ export interface InstanceDetailView {
   locations: Array<StorageLocationView>;
   creationStartedAt: string | null;
   cloneSourceId: string | null;
+}
+
+export interface InstanceSecretRequest {
+  context: RequestContext;
+  instanceId: string;
+  expectedSpecRevision: number;
+  slot: string;
+}
+
+export interface InstanceSecretView {
+  instanceId: string;
+  specRevision: number;
+  slot: string;
+  value: string;
+}
+
+export interface InstanceComposeRequest {
+  context: RequestContext;
+  instanceId: string;
+  expectedSpecRevision: number;
+  reveal: boolean;
+}
+
+export interface InstanceComposeView {
+  instanceId: string;
+  specRevision: number;
+  masked: boolean;
+  content: string;
+  path: string;
 }
 
 export interface EditInstancePortsRequest {

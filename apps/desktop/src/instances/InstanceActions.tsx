@@ -115,7 +115,7 @@ function InstanceHeader({ client, instanceId, headingRef, onAbout }: { client: A
     {(uncertain || client.hasInstanceChange(instanceId)) && <p className="notice">受付結果の確認が必要です。別の変更は実行できません。</p>}
     {stale && <p className="notice">表示していた版が古くなりました。現在の状態を再確認してください。</p>}
     {(view?.runtimeStatus === "absent" || view?.operationPhase === "start_required") && <p className="notice">コンテナが不在です。再起動ではなく「起動」を選んでください。未解決の処理がある場合は先に解決してください。</p>}
-    {unresolved && <p className="notice">未解決の処理があるため、別の変更は実行できません。</p>}
+    {unresolved && <p className="notice">未解決の処理があるため、別の変更は実行できません。{view?.operationId && <button className="btn small" onClick={() => client.navigate({ page: "operation", operationId: view.operationId!, instanceId })}>復旧・結果確認</button>}</p>}
     {busy && <p role="status">処理の受付を確認中です。画面を離れても送信した要求は取り消されません。</p>}
     <section className="panel" aria-label="環境の状態"><div className="panel-title"><h2>環境の状態</h2><small>最終観測（保存値） {view?.observedAt ? `${view.observedAt} UTC` : "未確認"}{detail?.instance.observation?.freshness !== "fresh" && view?.observedAt ? "（過去の観測）" : ""}</small></div>
       <dl className="instance-state"><div><dt>実行状態</dt><dd><span className="badge" data-runtime={view?.runtimeStatus}>{runtime[view?.runtimeStatus ?? "unknown"] ?? "未確認"}</span></dd></div>
@@ -124,7 +124,7 @@ function InstanceHeader({ client, instanceId, headingRef, onAbout }: { client: A
       {view?.operationId && <p className="operation-link">処理ID: <code>{view.operationId}</code> · 段階: {operationPhaseLabel(view.operationPhase)} <button className="btn small" onClick={() => client.navigate({ page: "operation", operationId: view.operationId!, instanceId })}>処理状況を開く</button></p>}
       <button className="btn small" disabled={busy} onClick={() => void refresh()}>{uncertain ? "受付を再確認" : "現在の状態を再確認"}</button>
     </section>
-    <InstanceDetailTabs detail={detail} deleteAction={<div className="detail-danger"><div><h3>環境を削除</h3><p>コンテナと専用ネットワークを削除します。データは残ります。</p></div>
+    <InstanceDetailTabs client={client} detail={detail} deleteAction={<div className="detail-danger"><div><h3>環境を削除</h3><p>コンテナと専用ネットワークを削除します。データは残ります。</p></div>
       <button className="btn" disabled={!available("delete") || !detail} onClick={() => setDeletion(detail)}>環境を削除</button></div>} />
     {deletion && <DeleteDialog detail={deletion} disabled={!available("delete") || deletion.state.revision !== view?.revision || !detail}
       onClose={() => setDeletion(null)} onConfirm={() => void submit("delete", deletion.state.revision)} />}

@@ -14,6 +14,80 @@ import {
 
 /** Typed boundary between React features and the Tauri transport. */
 export class ApplicationClient {
+  /** Starts a scoped masked stream, retaining its ID before a response for reliable cleanup. */
+  subscribeLogs(instanceId: string, revision: number): { id: string; ready: Promise<import("../generated/template-form").LogsView> } {
+    const context = this.context();
+    const ready = this.createCall<import("../generated/template-form").LogsView>("subscribe_logs", { context, instanceId, expectedSpecRevision: revision } as import("../generated/template-form").SubscribeLogsRequest)
+      .then((view) => this.validateLogs(view, context.requestId, instanceId, revision));
+    return { id: context.requestId, ready };
+  }
+
+  /** Pulls one bounded snapshot; the caller never accumulates an event queue. */
+  async getLogs(id: string, instanceId: string, revision: number): Promise<import("../generated/template-form").LogsView> {
+    const view = await this.createCall<import("../generated/template-form").LogsView>("get_logs", { context: this.context(), subscriptionId: id } as import("../generated/template-form").LogSubscriptionRequest);
+    return this.validateLogs(view, id, instanceId, revision);
+  }
+
+  /** Releases only a log CLI and validates backend acknowledgement. */
+  async unsubscribeLogs(id: string): Promise<void> {
+    const closed = await this.createCall<boolean>("unsubscribe_logs", { context: this.context(), subscriptionId: id } as import("../generated/template-form").LogSubscriptionRequest);
+    if (closed !== true) throw new Error("log_cleanup_unconfirmed");
+  }
+
+  private validateLogs(view: import("../generated/template-form").LogsView, id: string, instanceId: string, revision: number) {
+    const encoder = new TextEncoder();
+    if (!view || view.subscriptionId !== id || view.instanceId !== instanceId || view.specRevision !== revision
+      || !Array.isArray(view.lines) || view.lines.length > 2000 || typeof view.finished !== "boolean" || typeof view.failed !== "boolean"
+      || !Number.isSafeInteger(view.droppedLines) || view.droppedLines < 0 || !Number.isSafeInteger(view.truncatedLines) || view.truncatedLines < 0
+      || view.lines.some((line) => typeof line !== "string" || line.includes("\n") || encoder.encode(line).length > 16 * 1024)
+      || view.lines.reduce((bytes, line) => bytes + encoder.encode(line).length + 1, 0) > 2 * 1024 * 1024) throw new Error("invalid_log_response");
+    return view;
+  }
+
+  private recoveryChanges = new Map<string, import("../generated/template-form").RecoverOperationRequest>();
+
+  /** Collects fresh evidence; a lost restoration response is looked up by its stable identity. */
+  async resolveOperation(instanceId: string, operationId: string): Promise<import("../generated/template-form").RecoveryView> {
+    const pending = this.recoveryChanges.get(instanceId);
+    const external = pending?.action === "restore_external";
+    const view = await this.createCall<import("../generated/template-form").RecoveryView>("resolve_operation", { context: this.context(), instanceId, operationId,
+      recoveryRequestId: external ? pending.context.requestId : null } as import("../generated/template-form").RecoveryRequest);
+    this.validateRecovery(view, instanceId, external ? undefined : operationId);
+    if (view.operationId !== operationId && (!external || view.receiptRequestId !== pending.context.requestId)) throw new Error("invalid_recovery_response");
+    // Successful gated inspection establishes that no local change is still executing.
+    // It never implies success; Failed/Hold remain explicit in the returned evidence.
+    this.recoveryChanges.delete(instanceId);
+    return view;
+  }
+
+  private validateRecovery(view: import("../generated/template-form").RecoveryView, instanceId: string, operationId?: string) {
+    if (!view || view.instanceId !== instanceId || !view.operationId || (operationId && view.operationId !== operationId)
+      || !Number.isSafeInteger(view.attempt) || view.attempt < 0 || !Number.isSafeInteger(view.instanceRevision)
+      || view.instanceRevision < 1 || !Number.isSafeInteger(view.candidateRevision) || view.candidateRevision < 1
+      || !Array.isArray(view.actions) || !Array.isArray(view.holdReasons) || !Array.isArray(view.ports)
+      || !Array.isArray(view.originalPorts) || !Array.isArray(view.proposedPorts) || !Array.isArray(view.files)) throw new Error("invalid_recovery_response");
+  }
+
+  /** Sends one explicitly confirmed Core choice, keeping its identity until reconciliation. */
+  async recoverOperation(view: import("../generated/template-form").RecoveryView, action: string): Promise<import("../generated/template-form").RecoveryView> {
+    if (this.hasInstanceChange(view.instanceId)) throw new Error("instance_change_pending");
+    const request: import("../generated/template-form").RecoverOperationRequest = { context: this.context(), instanceId: view.instanceId,
+      operationId: view.operationId, expectedAttempt: view.attempt, expectedRevision: view.instanceRevision,
+      candidateRevision: view.candidateRevision, action, ports: action === "confirm_ports" ? Object.fromEntries(view.proposedPorts.map((p) => [p.slot, p.hostPort])) : {},
+      artifactId: action === "restore_external" ? view.artifactId : null, confirmationHash: action === "restore_external" ? view.confirmationHash : null };
+    this.recoveryChanges.set(view.instanceId, request);
+    try {
+      const result = await this.createCall<import("../generated/template-form").RecoveryView>("retry_operation", request);
+      this.validateRecovery(result, view.instanceId, action === "restore_external" ? undefined : view.operationId);
+      if (action === "restore_external" && (result.operationId === view.operationId || result.receiptRequestId !== request.context.requestId)) throw new Error("invalid_recovery_response");
+      this.recoveryChanges.delete(view.instanceId);
+      return result;
+    } catch (error) {
+      const code = typeof error === "object" && error !== null && "code" in error ? error.code : null;
+      if (action !== "restore_external" && ["INSTANCE_STALE", "INSTANCE_MISSING", "INSTANCE_INPUT_INVALID", "INSTANCE_ACTION_UNAVAILABLE"].includes(String(code))) this.recoveryChanges.delete(view.instanceId);
+      throw error;
+    }
+  }
   /** Reads durable state; notifications and elapsed time never establish success. */
   async getOperation(operationId: string): Promise<import("../generated/template-form").OperationProgressView> {
     const view = await this.createCall<import("../generated/template-form").OperationProgressView>("get_operation", { context: this.context(), operationId } as import("../generated/template-form").OperationRequest);
@@ -209,8 +283,24 @@ export class ApplicationClient {
     if (!detail || detail.instance.id !== instanceId || detail.state.id !== instanceId) throw new Error("invalid_instance_detail");
     return detail;
   }
+  /** Writes explicit plain-text copies through the native clipboard on every desktop OS. */
+  copyText(value: string): Promise<void> { return invoke("plugin:clipboard-manager|write_text", { text: value }); }
+
+  /** Reads an actual secret only for explicit reveal/copy of a saved connection slot. */
+  async getInstanceSecret(instanceId: string, expectedSpecRevision: number, slot: string): Promise<string> {
+    const view = await this.createCall<import("../generated/template-form").InstanceSecretView>("get_instance_secret", { context: this.context(), instanceId, expectedSpecRevision, slot } as import("../generated/template-form").InstanceSecretRequest);
+    if (!view || view.instanceId !== instanceId || view.specRevision !== expectedSpecRevision || view.slot !== slot || typeof view.value !== "string") throw new Error("invalid_instance_secret");
+    return view.value;
+  }
+
+  /** Reads the backend-selected artifact, accepting raw content only when explicitly requested. */
+  async getInstanceCompose(instanceId: string, expectedSpecRevision: number, reveal: boolean): Promise<import("../generated/template-form").InstanceComposeView> {
+    const view = await this.createCall<import("../generated/template-form").InstanceComposeView>("get_instance_compose", { context: this.context(), instanceId, expectedSpecRevision, reveal } as import("../generated/template-form").InstanceComposeRequest);
+    if (!view || view.instanceId !== instanceId || view.specRevision !== expectedSpecRevision || view.masked !== !reveal || typeof view.content !== "string" || typeof view.path !== "string" || !view.path.trim()) throw new Error("invalid_instance_compose");
+    return view;
+  }
   /** Reports an in-flight or uncertain change across screen navigation. */
-  hasInstanceChange(instanceId: string): boolean { return this.instanceChanges.has(instanceId); }
+  hasInstanceChange(instanceId: string): boolean { return this.instanceChanges.has(instanceId) || this.recoveryChanges.has(instanceId); }
 
   /** Restores the user's original name draft while an uncertain rename is pending. */
   getPendingInstanceName(instanceId: string): string | null {

@@ -83,6 +83,18 @@ pub(super) fn envelope<T>(
                     "INSTANCE_UNAVAILABLE",
                     "接続または処理の受付を確認できませんでした。同じ要求で再確認してください。",
                 ),
+                StoreConflict::ArtifactModified => (
+                    "COMPOSE_MODIFIED",
+                    "生成物が変更されています。成果物の復旧を行ってください。",
+                ),
+                StoreConflict::ArtifactUnavailable => (
+                    "COMPOSE_UNAVAILABLE",
+                    "生成物が見つからないか、公開されていません。成果物の状態を確認してください。",
+                ),
+                StoreConflict::ArtifactInvalid => (
+                    "COMPOSE_INVALID",
+                    "生成物が読み取り上限を超えているか、内容が不正です。成果物の状態を確認してください。",
+                ),
             };
             ResponseEnvelope::failure(
                 context.request_id,
@@ -90,7 +102,12 @@ pub(super) fn envelope<T>(
                     code: code.into(),
                     field_path: None,
                     reason: reason.into(),
-                    retryability: Retryability::Unknown,
+                    retryability: match error {
+                        StoreConflict::ArtifactModified
+                        | StoreConflict::ArtifactUnavailable
+                        | StoreConflict::ArtifactInvalid => Retryability::NotRetryable,
+                        _ => Retryability::Unknown,
+                    },
                     operation_id: None,
                     safe_details: None,
                 },
@@ -228,14 +245,52 @@ pub async fn change_instance(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn artifact_errors_are_safe_non_retryable_and_distinct_from_backend_failure() {
+        use composenest_application::{RequestContext, Retryability, state_store::StoreConflict};
+        for (conflict, code) in [
+            (StoreConflict::ArtifactModified, "COMPOSE_MODIFIED"),
+            (StoreConflict::ArtifactUnavailable, "COMPOSE_UNAVAILABLE"),
+            (StoreConflict::ArtifactInvalid, "COMPOSE_INVALID"),
+            (StoreConflict::Backend, "INSTANCE_UNAVAILABLE"),
+        ] {
+            let response = super::envelope::<()>(
+                RequestContext {
+                    api_version: 1,
+                    request_id: "compose".into(),
+                },
+                Err(conflict),
+            );
+            assert_eq!(response.request_id, "compose");
+            assert!(response.result.is_none());
+            let error = response.error.unwrap();
+            assert_eq!(error.code, code);
+            assert_eq!(
+                error.retryability,
+                if conflict == StoreConflict::Backend {
+                    Retryability::Unknown
+                } else {
+                    Retryability::NotRetryable
+                }
+            );
+            assert!(error.safe_details.is_none());
+            assert!(error.operation_id.is_none());
+        }
+    }
+
+    #[test]
     fn generated_acl_allows_instance_commands_only_on_the_local_main_window() {
         let mut context: tauri::Context<tauri::Wry> = tauri::generate_context!();
         let authority = context.runtime_authority_mut();
         for command in [
+            "plugin:clipboard-manager|write_text",
             "list_instances",
+            "resolve_operation",
+            "retry_operation",
             "list_retained_storage",
             "refresh_retained_storage",
             "get_instance_detail",
+            "get_instance_secret",
+            "get_instance_compose",
             "get_instance_actions",
             "rename_instance",
             "change_instance",
@@ -266,6 +321,24 @@ mod tests {
                     )
                     .is_none(),
                 "{command}"
+            );
+        }
+        for command in [
+            "read_text",
+            "read_image",
+            "write_image",
+            "write_html",
+            "clear",
+        ] {
+            assert!(
+                authority
+                    .resolve_access(
+                        &format!("plugin:clipboard-manager|{command}"),
+                        "main",
+                        "main",
+                        &tauri::ipc::Origin::Local,
+                    )
+                    .is_none()
             );
         }
     }

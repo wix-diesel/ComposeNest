@@ -95,7 +95,7 @@ async function dialog(page, mock, trigger, name, mockAction) {
   await mock.keyboard.press("Escape");
   await page.keyboard.press("Escape"); await modal.waitFor({ state: "detached" });
   assert.equal(await trigger.evaluate((element) => document.activeElement === element), true, `${name}: restored focus`);
-  assert.equal(await page.evaluate(() => window.uiCalls.some((command) => /^(confirm_|change_instance|rename_instance|edit_instance_ports)/.test(command))), false, `${name}: cancellation sends no mutations`);
+  assert.equal(await page.evaluate(() => window.uiCalls.some((command) => /^(confirm_|change_instance|rename_instance|edit_instance_ports|retry_operation)/.test(command))), false, `${name}: cancellation sends no mutations`);
 }
 
 try {
@@ -152,16 +152,41 @@ try {
       if (screen === "instance-detail") {
         await page.getByText("••••••••（非表示）", { exact: true }).waitFor();
         const tabs = page.getByRole("tab"); await tabs.first().focus();
+        const comparedTabs = new Set();
         for (const [key, index] of [["ArrowRight", 1], ["End", 2], ["Home", 0], ["ArrowLeft", 2]]) {
           await page.keyboard.press(key);
           assert.equal(await tabs.nth(index).getAttribute("aria-selected"), "true");
           assert.equal(await tabs.nth(index).evaluate((element) => document.activeElement === element), true);
           assert.equal(await page.getByRole("tabpanel").count(), 1);
-          if (index !== 0) assert.match(await page.getByRole("tabpanel").textContent(), /未接続/);
+          if (index === 1) await page.getByText(/表示上限による欠落 17行/).waitFor();
+          if (index === 2) await page.locator(".detail-compose").filter({ hasText: "PASSWORD: ********" }).waitFor();
           await capture(page, `${name}-tab-${index}`);
           await mock.getByRole("tab").nth(index).click();
-          await mock.screenshot({ path: `${output}/${name}-tab-${index}-mock.png`, fullPage: true });
+          if (index !== 0 && !comparedTabs.has(index)) { await compare(page, mock, `${name}-tab-${index}`); comparedTabs.add(index); }
         }
+        await tabs.first().click();
+        await page.waitForFunction(() => window.uiSubscriptions.size === 0);
+        const reveal = page.getByRole("button", { name: "Passwordを表示", exact: true });
+        await reveal.click(); await page.getByText("validation-explicit-only", { exact: true }).waitFor();
+        await capture(page, `${name}-explicit-secret`);
+        await page.getByRole("button", { name: "Passwordを隠す", exact: true }).click();
+        await page.getByRole("button", { name: "Passwordをコピー", exact: true }).click();
+        await page.getByText("コピーできませんでした。もう一度お試しください。", { exact: true }).waitFor();
+        await capture(page, `${name}-copy-failure`);
+        assert.equal(await page.getByText("validation-explicit-only", { exact: false }).count(), 0);
+        await tabs.nth(2).click(); await page.getByRole("button", { name: "原文を表示", exact: true }).click();
+        await page.locator(".detail-compose").filter({ hasText: "PASSWORD: validation-explicit-only" }).waitFor();
+        await capture(page, `${name}-raw-compose`);
+        await page.getByRole("button", { name: "再マスク", exact: true }).click();
+        await page.locator(".detail-compose").filter({ hasText: "PASSWORD: ********" }).waitFor();
+        await tabs.nth(1).click(); await page.getByText(/表示上限による欠落 17行/).waitFor();
+        const log = page.locator(".detail-log");
+        assert.equal(await log.evaluate((el) => el.scrollHeight > el.clientHeight && el.scrollWidth > el.clientWidth), true);
+        await page.getByRole("button", { name: "追従を停止", exact: true }).click();
+        await page.waitForFunction(() => window.uiSubscriptions.size === 0);
+        await log.focus(); await page.keyboard.press("Control+Home");
+        await page.waitForFunction(() => document.querySelector(".detail-log").scrollTop === 0);
+        await capture(page, `${name}-paused-log`);
         await tabs.first().click();
         await mock.getByRole("tab").first().click();
         await dialog(page, mock, page.getByRole("button", { name: "環境を削除", exact: true }), `${name}-delete-dialog`, () => mock.locator('[data-action="delete"]').click());
@@ -178,6 +203,17 @@ try {
         await page.locator("#edit-port-db").fill("25432");
         await dialog(page, mock, page.getByRole("button", { name: "ポート変更内容を確認", exact: true }), `${name}-ports-dialog`, mockEdit);
       }
+      if (screen === "operation") {
+        await page.evaluate(() => { window.uiRecovery = true; });
+        await page.getByRole("button", { name: "再照会", exact: true }).click();
+        await page.getByRole("heading", { name: "処理に失敗しました", exact: true }).waitFor();
+        await page.getByRole("button", { name: "実体を再確認", exact: true }).click();
+        await dialog(page, mock, page.getByRole("button", { name: "旧ポートに戻す", exact: true }), `${name}-recovery-dialog`, async () => {
+          await mock.getByRole("button", { name: "失敗の表示例", exact: true }).click();
+          await mock.getByRole("button", { name: "状態を再確認して再試行", exact: true }).click();
+        });
+        assert.equal(await page.getByRole("heading", { name: "処理が完了しました", exact: true }).count(), 0);
+      }
     }
     // Include exceptional states in every theme/viewport combination.
     for (const mode of ["empty", "failure", "loading"]) {
@@ -192,7 +228,7 @@ try {
       if (mode === "loading") await page.evaluate(() => { window.uiMode = "normal"; window.releaseUi(); });
     }
     assert.equal(await page.getByText("private-backend-error", { exact: false }).count(), 0);
-    assert.equal(await page.evaluate(() => window.uiCalls.some((command) => /^(confirm_|change_instance|rename_instance|edit_instance_ports)/.test(command))), false, "cancelled dialogs do not send mutations");
+    assert.equal(await page.evaluate(() => window.uiCalls.some((command) => /^(confirm_|change_instance|rename_instance|edit_instance_ports|retry_operation)/.test(command))), false, "cancelled dialogs do not send mutations");
     await context.close();
   }
   assert.deepEqual(errors, []);

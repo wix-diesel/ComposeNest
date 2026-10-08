@@ -52,18 +52,26 @@ pub mod external_recovery_state;
 pub mod host_ports;
 pub mod image_resolution;
 pub mod image_store;
+pub mod instance_content;
 pub mod instance_edit;
 pub mod lifecycle_stages;
 pub mod lifecycle_state;
+pub mod log_subscription;
 pub mod named_volumes;
 pub mod operation_journal;
 pub mod port_edit_stages;
 pub mod port_edit_state;
 pub mod port_recovery;
 pub mod query_service;
+pub mod recovery_actions;
+pub mod recovery_view;
 pub mod retained_storage;
 pub mod sqlite;
 pub mod state_store;
 pub mod storage;
 pub mod template_catalog_view;
 pub mod template_package;
+
+#[cfg(test)]
+#[path = "../tests/support/mod.rs"]
+mod test_support;

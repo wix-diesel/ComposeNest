@@ -87,7 +87,7 @@ pub async fn restore_external_artifact<P: RecoveryProbe>(
         .map_err(PortEditError::Runner)?
 }
 
-async fn restore_locked<P: RecoveryProbe>(
+pub(crate) async fn restore_locked<P: RecoveryProbe>(
     database: &DatabaseWorker,
     probe: &DockerProbe,
     root: &Path,

@@ -9,6 +9,10 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 use tauri::{Manager, State};
 mod create_commands;
 use create_commands::*;
+mod instance_content_commands;
+use instance_content_commands::*;
+mod log_commands;
+use log_commands::*;
 mod instance_commands;
 use instance_commands::*;
 mod port_commands;
@@ -25,6 +29,8 @@ mod retained_commands;
 use retained_commands::*;
 mod operation_commands;
 use operation_commands::*;
+mod recovery_commands;
+use recovery_commands::*;
 
 /// Returns the non-sensitive state required to initialize the desktop UI.
 #[tauri::command]
@@ -62,7 +68,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
     let runner = Arc::new(OperationRunner::new());
 
+    let logs = Arc::new(composenest_adapters::log_subscription::LogSessions::default());
+    let cleanup = Arc::clone(&logs);
     tauri::Builder::default()
+        .manage(Arc::clone(&logs))
+        .on_window_event(move |window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                cleanup.close_owner(Some(window.label()));
+            }
+        })
+        .plugin(tauri_plugin_clipboard_manager::init())
         .manage(bootstrap)
         .manage(Arc::clone(&runner))
         .setup(move |app| {
@@ -72,6 +87,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 app.path().home_dir()?,
             )?;
             app.manage(Arc::new(backend));
+            let sessions = Arc::clone(
+                app.state::<Arc<composenest_adapters::log_subscription::LogSessions>>()
+                    .inner(),
+            );
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    sessions.expire();
+                }
+            });
             app.manage(TemplateBackend {
                 bundled: app
                     .path()
@@ -83,6 +108,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .invoke_handler(tauri::generate_handler![
             get_bootstrap,
             get_operation,
+            resolve_operation,
+            retry_operation,
             get_settings,
             save_settings,
             diagnose_runtime,
@@ -92,6 +119,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             list_retained_storage,
             refresh_retained_storage,
             get_instance_detail,
+            get_instance_secret,
+            get_instance_compose,
+            subscribe_logs,
+            get_logs,
+            unsubscribe_logs,
             get_instance_actions,
             rename_instance,
             change_instance,
@@ -111,6 +143,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             confirm_clone
         ])
         .run(tauri::generate_context!())?;
+    logs.close_owner(None);
+    let log_cleanup = tauri::async_runtime::block_on(logs.shutdown());
     runner.shutdown(Duration::from_secs(30));
+    log_cleanup
+        .map_err(|_| std::io::Error::other("log subscription cleanup could not be confirmed"))?;
     Ok(())
 }

@@ -573,6 +573,9 @@ pub(crate) fn commit_store_error(conflict: StoreConflict) -> PlanError {
             StoreConflict::UnresolvedOperation => "SOURCE_UNAVAILABLE",
             StoreConflict::InvalidInput => "COMMIT_INVALID",
             StoreConflict::Backend => "STORE_UNAVAILABLE",
+            StoreConflict::ArtifactModified => "ARTIFACT_MODIFIED",
+            StoreConflict::ArtifactUnavailable => "ARTIFACT_UNAVAILABLE",
+            StoreConflict::ArtifactInvalid => "ARTIFACT_INVALID",
         },
         None,
     )

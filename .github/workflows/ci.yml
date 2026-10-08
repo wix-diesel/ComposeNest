@@ -74,6 +74,12 @@ jobs:
           COMPOSENEST_TEST_DOCKER="$(command -v docker)" \
           COMPOSENEST_TEST_DOCKER_CONFIG="${DOCKER_CONFIG:-$HOME/.docker}" \
           cargo test -p composenest-adapters --test external_recovery actual_docker_restores_owned_drift_and_keeps_data_and_secrets -- --ignored
+      - name: Test retained-data deletion on Docker Engine
+        run: |
+          COMPOSENEST_TEST_DOCKER="$(command -v docker)" \
+          COMPOSENEST_TEST_DOCKER_CONFIG="${DOCKER_CONFIG:-$HOME/.docker}" \
+          cargo test -p composenest-adapters --test docker_delete --locked \
+            docker_delete_preserves_bind_and_volume_data_and_rejects_foreign_network_endpoints -- --ignored --exact
 
   rust-test:
     name: Rust tests

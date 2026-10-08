@@ -1,0 +1,13 @@
+# Candidate only; do not bundle before all target hosts pass the acceptance in VALIDATION.md.
+schemaVersion: 1
+id: composenest.postgresql
+templateVersion: "1.0.0"
+name: PostgreSQL
+description: 配布前の検証用PostgreSQL候補です。実Docker検証はUbuntu 24.04 x86_64のみ。Windows・macOS・Ubuntu 26.04は未検証です。
+author: ComposeNest
+homepage: https://hub.docker.com/_/postgres
+
+defaultVersion: "18"
+versions:
+  "18": versions/18.yaml
+  "17": versions/17.yaml

@@ -17,11 +17,11 @@ use serde_json::{Value, json};
 use std::{collections::BTreeMap, fs, net::TcpListener, path::PathBuf, process::Command};
 
 fn package_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../resources/templates")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/template-candidates")
 }
 
 fn snapshot() -> ResolvedTemplate {
-    snapshot_at(&package_root(), TemplateOrigin::Bundled)
+    snapshot_at(&package_root(), TemplateOrigin::Local)
 }
 
 fn snapshot_at(root: &std::path::Path, origin: TemplateOrigin) -> ResolvedTemplate {
@@ -70,19 +70,51 @@ fn snapshot_at(root: &std::path::Path, origin: TemplateOrigin) -> ResolvedTempla
 
 #[test]
 fn postgresql_package_contains_all_independent_versions() {
-    let bundled = snapshot();
+    let candidate = snapshot();
     let example_root =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/template-examples");
     let example = snapshot_at(&example_root, TemplateOrigin::Local);
     assert_eq!(
-        bundled.versions, example.versions,
-        "Bundled definitions drifted from the accepted candidates"
+        candidate.versions, example.versions,
+        "Acceptance definitions drifted from the specification examples"
     );
-    assert_eq!(bundled.manifest.id, "composenest.postgresql");
+    assert_eq!(candidate.manifest.id, "composenest.postgresql");
+}
+
+#[test]
+fn unaccepted_postgresql_candidate_is_not_shipped_or_registered_as_bundled() {
+    let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let candidate = package_root().join("postgresql").canonicalize().unwrap();
+    let desktop = repository.join("apps/desktop/src-tauri");
+    let config: Value =
+        serde_json::from_slice(&fs::read(desktop.join("tauri.conf.json")).unwrap()).unwrap();
+    for source in config["bundle"]["resources"].as_object().unwrap().keys() {
+        let shipped = desktop.join(source).canonicalize().unwrap();
+        assert!(
+            !candidate.starts_with(shipped),
+            "Unaccepted candidate is included in Tauri resources"
+        );
+    }
     let (root, store, _) = support::store();
     let local = root.path().join("local");
     fs::create_dir(&local).unwrap();
-    let results = reload_results(&store, &package_root(), &local).unwrap();
+    let bundled = repository.join("resources/templates");
+    let results = reload_results(&store, &bundled, &local).unwrap();
+    let view = catalog_view(&store, &local, results).unwrap();
+    assert!(
+        !view
+            .templates
+            .iter()
+            .any(|card| card.template_id == "composenest.postgresql")
+    );
+
+    // A deliberate local fixture import remains local, regardless of the author's ID.
+    let package = local.join("postgresql");
+    fs::create_dir_all(package.join("versions")).unwrap();
+    for path in ["template.yaml", "versions/17.yaml", "versions/18.yaml"] {
+        fs::copy(candidate.join(path), package.join(path)).unwrap();
+    }
+    let results = reload_results(&store, &bundled, &local).unwrap();
     let view = catalog_view(&store, &local, results).unwrap();
     let card = view
         .templates
@@ -90,7 +122,7 @@ fn postgresql_package_contains_all_independent_versions() {
         .find(|card| card.template_id == "composenest.postgresql")
         .unwrap();
     assert!(card.loaded);
-    assert_eq!(card.origin, "bundled");
+    assert_eq!(card.origin, "local");
     assert_eq!(card.versions, ["18", "17"]);
     assert_eq!(card.storage_methods.len(), 2);
 }

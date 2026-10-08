@@ -1,13 +1,17 @@
 # PostgreSQL 17/18の実Docker受入（Issue #46）
 
-`template.yaml`と`versions/17.yaml`・`versions/18.yaml`を一つのSchema 1パッケージとして登録する。Versionごとの完全定義は候補の`docs/template-examples/postgresql`と同じで、共通ファイルからの継承・置換を行わない。配布用のIDは`composenest.postgresql`、Template版は`1.0.0`、既定Versionは`18`。秘密の固定defaultは持たない。
+`template.yaml`と`versions/17.yaml`・`versions/18.yaml`を一つのSchema 1候補パッケージとして検証する。Versionごとの完全定義は`docs/template-examples/postgresql`と同じで、共通ファイルからの継承・置換を行わない。候補のIDは`composenest.postgresql`、Template版は`1.0.0`、既定Versionは`18`。秘密の固定defaultは持たない。
+
+対象OSでの配布受入は未完了。この候補は`docs/template-candidates`に置き、`resources/templates`・Tauri resource・同梱カタログへは登録しない。説明文の未検証表記は実行制限の代わりにならない。各対象OSでの受入を完了してから配布へ昇格する。Issue #46全体を完了した記録ではない。
 
 ## 実測環境・証跡
 
 2026-10-08、GitHub ActionsのUbuntu 24.04.5 LTS x86_64（runner image `20261004.327.1`）で実行した。
 Docker CLI/Engine **28.0.4**、Compose **2.38.2**、Rust **1.98.1**、psql **16.15**。
 
-候補定義の検証はcommit `bb255c0204a77a17ab0789c97ac8e5eb4f0e9c28`の[受入ジョブ](https://github.com/wix-diesel/ComposeNest/actions/runs/37707947804/job/113086730356)で4通りとも成功した。最終PRでは同じテストをresourceのパッケージに対して再実行する。通常テストでも候補とのVersion定義の一致と、全Versionの同梱カタログ登録を確認する。
+候補定義の検証はcommit `bb255c0204a77a17ab0789c97ac8e5eb4f0e9c28`の[受入ジョブ](https://github.com/wix-diesel/ComposeNest/actions/runs/37707947804/job/113086730356)で4通りとも成功した。同じVersion定義に対するcommit `18cea6aa5d895f80ddf10546f0b98b0bae5b9670`の[再実行](https://github.com/wix-diesel/ComposeNest/actions/runs/37708556488/job/113088701469)も成功した。その時点のresource配置は未検証ホストへ公開されるため取り下げ、以後のCIは配布前候補に対して実行する。
+
+通常テストでは仕様例とのVersion定義の一致、Tauri配布設定からの除外、同梱カタログに登録されないこと、明示的なテスト用ローカル追加が同梱と偽装されないことを確認する。
 
 | Version | 実行platform | 保存方式 | マウント先 | 初回作成・TCP接続・Health | 停止起動・再作成後のデータ |
 | --- | --- | --- | --- | --- | --- |
@@ -34,7 +38,7 @@ Docker CLI/Engine **28.0.4**、Compose **2.38.2**、Rust **1.98.1**、psql **16.
 
 ## 未検証の範囲
 
-WindowsのDocker Desktop、macOSのDocker Desktop、Ubuntu **26.04**の実機、`linux/arm64`の実行は未検証。`platforms: [linux/amd64, linux/arm64]`はコンテナの対応宣言であり、ホストOSの検証済み表示ではない。Template一覧の説明にも検証環境と未検証OSを記載する。製品配布の前に各対象OSで下記テストを実行し、OS/Desktop/Engine/Compose版、digest、4通りの結果を追記する。
+WindowsのDocker Desktop、macOSのDocker Desktop、Ubuntu **26.04**の実機、`linux/arm64`の実行は未検証。`platforms: [linux/amd64, linux/arm64]`はコンテナの対応宣言であり、ホストOSの検証済み表示ではない。候補を配布resourceへ移す前に各対象OSで下記テストを実行し、OS/Desktop/Engine/Compose版、digest、4通りの結果を追記する。
 
 このCIのDocker版は設計上の候補基準29.8.1/5.5.1より古い。基準版Dockerでの配布受入、DBアップグレード、データClone、アプリGUI全経路の受入を完了したことは意味しない。
 

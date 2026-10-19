@@ -32,6 +32,34 @@ pub struct CreateBackend {
 }
 
 impl CreateBackend {
+    pub(super) async fn check_container_name(&self, name: &str) -> Result<(), PlanError> {
+        let invalid = |code| PlanError {
+            code,
+            field_path: Some("containerName".into()),
+        };
+        if !composenest_application::create_plan::valid_container_name(name) {
+            return Err(invalid("CONTAINER_NAME_INVALID"));
+        }
+        let target = self
+            .database
+            .runtime_target(&self.scope)
+            .map_err(|_| failure("STORE_UNAVAILABLE"))?
+            .ok_or_else(|| failure("DOCKER_UNAVAILABLE"))?;
+        let docker = self
+            .probe
+            .as_ref()
+            .ok_or_else(|| failure("DOCKER_UNAVAILABLE"))?
+            .bind(target)
+            .map_err(|_| failure("DOCKER_UNAVAILABLE"))?;
+        if !docker
+            .container_name_available(name)
+            .await
+            .map_err(|_| failure("DOCKER_UNAVAILABLE"))?
+        {
+            return Err(invalid("CONTAINER_NAME_IN_USE"));
+        }
+        Ok(())
+    }
     /// Resolves one protected scope and local Docker executable without GUI paths.
     pub fn new(
         database: Arc<DatabaseWorker>,
@@ -144,6 +172,9 @@ pub(super) fn envelope<T>(
                         "アプリの終了中です。再起動後に作成してください。"
                     }
                     "DOCKER_UNAVAILABLE" => "Dockerの接続・対応環境を確認してください。",
+                    "CONTAINER_NAME_INVALID" => "コンテナ名は128文字以内の半角英数字・ハイフン・アンダースコア・ピリオドで入力し、先頭を英数字にしてください。",
+                    "CONTAINER_NAME_IN_USE" => "このコンテナ名は使用中です。別の名前を指定してください。",
+                    "RESOURCE_CONFLICT" => "環境名・コンテナ名・接続ポートが他の環境と重複していないか確認してください。",
                     "PLAN_NOT_FOUND" => {
                         "このプランは失効しました。作成・複製画面を開き直してください。"
                     }
@@ -354,17 +385,23 @@ pub async fn confirm_create(
     let mut session = state.session.lock().await;
     let result = match session.accepted(&request, &*state.database) {
         Ok(Some(receipt)) => Ok((receipt, None)),
-        Ok(None) => state.ports().await.and_then(|ports| {
-            accept_with_capacity(&state.runner, || {
-                session.confirm(
-                    request,
-                    &*state.database,
-                    &SystemClock,
-                    &mut SystemRandom,
-                    &ports,
-                )
-            })
-        }),
+        Ok(None) => {
+            async {
+                let ports = state.ports().await?;
+                let view = session.view(&request.plan_id, &SystemClock, &ports)?;
+                state.check_container_name(&view.container_name).await?;
+                accept_with_capacity(&state.runner, || {
+                    session.confirm(
+                        request,
+                        &*state.database,
+                        &SystemClock,
+                        &mut SystemRandom,
+                        &ports,
+                    )
+                })
+            }
+            .await
+        }
         Err(error) => Err(error),
     };
     Ok(envelope(

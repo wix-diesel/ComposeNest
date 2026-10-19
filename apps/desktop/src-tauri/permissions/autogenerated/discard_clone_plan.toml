@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-discard-clone-plan"
+description = "Enables the discard_clone_plan command without any pre-configured scope."
+commands.allow = ["discard_clone_plan"]
+
+[[permission]]
+identifier = "deny-discard-clone-plan"
+description = "Denies the discard_clone_plan command without any pre-configured scope."
+commands.deny = ["discard_clone_plan"]

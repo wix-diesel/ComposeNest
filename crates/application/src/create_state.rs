@@ -11,6 +11,8 @@ use crate::{
 /// Immutable records needed to execute an accepted create or clone operation.
 #[derive(Debug, Clone)]
 pub struct ConfirmedCreate {
+    /// Persisted standalone container name; absent for legacy Compose instances.
+    pub container_name: Option<String>,
     /// Instance identity and the management scope that owns it.
     pub instance_id: String,
     pub scope_id: String,

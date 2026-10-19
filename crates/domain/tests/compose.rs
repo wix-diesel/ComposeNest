@@ -57,6 +57,7 @@ fn each_snapshot_version_uses_its_own_storage_target_and_preserves_values() {
         ("18", "/var/lib/postgresql"),
     ] {
         let source = ConfirmedCompose {
+            container_name: None,
             snapshot: &snapshot,
             version,
             instance_id: InstanceId::from_u128(42),
@@ -128,6 +129,7 @@ fn optional_environment_omits_unset_input_but_preserves_empty_string() {
             .map(|value| BTreeMap::from([("note".into(), value)]))
             .unwrap_or_default();
         let model = generate(&ConfirmedCompose {
+            container_name: None,
             snapshot: &snapshot,
             version: "1",
             instance_id: InstanceId::from_u128(42),
@@ -163,6 +165,7 @@ fn rejects_stale_slots_inputs_and_unverified_image_or_storage() {
     let make =
         |inputs: &BTreeMap<_, _>, ports: &BTreeMap<_, _>, storage: &BTreeMap<_, _>, image: &str| {
             let source = ConfirmedCompose {
+                container_name: None,
                 snapshot: &snapshot,
                 version: "18",
                 instance_id: InstanceId::from_u128(42),
@@ -259,6 +262,7 @@ fn redis_secret_is_preserved_in_environment_and_exec_argv() {
     let storage = BTreeMap::from([("data".into(), bind_storage("redis-data"))]);
     let digest = format!("redis@sha256:{}", "a".repeat(64));
     let model = generate(&ConfirmedCompose {
+        container_name: None,
         snapshot: &snapshot,
         version: "8.2",
         instance_id: InstanceId::from_u128(42),
@@ -329,6 +333,7 @@ fn removed_version_fields_are_never_inherited() {
     let storage = BTreeMap::from([("data".into(), bind_storage("cn-data"))]);
     let digest = format!("postgres@sha256:{}", "a".repeat(64));
     let model = generate(&ConfirmedCompose {
+        container_name: None,
         snapshot: &snapshot,
         version: "18",
         instance_id: InstanceId::from_u128(42),
@@ -363,6 +368,7 @@ fn omitted_healthcheck_timing_uses_snapshot_rule() {
     let storage = BTreeMap::from([("data".into(), bind_storage("redis-data"))]);
     let digest = format!("redis@sha256:{}", "a".repeat(64));
     let model = generate(&ConfirmedCompose {
+        container_name: None,
         snapshot: &snapshot,
         version: "8.2",
         instance_id: InstanceId::from_u128(42),
@@ -431,6 +437,7 @@ fn docker_config_and_container_preserve_actual_values() {
     fs::create_dir(&data).unwrap();
     let storage = BTreeMap::from([("data".into(), Storage::Bind(data.to_str().unwrap().into()))]);
     let model = generate(&ConfirmedCompose {
+        container_name: None,
         snapshot: &snapshot,
         version: "8.2",
         instance_id,

@@ -173,6 +173,23 @@ async fn remote_context_is_rejected_before_engine_access() {
 }
 
 #[tokio::test]
+async fn recorded_docker_desktop_combination_is_ready() {
+    let _guard = MOCK_EXECUTION.lock().await;
+    let (_root, probe) = fixture();
+    let script = fs::read_to_string(&probe.executable).unwrap();
+    replace_executable(
+        &probe,
+        &script.replace("29.8.1", "29.5.3").replace("5.5.1", "5.1.4"),
+    );
+    let report = probe.diagnose(None).await;
+    assert!(report.is_ready(), "{report:?}");
+    assert_eq!(report.cli_version.as_deref(), Some("29.5.3"));
+    assert_eq!(report.compose_version.as_deref(), Some("5.1.4"));
+    assert_eq!(report.engine_version.as_deref(), Some("29.5.3"));
+    assert!(report.target("target".into(), "scope".into()).is_some());
+}
+
+#[tokio::test]
 async fn old_cli_version_is_reported_as_unsupported() {
     let _guard = MOCK_EXECUTION.lock().await;
     let (_root, probe) = fixture();

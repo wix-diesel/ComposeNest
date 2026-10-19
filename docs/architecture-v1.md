@@ -224,7 +224,7 @@ Reactは検証済みDTOと選択Versionのフォームだけを扱い、ファ�
 
 | 生成項目 | 固定方針 |
 | --- | --- |
-| Project／service | `cn-<32桁Instance ID>`／`main`。container_nameなし |
+| Project／service | 内部資源識別は`cn-<32桁Instance ID>`／`main`。新規環境は利用者が指定したcontainer_nameを保存 |
 | ports | long syntax、host_ip=127.0.0.1、protocol=tcp、予約済み番号 |
 | bind | long syntax、slot専用絶対パス、`bind.create_host_path: false` |
 | named volume | Coreが先に作成した実名を`external: true`で参照 |
@@ -240,7 +240,13 @@ Reactは検証済みDTOと選択Versionのフォームだけを扱い、ファ�
 
 ### 8.1 実行対象とプロセス起動
 
+2026-10-19のユーザー要望により、新規作成・CloneはComposeのグループを作らず単独コンテナとして実行する。Compose YAMLの生成・検証は維持し、同じ型付きモデルから保護された`container-create.json`を生成・hash検証する。秘密を含む設定はargvや環境変数へ渡さず、固定したローカルunix socket／Windows named pipeからEngine API v1.52のcontainer createへ送信する。APIはコンテナ作成の固定経路のみで、TCP・任意HTTP・frontendからの直接呼出しを提供しない。network作成と作成前のEngine ID照合、作成後の完全ID・設定照合はCLI境界を維持する。通信切断・timeout後はOutcomeUnknownとして従来のjournalと復旧経路で照合する。
+
+新規資源は`io.composenest.project`と`io.composenest.service`／`network`に加えscope／instanceラベルを付け、`com.docker.compose.*`を付けない。SQLiteのcontainer_nameがNULLの既存環境は従来のCompose生成・作成と所有確認を維持する。停止中の再作成は所有を再確認した旧コンテナの完全IDを削除し、同じ名前・専用network・保存領域で作り直す。Docker名は作成時に確定し、表示名の変更では改名しない。以降のCompose createの記述は既存環境の互換経路を指す。
+
 初回診断でCLIとComposeの存在・版、Engine接続、Linuxコンテナ、platform、ローカルendpointを確認する。v1はunix socket／Windows named pipeと検証したDocker Desktopのローカル接続を対象とし、ssh／tcpのリモート接続は受け付けない。
+
+実行時の最低対応版はCLI／Engine 29.5.3、Compose 5.1.4。配布受入の検証基準29.8.1／5.5.1とは区別する。WindowsでCLIを起動する際は、環境変数を隔離した上で`ProgramFiles`を引き継ぎ、Dockerの標準CLIプラグイン探索先を維持する。`DOCKER_HOST`や`DOCKER_CONTEXT`など、対象を変える外部環境変数は引き継がない。
 
 Context名だけでなく、解決したendpoint、EngineのID、OS／architecture、管理scopeとの対応を保存する。操作ごとに固定endpointへ接続し、Engine IDを照合する。`DOCKER_HOST`、`DOCKER_CONTEXT`、TLS関連・Compose関連の外部環境変数によって対象が変わらないように実行環境を構成する。Context切替えがCLIに影響することを踏まえ、利用者のcurrent contextを変更せず明示接続する。[Docker Context資料](https://docs.docker.com/engine/manage-resources/contexts/)
 

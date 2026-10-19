@@ -1,6 +1,6 @@
 //! Concrete create stages built from committed records and fixed adapters.
 
-use std::{cell::RefCell, collections::BTreeMap};
+use std::cell::RefCell;
 
 use composenest_application::{
     create_operation::{CreateEffectError, CreateOperation, CreateOperationError, CreateStages},
@@ -282,7 +282,7 @@ impl CreateStages for AdapterCreateStages<'_> {
                     instance_id: self.instance_id.clone(),
                     spec_revision: confirmed.spec_revision,
                     generator_version: "compose-v1".into(),
-                    files: BTreeMap::from([("compose.yaml".into(), yaml.into_bytes())]),
+                    files: crate::standalone_container::artifact_files(&model, yaml),
                 },
             )
             .map_err(|_| CreateEffectError::OutcomeUnknown)?;

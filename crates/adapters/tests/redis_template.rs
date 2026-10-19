@@ -431,6 +431,7 @@ fn create_fixture(
     let ports = BTreeMap::from([("redis".into(), port)]);
     let storage = BTreeMap::from([("data".into(), storage)]);
     let model = generate(&ConfirmedCompose {
+        container_name: None,
         snapshot,
         version: &version.key,
         instance_id: id,

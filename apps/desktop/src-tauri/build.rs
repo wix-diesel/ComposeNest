@@ -30,6 +30,12 @@ fn main() {
             "get_create_receipt",
             "discard_create_plan",
             "confirm_create",
+            "prepare_clone",
+            "update_clone_plan",
+            "view_clone_plan",
+            "get_clone_receipt",
+            "discard_clone_plan",
+            "confirm_clone",
         ]),
     ))
     .expect("Tauri build failed");

@@ -229,6 +229,13 @@ pub(crate) fn insert_instance(
     transaction: &sea_orm::DatabaseTransaction,
     instance: &InstanceRecord,
 ) -> Result<(), DatabaseError> {
+    if instance
+        .container_name
+        .as_deref()
+        .is_some_and(|name| !composenest_domain::compose::valid_container_name(name))
+    {
+        return Err(DatabaseError::InvalidInput);
+    }
     let source = if let Some(source_id) = &instance.clone_source_id {
         template_snapshot::Entity::find()
             .filter(template_snapshot::Column::InstanceId.eq(source_id))
@@ -256,6 +263,7 @@ pub(crate) fn insert_instance(
         display_name: Set(instance.name.clone()),
         normalized_name: Set(instance.name.clone()),
         project_name: Set(instance.project_name.clone()),
+        container_name: Set(instance.container_name.clone()),
         clone_source_id: Set(instance.clone_source_id.clone()),
         ..Default::default()
     })
@@ -1097,6 +1105,7 @@ mod tests {
 
     fn instance(id: &str, name: &str, port: u16) -> InstanceRecord {
         InstanceRecord {
+            container_name: None,
             id: id.into(),
             scope_id: "scope".into(),
             target_id: "target".into(),

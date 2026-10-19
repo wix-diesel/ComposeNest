@@ -75,6 +75,7 @@ pub async fn verify_runtime_absent(
 ) -> Result<(), Error> {
     let filters = vec![
         format!("label=com.docker.compose.project={}", owner.project),
+        format!("label=io.composenest.project={}", owner.project),
         format!("label=io.composenest.instance={}", owner.instance),
     ];
     let mut containers = filters.clone();
@@ -143,13 +144,18 @@ async fn inspect(
     let value: Value = serde_json::from_slice(&bytes).map_err(|_| Error::OutcomeUnknown)?;
     let labels = &value["Labels"];
     if value["Id"] != id
-        || labels["com.docker.compose.project"] != owner.project
+        || !crate::docker_observation::owns_project(
+            labels,
+            owner.project,
+            if kind == "container" {
+                "service"
+            } else {
+                "network"
+            },
+        )
         || labels["io.composenest.scope"] != owner.scope
         || labels["io.composenest.instance"] != owner.instance
-        || (kind == "container" && labels["com.docker.compose.service"] != "main")
-        || (kind == "network"
-            && (labels["com.docker.compose.network"] != "default"
-                || value["Name"] != format!("{}_default", owner.project)))
+        || (kind == "network" && (value["Name"] != format!("{}_default", owner.project)))
     {
         return Err(Error::Rejected);
     }
@@ -248,6 +254,7 @@ async fn remove_runtime(
     }
     let filters = vec![
         format!("label=com.docker.compose.project={}", owner.project),
+        format!("label=io.composenest.project={}", owner.project),
         format!("label=io.composenest.instance={}", owner.instance),
     ];
     let mut container_filters = filters.clone();

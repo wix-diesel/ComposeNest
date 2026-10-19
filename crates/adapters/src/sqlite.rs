@@ -25,6 +25,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../../migrations/0010_storage_observation.sql"),
     include_str!("../../../migrations/0011_external_recovery.sql"),
     include_str!("../../../migrations/0012_recovery_history.sql"),
+    include_str!("../../../migrations/0013_container_names.sql"),
 ];
 const DATABASE_FILE: &str = "composenest.sqlite";
 

@@ -224,6 +224,7 @@ function PlanScreen({ client, selectionId, kind, returnTo = "instances" }: {
     {review && <ConfirmDialog title={clone ? "設定を複製して環境を作成しますか？" : "この内容で環境を作成しますか？"} onClose={() => setReview(null)} returnFocus={reviewTrigger.current}
       confirmLabel="作成・起動を確定" confirmDisabled={!consent || (clone && !configurationOnly) || busy} onConfirm={() => { void confirm(); }}>
       <dl className="create-summary"><div><dt>環境名</dt><dd>{review.displayName}</dd></div>
+        <div><dt>コンテナ名</dt><dd>{review.containerName}</dd></div><div><dt>Dockerでの表示</dt><dd>単独コンテナ（グループなし）</dd></div>
         <div><dt>テンプレート</dt><dd>{review.templateForm.name} / {review.templateForm.templateVersion}</dd></div>
         <div><dt>出所</dt><dd>{"templateOrigin" in review ? origin(review.templateOrigin) : "複製元の保存済み定義"}</dd></div><div><dt>Version</dt><dd>{review.version}</dd></div>
         <div><dt>保存方式</dt><dd>{review.storageMethod === "bind" ? "ホストフォルダー" : "Docker管理"}</dd></div>

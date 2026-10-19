@@ -314,6 +314,33 @@ impl<'a> ArtifactStore<'a> {
         Ok((path, text))
     }
 
+    /// Reads the exact protected standalone request, or None for a legacy Compose artifact.
+    pub(crate) fn read_container_config(
+        &self,
+        id: &str,
+    ) -> Result<Option<serde_json::Value>, ArtifactError> {
+        let compose = self.verified_compose_path(id)?;
+        let expected: Option<String> = self.database.read(|db| {
+            use rusqlite::OptionalExtension;
+            Ok(db.query_row("SELECT sha256 FROM artifact_files WHERE artifact_id=?1 AND relative_path='container-create.json'", [id], |row| row.get(0)).optional()?)
+        })?;
+        let Some(expected) = expected else {
+            return Ok(None);
+        };
+        let path = compose.with_file_name("container-create.json");
+        let mut bytes = Vec::new();
+        open_bounded_file(&path)?
+            .take(FILE_LIMIT + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > FILE_LIMIT || digest(&bytes) != expected {
+            return Err(ArtifactError::Modified);
+        }
+        self.verified_compose_path(id)?;
+        serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|_| ArtifactError::InvalidInput)
+    }
+
     fn mark_published(&self, id: &str) -> Result<(), ArtifactError> {
         let id = id.to_owned();
         let changed = self.database.orm_write(move |db| {

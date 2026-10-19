@@ -9,6 +9,9 @@ use tokio::sync::Mutex;
 use crate::docker_cli::{CliError, CliOutcome, CommandKind, DockerCli, is_local_endpoint};
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+// Runtime floors come from the recorded Windows validation, not the release validation targets.
+const MINIMUM_DOCKER_VERSION: [u32; 3] = [29, 5, 3];
+const MINIMUM_COMPOSE_VERSION: [u32; 3] = [5, 1, 4];
 
 /// Result of an individual Docker prerequisite check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,7 +140,7 @@ impl DockerProbe {
             &discovery,
             &["--version".into()],
             "Docker version",
-            [29, 8, 1],
+            MINIMUM_DOCKER_VERSION,
         )
         .await;
         if matches!(
@@ -150,7 +153,7 @@ impl DockerProbe {
             &discovery,
             &["compose".into(), "version".into()],
             "Docker Compose version",
-            [5, 5, 1],
+            MINIMUM_COMPOSE_VERSION,
         )
         .await;
         report.context_name = discovery
@@ -200,22 +203,19 @@ impl DockerProbe {
             return report;
         };
         report.engine_id = Some(id.to_owned());
-        report.engine_version = info
-            .get("ServerVersion")
-            .and_then(Value::as_str)
-            .and_then(|version| parse_version(version.as_bytes(), ""))
-            .map(version_text);
+        let (engine, version) = classify_version(
+            info.get("ServerVersion")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .as_bytes(),
+            "",
+            MINIMUM_DOCKER_VERSION,
+        );
+        report.engine_version = version;
         report.engine = if registered.is_some_and(|target| target.engine_id != id) {
             Check::Changed
-        } else if info
-            .get("ServerVersion")
-            .and_then(Value::as_str)
-            .and_then(|version| parse_version(version.as_bytes(), ""))
-            .is_some_and(|version| version >= [29, 8, 1])
-        {
-            Check::Ready
         } else {
-            Check::Unsupported
+            engine
         };
         let os = info.get("OSType").and_then(Value::as_str).unwrap_or("");
         let arch = info
@@ -278,6 +278,41 @@ pub enum TargetError {
 }
 
 impl BoundDocker {
+    /// Returns whether no Docker container currently uses this exact name, including stopped containers.
+    pub async fn container_name_available(&self, name: &str) -> Result<bool, TargetError> {
+        if !composenest_domain::compose::valid_container_name(name) {
+            return Err(TargetError::Unavailable);
+        }
+        let result = self
+            .read(&[
+                "container".into(),
+                "ls".into(),
+                "--all".into(),
+                "--quiet".into(),
+                "--filter".into(),
+                format!("name=^/{}$", name.replace('.', "\\.")).into(),
+            ])
+            .await?;
+        if !result.status.is_some_and(|status| status.success()) || result.stdout.truncated {
+            return Err(TargetError::Unavailable);
+        }
+        Ok(result.stdout.bytes.is_empty())
+    }
+    /// Creates a standalone container without putting secret configuration in process arguments.
+    pub(crate) async fn create_standalone(
+        &self,
+        name: &str,
+        platform: &str,
+        config: &Value,
+    ) -> Result<(), crate::docker_create::CreateDockerError> {
+        use crate::docker_create::CreateDockerError as Error;
+        let _guard = self.gate.lock().await;
+        let info = engine_info(&self.cli).await.ok_or(Error::Unavailable)?;
+        if info.get("ID").and_then(Value::as_str) != Some(self.engine_id.as_str()) {
+            return Err(Error::Mismatch);
+        }
+        crate::local_engine::create(self.cli.endpoint(), name, platform, config).await
+    }
     /// Reads from the registered Engine after confirming its identity.
     pub(crate) async fn read(&self, args: &[OsString]) -> Result<CliOutcome, TargetError> {
         self.read_checked(args, false).await
@@ -341,15 +376,7 @@ async fn check_version(
             if outcome.status.is_some_and(|status| status.success())
                 && !outcome.stdout.truncated =>
         {
-            let version = parse_version(&outcome.stdout.bytes, prefix);
-            (
-                if version.is_some_and(|version| version >= minimum) {
-                    Check::Ready
-                } else {
-                    Check::Unsupported
-                },
-                version.map(version_text),
-            )
+            classify_version(&outcome.stdout.bytes, prefix, minimum)
         }
         Ok(outcome)
             if String::from_utf8_lossy(&outcome.stderr.bytes).contains("not a docker command") =>
@@ -362,6 +389,16 @@ async fn check_version(
         }
         _ => (Check::Unavailable, None),
     }
+}
+
+fn classify_version(output: &[u8], prefix: &str, minimum: [u32; 3]) -> (Check, Option<String>) {
+    let version = parse_version(output, prefix);
+    let check = if version.is_some_and(|version| version >= minimum) {
+        Check::Ready
+    } else {
+        Check::Unsupported
+    };
+    (check, version.map(version_text))
 }
 
 fn version_text(version: [u32; 3]) -> String {
@@ -445,5 +482,71 @@ fn default_local_endpoint() -> OsString {
     #[cfg(not(windows))]
     {
         OsString::from("unix:///var/run/docker.sock")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn docker_desktop_versions_use_runtime_floors_instead_of_release_targets() {
+        for (prefix, minimum, versions) in [
+            (
+                "Docker version",
+                MINIMUM_DOCKER_VERSION,
+                ["29.5.3", "29.8.1", "30.0.0"],
+            ),
+            (
+                "Docker Compose version",
+                MINIMUM_COMPOSE_VERSION,
+                ["5.1.4", "5.5.1", "6.0.0"],
+            ),
+            ("", MINIMUM_DOCKER_VERSION, ["29.5.3", "29.8.1", "30.0.0"]),
+        ] {
+            for version in versions {
+                let output = format!("{prefix} {version}\r\n");
+                assert_eq!(
+                    classify_version(output.as_bytes(), prefix, minimum),
+                    (Check::Ready, Some(version.into()))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn versions_below_runtime_floors_and_unparseable_output_remain_unsupported() {
+        for (output, prefix, minimum) in [
+            (
+                "Docker version 29.5.2",
+                "Docker version",
+                MINIMUM_DOCKER_VERSION,
+            ),
+            (
+                "Docker Compose version v5.1.3",
+                "Docker Compose version",
+                MINIMUM_COMPOSE_VERSION,
+            ),
+            ("29.5.2", "", MINIMUM_DOCKER_VERSION),
+            (
+                "Docker version unknown",
+                "Docker version",
+                MINIMUM_DOCKER_VERSION,
+            ),
+            ("", "", MINIMUM_DOCKER_VERSION),
+        ] {
+            assert_eq!(
+                classify_version(output.as_bytes(), prefix, minimum).0,
+                Check::Unsupported
+            );
+        }
+        assert_eq!(
+            classify_version(
+                b"Docker Compose version v5.1.4\r\n",
+                "Docker Compose version",
+                MINIMUM_COMPOSE_VERSION
+            ),
+            (Check::Ready, Some("5.1.4".into()))
+        );
     }
 }

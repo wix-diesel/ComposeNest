@@ -208,6 +208,12 @@ pub(super) fn preview(
     let definition = version_definition(&plan.template, &plan.version)
         .expect("selected Version remains in the private Snapshot");
     let mut concerns = Vec::new();
+    if !composenest_domain::compose::valid_container_name(&plan.container_name) {
+        concerns.push(PlanConcern {
+            code: "CONTAINER_NAME_INVALID",
+            field_path: "containerName".into(),
+        });
+    }
     if DisplayName::parse(&plan.display_name).is_err() || plan.display_name == plan.source.name {
         concerns.push(PlanConcern {
             code: "DISPLAY_NAME_INVALID",
@@ -402,6 +408,7 @@ pub(super) fn preview(
         .collect();
     let (added_storage, removed_storage) = difference(&source_storage, &storage_slots);
     ClonePlanView {
+        container_name: plan.container_name.clone(),
         plan_id: id.into(),
         plan_revision: plan.revision,
         source_id: plan.source.id.clone(),

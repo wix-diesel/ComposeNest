@@ -129,6 +129,7 @@ pub(crate) fn source_record(
         })
         .collect::<std::collections::BTreeMap<_, _>>();
     InstanceRecord {
+        container_name: None,
         id: format!("{:032x}", id.as_u128()),
         scope_id: "scope".into(),
         target_id: "target".into(),

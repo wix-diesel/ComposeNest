@@ -3,6 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use composenest_domain::clone_policy::{RandomSource, generate_secret};
+/// Validates the Docker name accepted by create and clone plans.
+pub use composenest_domain::compose::valid_container_name;
 use composenest_domain::identity::DisplayName;
 use composenest_domain::instance::OperationKind;
 use regex::Regex;
@@ -66,6 +68,8 @@ pub struct PlanConcern {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreatePlanView {
+    /// Docker name for the new standalone container.
+    pub container_name: String,
     /// Opaque identifier scoped to this process.
     pub plan_id: String,
     /// Version required by a later update or confirmation.
@@ -100,6 +104,8 @@ pub struct CreatePlanView {
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PlanEdit {
+    /// Docker name for the new standalone container.
+    pub container_name: Option<String>,
     /// Expected plan revision for optimistic concurrency.
     pub expected_revision: u64,
     /// Optional replacement for the new instance display name.
@@ -157,6 +163,7 @@ pub struct CommitCreate {
 }
 
 struct Plan {
+    container_name: String,
     scope: String,
     display_name: String,
     revision: u64,
@@ -273,6 +280,7 @@ impl CreatePlans {
             })
             .collect::<Result<Vec<_>, PlanError>>()?;
         let instance = InstanceRecord {
+            container_name: Some(plan.container_name.clone()),
             id: request.instance_id.clone(),
             scope_id: request.scope_id.clone(),
             target_id: request.target_id,
@@ -354,6 +362,7 @@ impl CreatePlans {
             .map_err(store_error)?;
         let id = self.unique_id(random)?;
         let mut plan = Plan {
+            container_name: format!("cn-{id}"),
             scope: request.scope_id.clone(),
             display_name: normalize_name(&request.display_name),
             revision: 1,
@@ -466,6 +475,9 @@ impl CreatePlans {
             let candidate =
                 generate_input_secret(&key, input, &values, &active_inputs, source, random)?;
             values.insert(key, Value::String(candidate));
+        }
+        if let Some(name) = edit.container_name {
+            plan.container_name = name.trim().to_owned();
         }
         if let Some(name) = edit.display_name {
             plan.display_name = normalize_name(&name);
@@ -690,6 +702,12 @@ fn preview(id: &str, plan: &mut Plan, inspector: &impl PortInspector) -> CreateP
     let definition = version_definition(&plan.template, &plan.version)
         .expect("selected version remains in the fixed template");
     let mut concerns = Vec::new();
+    if !composenest_domain::compose::valid_container_name(&plan.container_name) {
+        concerns.push(PlanConcern {
+            code: "CONTAINER_NAME_INVALID",
+            field_path: "containerName".into(),
+        });
+    }
     if DisplayName::parse(&plan.display_name).is_err() {
         concerns.push(PlanConcern {
             code: "DISPLAY_NAME_INVALID",
@@ -762,6 +780,7 @@ fn preview(id: &str, plan: &mut Plan, inspector: &impl PortInspector) -> CreateP
         }
     };
     CreatePlanView {
+        container_name: plan.container_name.clone(),
         plan_id: id.into(),
         plan_revision: plan.revision,
         display_name: plan.display_name.clone(),

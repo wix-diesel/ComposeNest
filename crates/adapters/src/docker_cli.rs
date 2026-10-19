@@ -99,11 +99,16 @@ pub struct DockerCli {
     system_root: OsString,
     #[cfg(windows)]
     system_drive: Option<OsString>,
+    #[cfg(windows)]
+    program_files: Option<OsString>,
     gate: Arc<Mutex<()>>,
     blocked: Arc<AtomicBool>,
 }
 
 impl DockerCli {
+    pub(crate) fn endpoint(&self) -> &OsStr {
+        &self.endpoint
+    }
     /// Configures an absolute executable, working directory, Docker config, and local endpoint.
     pub fn new(
         executable: PathBuf,
@@ -155,6 +160,8 @@ impl DockerCli {
             system_root,
             #[cfg(windows)]
             system_drive: std::env::var_os("SystemDrive"),
+            #[cfg(windows)]
+            program_files: std::env::var_os("ProgramFiles").filter(|value| !value.is_empty()),
             gate,
             blocked,
         })
@@ -274,6 +281,10 @@ impl DockerCli {
             command.env("SystemRoot", &self.system_root);
             if let Some(system_drive) = &self.system_drive {
                 command.env("SystemDrive", system_drive);
+            }
+            // Docker discovers system CLI plugins relative to ProgramFiles on Windows.
+            if let Some(program_files) = &self.program_files {
+                command.env("ProgramFiles", program_files);
             }
         }
         configure_platform(&mut command);
@@ -497,6 +508,41 @@ use windows_job::ProcessGroup;
 #[cfg(test)]
 mod supervision_tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_plugin_discovery_preserves_program_files_in_isolated_environment() {
+        let root = tempfile::tempdir().unwrap();
+        let mut cli = DockerCli::new(
+            root.path().join("docker.exe"),
+            root.path().into(),
+            root.path().into(),
+            "npipe:////./pipe/docker_engine".into(),
+        )
+        .unwrap();
+        assert_eq!(
+            cli.program_files,
+            std::env::var_os("ProgramFiles").filter(|value| !value.is_empty())
+        );
+        let program_files = OsString::from(r"D:\Program Files");
+        cli.program_files = Some(program_files.clone());
+        let command = cli
+            .command(&["compose".into(), "version".into()], true)
+            .unwrap();
+        let environment = command.as_std().get_envs().collect::<HashMap<_, _>>();
+        assert_eq!(
+            environment.get(OsStr::new("ProgramFiles")),
+            Some(&Some(program_files.as_os_str()))
+        );
+        assert_eq!(
+            environment.get(OsStr::new("DOCKER_CONFIG")),
+            Some(&Some(root.path().as_os_str()))
+        );
+        assert!(!environment.contains_key(OsStr::new("DOCKER_HOST")));
+        assert!(!environment.contains_key(OsStr::new("DOCKER_CONTEXT")));
+        assert!(!environment.contains_key(OsStr::new("DOCKER_TLS_VERIFY")));
+        assert!(!environment.contains_key(OsStr::new("COMPOSE_FILE")));
+    }
 
     #[tokio::test]
     async fn fresh_bindings_preserve_busy_and_unconfirmed_termination() {

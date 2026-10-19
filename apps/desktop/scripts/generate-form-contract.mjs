@@ -38,7 +38,7 @@ let output = "/** Generated from Rust plan/form DTOs by scripts/generate-form-co
 output += 'import type { RequestContext } from "./ipc";\n\n';
 output += "export type JsonValue = null | boolean | number | string | Array<JsonValue> | { [key: string]: JsonValue };\n\n";
 for (const [file, names] of Object.entries(sources)) {
-  const source = await readFile(new URL(`../../../crates/application/src/${file}.rs`, import.meta.url), "utf8");
+  const source = (await readFile(new URL(`../../../crates/application/src/${file}.rs`, import.meta.url), "utf8")).replaceAll("\r\n", "\n");
   for (const name of names) {
     const match = source.match(new RegExp(`#\\[serde\\(rename_all = "camelCase"(?:, deny_unknown_fields)?\\)\\]\\npub struct ${name} \\{([^}]+)\\}`, "s"));
     if (!match) throw new Error(`Missing camelCase DTO: ${name}`);
@@ -54,7 +54,7 @@ for (const [file, names] of Object.entries(sources)) {
   }
 }
 for (const [file, name, casing] of [["state_store", "StorageMethod", "snake_case"], ["clone_plan", "ValueOrigin", "snake_case"]]) {
-  const source = await readFile(new URL(`../../../crates/application/src/${file}.rs`, import.meta.url), "utf8");
+  const source = (await readFile(new URL(`../../../crates/application/src/${file}.rs`, import.meta.url), "utf8")).replaceAll("\r\n", "\n");
   const match = source.match(new RegExp(`#\\[serde\\(rename_all = "${casing}"\\)\\]\\npub enum ${name} \\{([^}]+)\\}`, "s"));
   if (!match) throw new Error(`Missing DTO enum: ${name}`);
   const variants = [...match[1].matchAll(/^    (\w+),$/gm)].map((item) => JSON.stringify(item[1].replace(/([a-z])([A-Z])/g, "$1_$2").toLowerCase()));

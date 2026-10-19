@@ -63,6 +63,7 @@ fn fixture() -> (TempDir, DatabaseWorker, ConfirmedCreate, DockerProbe) {
         platform: "linux/amd64".into(),
     };
     let confirmed = ConfirmedCreate {
+        container_name: None,
         instance_id: ID.into(),
         scope_id: "scope".into(),
         project_name: format!("cn-{ID}"),

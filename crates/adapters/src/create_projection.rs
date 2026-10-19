@@ -144,6 +144,7 @@ impl<'a> CreateProjection<'a> {
             storage.insert(saved.slot.clone(), value);
         }
         compose::generate(&ConfirmedCompose {
+            container_name: confirmed.container_name.as_deref(),
             snapshot: &snapshot,
             version: &confirmed.selected_version,
             instance_id: id,
@@ -368,6 +369,7 @@ mod tests {
             ),
         ];
         let mut confirmed = ConfirmedCreate {
+            container_name: None,
             instance_id: "a".repeat(32),
             scope_id: "scope".into(),
             project_name: format!("cn-{}", "a".repeat(32)),

@@ -381,7 +381,7 @@ async fn run_accepted(
             instance_id: stages.confirmed.instance_id.clone(),
             spec_revision: stages.confirmed.spec_revision,
             generator_version: "compose-v1".into(),
-            files: BTreeMap::from([("compose.yaml".into(), yaml.into_bytes())]),
+            files: crate::standalone_container::artifact_files(&model, yaml),
         },
     );
     database

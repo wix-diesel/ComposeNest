@@ -138,17 +138,24 @@ pub async fn confirm_clone(
     let mut session = state.clones.lock().await;
     let result = match session.accepted(&request, &*state.database) {
         Ok(Some(receipt)) => Ok((receipt, None)),
-        Ok(None) => state.ports().await.and_then(|ports| {
-            accept_with_capacity(&state.runner, || {
-                session.confirm(
-                    request,
-                    &*state.database,
-                    &SystemClock,
-                    &mut SystemRandom,
-                    &ports,
-                )
-            })
-        }),
+        Ok(None) => {
+            async {
+                let ports = state.ports().await?;
+                let view =
+                    session.view(&request.plan_id, &*state.database, &SystemClock, &ports)?;
+                state.check_container_name(&view.container_name).await?;
+                accept_with_capacity(&state.runner, || {
+                    session.confirm(
+                        request,
+                        &*state.database,
+                        &SystemClock,
+                        &mut SystemRandom,
+                        &ports,
+                    )
+                })
+            }
+            .await
+        }
         Err(error) => Err(error),
     };
     Ok(envelope(

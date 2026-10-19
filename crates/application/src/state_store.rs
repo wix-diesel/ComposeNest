@@ -76,6 +76,8 @@ pub struct TemplateCatalogItem {
 /// Data committed together with a private template snapshot.
 #[derive(Debug, Clone)]
 pub struct InstanceRecord {
+    /// Docker name for a standalone container; absent for legacy Compose instances.
+    pub container_name: Option<String>,
     /// Immutable instance ID.
     pub id: String,
     /// Management scope.

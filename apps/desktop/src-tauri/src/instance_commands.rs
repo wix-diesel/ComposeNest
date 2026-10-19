@@ -278,7 +278,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_acl_allows_instance_commands_only_on_the_local_main_window() {
+    fn generated_acl_allows_instance_and_clone_commands_only_on_the_local_main_window() {
         let mut context: tauri::Context<tauri::Wry> = tauri::generate_context!();
         let authority = context.runtime_authority_mut();
         for command in [
@@ -296,6 +296,12 @@ mod tests {
             "change_instance",
             "get_instance_edit",
             "edit_instance_ports",
+            "prepare_clone",
+            "update_clone_plan",
+            "view_clone_plan",
+            "get_clone_receipt",
+            "discard_clone_plan",
+            "confirm_clone",
         ] {
             assert!(
                 authority

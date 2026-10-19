@@ -13,6 +13,16 @@ use crate::{
     template::{Node, ResolvedTemplate, Value},
 };
 
+/// Accepts bounded Docker names using ASCII letters, digits, underscores, dots and hyphens.
+pub fn valid_container_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 128
+        && name.as_bytes()[0].is_ascii_alphanumeric()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
+}
+
 /// A confirmed input value; absent optional values are omitted only where allowed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputValue {
@@ -45,6 +55,8 @@ pub enum Storage {
 
 /// Values committed with the selected snapshot and its spec.
 pub struct ConfirmedCompose<'a> {
+    /// Validated Docker name for standalone execution, absent for legacy Compose instances.
+    pub container_name: Option<&'a str>,
     /// Immutable snapshot containing every complete version.
     pub snapshot: &'a ResolvedTemplate,
     /// Selected version key in that snapshot.
@@ -82,6 +94,8 @@ pub enum ComposeError {
 /// A typed standard Compose document for one isolated instance.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComposeModel {
+    /// Docker container name, when execution is standalone.
+    pub container_name: Option<String>,
     /// Dedicated project name.
     pub name: String,
     /// Single service with fixed network and host exposure rules.
@@ -119,6 +133,12 @@ pub struct ComposeService {
 
 /// Builds a model solely from the selected snapshot and confirmed records.
 pub fn generate(source: &ConfirmedCompose<'_>) -> Result<ComposeModel, ComposeError> {
+    if source
+        .container_name
+        .is_some_and(|name| !valid_container_name(name))
+    {
+        return Err(ComposeError::InvalidSpec);
+    }
     let version = source
         .snapshot
         .versions
@@ -272,6 +292,7 @@ pub fn generate(source: &ConfirmedCompose<'_>) -> Result<ComposeModel, ComposeEr
         source.spec_revision.to_string(),
     );
     Ok(ComposeModel {
+        container_name: source.container_name.map(str::to_owned),
         name: source.instance_id.compose_project_name(),
         service: ComposeService {
             image: source.execution_image.to_owned(),
@@ -408,6 +429,9 @@ pub fn to_yaml(model: &ComposeModel) -> Result<String, ComposeError> {
         ),
         ("restart", scalar(&service.restart)),
     ];
+    if let Some(name) = &model.container_name {
+        values.push(("container_name", scalar(name)));
+    }
     if let Some(argv) = &service.command {
         values.push(("command", array(argv.iter().cloned())));
     }

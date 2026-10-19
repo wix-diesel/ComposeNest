@@ -1,6 +1,6 @@
 //! Explicit restoration from saved specs; external Compose is never an execution input.
 
-use std::{collections::BTreeMap, path::Path};
+use std::path::Path;
 
 use composenest_application::{
     create_state::CreateStateStore,
@@ -193,7 +193,7 @@ pub(crate) async fn restore_locked<P: RecoveryProbe>(
                             instance_id: stages.confirmed.instance_id.clone(),
                             spec_revision: stages.confirmed.spec_revision,
                             generator_version: "compose-v1".into(),
-                            files: BTreeMap::from([("compose.yaml".into(), yaml.into_bytes())]),
+                            files: crate::standalone_container::artifact_files(&model, yaml),
                         },
                     )
                     .map_err(|_| PortEditError::OutcomeUnknown)?;

@@ -4,6 +4,14 @@ import { test } from "node:test";
 import { candidate, emptyDraft, integerCandidate, planEdit } from "../src/templates/formModel.ts";
 
 const views = JSON.parse(await readFile("test-results/template-form-plans.json", "utf8"));
+
+test("create and clone submit container names only as explicit reviewed edits", () => {
+  for (const kind of ["create", "clone"]) {
+    const plan = { kind, view: views[kind] };
+    assert.equal(planEdit(plan, emptyDraft()).containerName, null);
+    assert.equal(planEdit(plan, { ...emptyDraft(), containerName: "my-database" }).containerName, "my-database");
+  }
+});
 test("create edits preserve unset, false, zero, empty string and invalid integer text", () => {
   const plan = { kind: "create", view: structuredClone(views.create) };
   for (const key of ["zero", "empty"]) plan.view.templateForm.inputs.push({ key });

@@ -4,6 +4,21 @@ import { test } from "node:test";
 
 const read = (path) => readFile(new URL(path, import.meta.url), "utf8");
 
+test("every registered application command has a generated permission and main-window grant", async () => {
+  const source = await read("../src-tauri/src/main.rs");
+  const handler = source.match(/\.invoke_handler\(tauri::generate_handler!\[([\s\S]*?)\]\)/);
+  assert.ok(handler, "application command handler must be registered");
+  const commands = handler[1].split(",").map((command) => command.trim()).filter(Boolean).sort();
+  const manifest = (await read("../src-tauri/build.rs")).match(/"[a-z_]+"/g).map((value) => value.slice(1, -1)).sort();
+  assert.deepEqual(manifest, commands, "build manifest must include every registered command");
+  const capability = JSON.parse(await read("../src-tauri/capabilities/default.json"));
+  assert.deepEqual(
+    capability.permissions.filter((permission) => !permission.includes(":")).sort(),
+    commands.map((command) => `allow-${command.replaceAll("_", "-")}`).sort(),
+    "the local main window must be allowed to invoke every application command",
+  );
+});
+
 test("only local main-window application commands and explicit clipboard writes are permitted", async () => {
   const capability = JSON.parse(await read("../src-tauri/capabilities/default.json"));
   assert.deepEqual(capability.windows, ["main"]);

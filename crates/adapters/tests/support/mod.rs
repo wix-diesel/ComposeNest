@@ -125,6 +125,7 @@ pub(super) fn edit(
     inputs: BTreeMap<String, serde_json::Value>,
 ) -> PlanEdit {
     PlanEdit {
+        container_name: None,
         expected_revision: revision,
         display_name: None,
         version: version.map(str::to_owned),
@@ -137,6 +138,7 @@ pub(super) fn edit(
 
 pub(super) fn source_instance(template: &str) -> InstanceRecord {
     InstanceRecord {
+        container_name: None,
         id: "source".into(),
         scope_id: "scope".into(),
         target_id: "target".into(),
@@ -179,6 +181,7 @@ pub(super) fn setup_source(store: &DatabaseWorker, template: &str) {
 
 pub(super) fn clone_edit(revision: u64) -> CloneEdit {
     CloneEdit {
+        container_name: None,
         expected_revision: revision,
         display_name: None,
         version: None,

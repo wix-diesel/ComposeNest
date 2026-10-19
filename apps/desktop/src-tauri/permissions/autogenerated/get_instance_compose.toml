@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-instance-compose"
+description = "Enables the get_instance_compose command without any pre-configured scope."
+commands.allow = ["get_instance_compose"]
+
+[[permission]]
+identifier = "deny-get-instance-compose"
+description = "Denies the get_instance_compose command without any pre-configured scope."
+commands.deny = ["get_instance_compose"]

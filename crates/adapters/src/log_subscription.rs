@@ -416,6 +416,15 @@ fn confirmed_log_inputs(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let confirmed = ConfirmedCreate {
+        container_name: database
+            .read(|db| {
+                Ok(db.query_row(
+                    "SELECT container_name FROM instances WHERE id=?1 AND scope_id=?2",
+                    [instance, scope],
+                    |row| row.get(0),
+                )?)
+            })
+            .map_err(map_error)?,
         instance_id: instance.into(),
         scope_id: scope.into(),
         project_name: view.project_name,

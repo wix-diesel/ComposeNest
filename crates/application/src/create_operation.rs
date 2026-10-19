@@ -358,6 +358,7 @@ mod tests {
         ) -> Result<ConfirmedCreate, StoreConflict> {
             self.0.push("load");
             Ok(ConfirmedCreate {
+                container_name: None,
                 instance_id: receipt.instance_id.clone(),
                 scope_id: receipt.scope_id.clone(),
                 project_name: "cn-instance".into(),

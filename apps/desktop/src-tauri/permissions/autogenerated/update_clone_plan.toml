@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-update-clone-plan"
+description = "Enables the update_clone_plan command without any pre-configured scope."
+commands.allow = ["update_clone_plan"]
+
+[[permission]]
+identifier = "deny-update-clone-plan"
+description = "Denies the update_clone_plan command without any pre-configured scope."
+commands.deny = ["update_clone_plan"]

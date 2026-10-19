@@ -12,7 +12,7 @@ use serde_json::Value;
 use crate::docker_target::BoundDocker;
 
 // Docker formats each selected field as JSON; health logs and unrelated inspect data stay out.
-const INSPECT_FORMAT: &str = r#"{"Id":{{json .Id}},"Image":{{json .Image}},"Config":{"Labels":{"com.docker.compose.project":{{json (index .Config.Labels "com.docker.compose.project")}},"com.docker.compose.service":{{json (index .Config.Labels "com.docker.compose.service")}},"io.composenest.scope":{{json (index .Config.Labels "io.composenest.scope")}},"io.composenest.instance":{{json (index .Config.Labels "io.composenest.instance")}},"io.composenest.spec-revision":{{json (index .Config.Labels "io.composenest.spec-revision")}}},"Cmd":{{json .Config.Cmd}},"Env":{{json .Config.Env}},"Healthcheck":{{json (index .Config "Healthcheck")}}},"HostConfig":{"PortBindings":{{json .HostConfig.PortBindings}}},"Mounts":{{json .Mounts}},"NetworkSettings":{"Networks":{{json .NetworkSettings.Networks}}},"State":{"Status":{{json .State.Status}},"Health":{"Status":{{with (index .State "Health")}}{{json .Status}}{{else}}null{{end}}}}}"#;
+const INSPECT_FORMAT: &str = r#"{"Id":{{json .Id}},"Image":{{json .Image}},"Config":{"Labels":{"io.composenest.project":{{json (index .Config.Labels "io.composenest.project")}},"io.composenest.service":{{json (index .Config.Labels "io.composenest.service")}},"com.docker.compose.project":{{json (index .Config.Labels "com.docker.compose.project")}},"com.docker.compose.service":{{json (index .Config.Labels "com.docker.compose.service")}},"io.composenest.scope":{{json (index .Config.Labels "io.composenest.scope")}},"io.composenest.instance":{{json (index .Config.Labels "io.composenest.instance")}},"io.composenest.spec-revision":{{json (index .Config.Labels "io.composenest.spec-revision")}}},"Cmd":{{json .Config.Cmd}},"Env":{{json .Config.Env}},"Healthcheck":{{json (index .Config "Healthcheck")}}},"HostConfig":{"PortBindings":{{json .HostConfig.PortBindings}}},"Mounts":{{json .Mounts}},"NetworkSettings":{"Networks":{{json .NetworkSettings.Networks}}},"State":{"Status":{{json .State.Status}},"Health":{"Status":{{with (index .State "Health")}}{{json .Status}}{{else}}null{{end}}}}}"#;
 
 /// Expected Docker state built from the confirmed spec and recorded allocations.
 /// Environment and command values may contain secrets; keep this input private.
@@ -225,8 +225,7 @@ fn ownership(value: &Value, expected: &ExpectedContainer) -> Ownership {
     let label = |key| field(value, &["Config", "Labels", key]).and_then(Value::as_str);
     let evidence = [
         string(value, &["Id"]) == Some(expected.container_id.as_str()),
-        label("com.docker.compose.project") == Some(expected.project.as_str()),
-        label("com.docker.compose.service") == Some("main"),
+        owns_project(&value["Config"]["Labels"], &expected.project, "service"),
         label("io.composenest.scope") == Some(expected.scope.as_str()),
         label("io.composenest.instance") == Some(expected.instance.as_str()),
     ];
@@ -234,6 +233,22 @@ fn ownership(value: &Value, expected: &ExpectedContainer) -> Ownership {
         Ownership::Verified
     } else {
         Ownership::Foreign
+    }
+}
+
+pub(crate) fn owns_project(labels: &Value, project: &str, resource: &str) -> bool {
+    let role = if resource == "service" {
+        "main"
+    } else {
+        "default"
+    };
+    if labels["io.composenest.project"].is_string() {
+        labels["io.composenest.project"] == project
+            && labels[format!("io.composenest.{resource}")] == role
+            && labels["com.docker.compose.project"].is_null()
+    } else {
+        labels["com.docker.compose.project"] == project
+            && labels[format!("com.docker.compose.{resource}")] == role
     }
 }
 
@@ -418,6 +433,59 @@ mod tests {
         assert_eq!(runtime_status(&actual), RuntimeStatus::Preparing);
         actual["State"]["Health"]["Status"] = json!("healthy");
         assert_eq!(runtime_status(&actual), RuntimeStatus::Ready);
+    }
+
+    #[test]
+    fn standalone_ownership_requires_full_id_scope_instance_project_and_service() {
+        let expected = expected();
+        let mut actual = inspected(&expected);
+        actual["Config"]["Labels"] = json!({
+            "io.composenest.project": expected.project,
+            "io.composenest.service": "main",
+            "io.composenest.scope": expected.scope,
+            "io.composenest.instance": expected.instance,
+            "io.composenest.spec-revision": "1"
+        });
+        assert_eq!(ownership(&actual, &expected), Ownership::Verified);
+        assert!(configuration_matches(&actual, &expected));
+        for key in [
+            "io.composenest.project",
+            "io.composenest.service",
+            "io.composenest.scope",
+            "io.composenest.instance",
+        ] {
+            for replacement in [Value::Null, json!("other")] {
+                let mut changed = actual.clone();
+                changed["Config"]["Labels"][key] = replacement;
+                assert_eq!(ownership(&changed, &expected), Ownership::Foreign, "{key}");
+            }
+        }
+        actual["Id"] = json!(&expected.container_id[..12]);
+        assert_eq!(ownership(&actual, &expected), Ownership::Foreign);
+    }
+
+    #[test]
+    fn standalone_and_legacy_resources_require_matching_roles_and_project_labels() {
+        for (resource, role) in [("service", "main"), ("network", "default")] {
+            for prefix in ["io.composenest", "com.docker.compose"] {
+                let project_key = format!("{prefix}.project");
+                let role_key = format!("{prefix}.{resource}");
+                let labels = json!({project_key.clone(): "cn-project", role_key.clone(): role});
+                assert!(owns_project(&labels, "cn-project", resource));
+                assert!(!owns_project(&labels, "cn-other", resource));
+                let mut changed = labels.clone();
+                changed[&role_key] = json!("other");
+                assert!(!owns_project(&changed, "cn-project", resource));
+                changed.as_object_mut().unwrap().remove(&role_key);
+                assert!(!owns_project(&changed, "cn-project", resource));
+                let mut mixed = labels;
+                mixed["io.composenest.project"] = json!("cn-project");
+                mixed[format!("io.composenest.{resource}")] = json!(role);
+                mixed["com.docker.compose.project"] = json!("cn-project");
+                mixed[format!("com.docker.compose.{resource}")] = json!(role);
+                assert!(!owns_project(&mixed, "cn-project", resource));
+            }
+        }
     }
 
     #[test]

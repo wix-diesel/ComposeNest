@@ -37,3 +37,26 @@ Remove-Item -LiteralPath $probe
 | 最低版 | 設計上の Windows 11 24H2 では未検証。今回の実機は build 26200 のみ |
 
 通常 GUI からの管理ファイル操作と Windows 11 24H2 は、アプリ機能実装と対象環境での追加受入が必要。Docker CLI Adapter は現時点で未実装のため、アプリからの CLI 停止・再照合の試験はその実装時に行う。
+
+## Docker診断の修正・実機検証（2026-10-19）
+
+Docker Desktopが導入済みでも、CLI／Engine 29.5.3を非対応とし、Composeを確認できない問題を修正した。
+
+- 配布受入の検証基準29.8.1／5.5.1が実行時の下限にも使われていた。既存の実機検証記録に基づき、実行時の最低対応版をCLI／Engine 29.5.3、Compose 5.1.4として分離した。これより古い版、解析不能な版、対象不一致、リモート接続は引き続き拒否する。
+- CLI実行環境の隔離で`ProgramFiles`が消えていた。同じ`docker.exe`に空のDocker設定を指定して`compose version`を実行すると、`ProgramFiles`なしではunknown command、ありでは成功することを確認した。[Docker公式のWindowsプラグイン探索実装](https://github.com/docker/cli/blob/master/cli-plugins/manager/manager_windows.go)もこの変数を参照するため、Windows用の許可リストに追加した。
+- Windows x86_64、Docker Desktop 4.95.0.242831、CLI／Engine 29.8.2、Compose 5.6.0、Linux Engine（x86_64）で、アプリと同じ`DockerProbe`の読み取り専用診断が全項目Readyとなった。Docker設定、current context、コンテナ、volumeは変更しない。
+- 通常の回帰テストで29.5.3／5.1.4とそれ以降の版の受入、下限未満・解析不能な版の拒否、Windowsの`ProgramFiles`継承を確認する。29.5.3／5.1.4での今回のGUI全経路、およびmacOS／Ubuntuの実機受入は未実施。
+
+実機診断テストはDocker依存として通常テストから分離している。ローカルLinux Engineを起動した通常利用者のセッションで次を実行する。
+
+```powershell
+cargo test -p composenest-adapters --test docker_diagnosis --locked -- --ignored
+```
+
+## 指定コンテナ名とグループなしの作成（2026-10-19）
+
+新規作成・Clone画面にコンテナ名を追加した。表示名とは独立して保存し、同一targetでの有効な名前予約をSQLiteで一意にする。確定前には停止中を含むDocker上の既存名も確認する。新規環境はローカルEngine API経由で単独作成し、既存のCompose環境は従来の操作経路を維持する。
+
+WindowsのDocker Desktopで、一意なテスト専用名・networkとキャッシュ済み`alpine:latest`を使い、指定した実名、Composeグループラベルが存在しないこと、`$`・引用符・日本語・改行を含む値の保持、所有・完全設定の照合、起動・Ready判定、停止中の同名再作成、アプリの所有確認付き削除と資源の不在を確認した。空白・日本語を含むWindowsパスのbindと専用named volumeを両方接続し、再作成後も両方のsentinelが読めること、削除後もbindの内容とvolumeが残ることを確認した。テスト資源は後始末した。通常の全体Rustテスト、Clippy、型チェック・frontend build、Chromeを使ったフォーム・作成・Clone画面の回帰テストも成功した。
+
+Visual Studioの既存ビルド環境を読み込んでWindows実行ファイルを更新した。macOS／Linux実機での新しい作成方式は未検証。

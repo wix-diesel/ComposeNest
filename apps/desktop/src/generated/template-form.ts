@@ -438,6 +438,7 @@ export interface PlanConcern {
 }
 
 export interface CreatePlanView {
+  containerName: string;
   planId: string;
   planRevision: number;
   displayName: string;
@@ -455,6 +456,7 @@ export interface CreatePlanView {
 }
 
 export interface PlanEdit {
+  containerName: string | null;
   expectedRevision: number;
   displayName: string | null;
   version: string | null;
@@ -503,6 +505,7 @@ export interface InputDiff {
 }
 
 export interface ClonePlanView {
+  containerName: string;
   planId: string;
   planRevision: number;
   sourceId: string;
@@ -530,6 +533,7 @@ export interface ClonePlanView {
 }
 
 export interface CloneEdit {
+  containerName: string | null;
   expectedRevision: number;
   displayName: string | null;
   version: string | null;

@@ -62,6 +62,8 @@ pub enum CloneAnswer {
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CloneEdit {
+    /// Docker name for the new standalone container.
+    pub container_name: Option<String>,
     /// Expected plan revision.
     pub expected_revision: u64,
     /// New display name, if changed.
@@ -145,6 +147,8 @@ pub struct InputDiff {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClonePlanView {
+    /// Docker name for the new standalone container.
+    pub container_name: String,
     /// Opaque process-local plan ID.
     pub plan_id: String,
     /// Revision required by edits and confirmation.
@@ -207,6 +211,7 @@ struct FieldState {
 }
 
 struct Plan {
+    container_name: String,
     source: CloneSource,
     instance_id: String,
     template: Value,
@@ -266,6 +271,7 @@ impl ClonePlans {
         let id = self.unique_id(random)?;
         let instance_id = self.unique_instance_id(random, store)?;
         let mut plan = Plan {
+            container_name: format!("cn-{id}"),
             display_name: normalize_name(&request.display_name),
             version_answered: template["rules"]["versionClone"] != "ask",
             storage_answered: template["rules"]["storageClone"] != "ask",
@@ -389,6 +395,9 @@ impl ClonePlans {
                 ));
             }
             field.secret_confirmed = true;
+        }
+        if let Some(name) = edit.container_name {
+            plan.container_name = name.trim().to_owned();
         }
         if let Some(name) = edit.display_name {
             plan.display_name = normalize_name(&name);

@@ -588,6 +588,7 @@ mod tests {
             named_volume_allocations(instance_id, OPERATION, std::slice::from_ref(&slot)).unwrap();
         worker
             .commit_instance(&InstanceRecord {
+                container_name: None,
                 id: INSTANCE.into(),
                 scope_id: "scope".into(),
                 target_id: "target".into(),

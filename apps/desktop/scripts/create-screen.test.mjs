@@ -66,6 +66,7 @@ try {
         }
         if (command === "update_create_plan") {
           if (request.edit.expectedRevision !== window.plan.planRevision) throw new Error("stale test edit");
+          if (request.edit.containerName !== null) window.plan.containerName = request.edit.containerName;
           if (request.edit.displayName !== null) window.plan.displayName = request.edit.displayName;
           if (clone && request.edit.confirmSecrets.includes("password")) window.plan.inputs.find((input) => input.key === "password").needsSecretConfirmation = false;
           window.plan.concerns = window.plan.displayName ? [] : [{ code: "DISPLAY_NAME_INVALID", fieldPath: "displayName" }];
@@ -115,9 +116,12 @@ try {
   await page.getByRole("button", { name: clone ? "複製内容を確認" : "作成内容を確認", exact: true }).click();
   await page.getByText("未回答・入力エラー・ポートの確認事項を解消してください。").waitFor();
   assert.equal(await page.getByRole("dialog").count(), 0);
+  await page.getByLabel("コンテナ名", { exact: false }).fill("reviewed-container");
   await page.locator("#input-password").fill("OnlyUserEnteredSecret");
   await review();
   assert.equal((await calls("update_create_plan"))[0].request.edit.expectedRevision, 1);
+  assert.equal((await calls("update_create_plan"))[0].request.edit.containerName, "reviewed-container");
+  assert.match(await page.getByRole("dialog").textContent(), /reviewed-container/);
   assert.equal(await page.getByRole("button", { name: "作成・起動を確定" }).isDisabled(), true);
   assert.match(await page.getByRole("dialog").textContent(), /127\.0\.0\.1:12789/);
   assert.doesNotMatch(await page.getByRole("dialog").textContent(), /OnlyUserEnteredSecret/);

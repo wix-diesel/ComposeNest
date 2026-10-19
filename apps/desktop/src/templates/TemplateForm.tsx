@@ -26,7 +26,7 @@ export function TemplateForm({ initialPlan, onUpdate, onReview, locked = false }
   const view = plan.view;
   const form = view.templateForm;
   const method = draft.storageMethod ?? view.storageMethod;
-  const dirty = draft.displayName !== undefined || draft.storageMethod !== undefined || Object.keys(draft.inputs).length > 0 || Object.keys(draft.ports).length > 0;
+  const dirty = draft.containerName !== undefined || draft.displayName !== undefined || draft.storageMethod !== undefined || Object.keys(draft.inputs).length > 0 || Object.keys(draft.ports).length > 0;
   const error = (path: string) => failure?.fieldPath === path ? failure.reason : view.concerns.filter((item) => item.fieldPath === path).map((item) => concernMessage(item.code)).join(" ");
   const value = (key: string): JsonValue => Object.hasOwn(draft.inputs, key) ? draft.inputs[key] : candidate(plan, key).value;
   const secretSet = (key: string) => Object.hasOwn(draft.inputs, key) ? draft.inputs[key] !== null : candidate(plan, key).hasSecret;
@@ -43,7 +43,7 @@ export function TemplateForm({ initialPlan, onUpdate, onReview, locked = false }
   }
   const fieldLabel = (path: string) => form.inputs.find((input) => path === `inputs.${input.key}`)?.label
     ?? form.ports.find((slot) => path === `ports.${slot.key}`)?.label
-    ?? ({ displayName: "環境名", version: "バージョン", storageMethod: "保存方式", ports: "接続ポート" } as Record<string, string>)[path] ?? "設定";
+    ?? ({ displayName: "環境名", containerName: "コンテナ名", version: "バージョン", storageMethod: "保存方式", ports: "接続ポート" } as Record<string, string>)[path] ?? "設定";
 
   async function apply(action: FormAction = {}, reviewTrigger?: HTMLButtonElement) {
     if (inFlight.current) return;
@@ -78,6 +78,11 @@ export function TemplateForm({ initialPlan, onUpdate, onReview, locked = false }
             onChange={(event) => { void apply({ version: event.target.value }); }}>{view.versions.map((version) => <option key={version}>{version}</option>)}</select>
           <p id="version-error" className="error-text">{error("version")}</p>
           {view.concerns.some((item) => item.code === "VERSION_NEEDS_ANSWER") && <button type="button" className="btn small" onClick={() => { void apply({ version: view.version }); }}>バージョン選択を確認</button>}</div>;
+  const containerNameField = <div className="field"><label htmlFor="container-name">コンテナ名<span className="required">必須</span></label>
+    <input id="container-name" value={draft.containerName ?? view.containerName} maxLength={128} aria-required="true"
+      aria-invalid={!!error("containerName")} aria-describedby="container-name-help" onChange={(event) => setDraft({ ...draft, containerName: event.target.value })} />
+    <small id="container-name-help">Dockerに表示する名前です。先頭は半角英数字、以降は半角英数字・ハイフン・アンダースコア・ピリオドを使用できます。グループにはまとめずに作成します。</small>
+    <p className="error-text">{error("containerName")}</p></div>;
   const portField = (slot: typeof form.ports[number]) => <div key={slot.key} className="field" data-field-path={`ports.${slot.key}`}>
           <label htmlFor={`port-${slot.key}`}>{slot.label}</label><input id={`port-${slot.key}`} inputMode="numeric"
             value={Object.hasOwn(draft.ports, slot.key) ? draft.ports[slot.key] ?? "" : view.ports[slot.key] ?? ""}
@@ -105,9 +110,11 @@ export function TemplateForm({ initialPlan, onUpdate, onReview, locked = false }
     {failure && <p role="alert" className="notice error-text">{failure.reason}</p>}
     <fieldset disabled={busy || locked} aria-busy={busy}><div className="two-column"><div>
       {plan.kind === "clone" ? <section className="panel"><h2>変更内容の確認</h2>
+        {containerNameField}
         <CloneDiff plan={plan.view} draft={draft} renderCandidate={cloneControl} />
       </section> : <><section className="panel"><h2>基本設定</h2>
         {nameField}
+        {containerNameField}
         {versionField}
         <div className="two-equal">{form.ports.map(portField)}</div>
       </section>

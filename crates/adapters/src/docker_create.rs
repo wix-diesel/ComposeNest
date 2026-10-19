@@ -1,6 +1,7 @@
 //! Fixed Docker commands for the create and clone operation path.
 
 use std::{
+    collections::BTreeSet,
     ffi::OsString,
     time::{Duration, Instant},
 };
@@ -92,6 +93,9 @@ impl<'a> DockerCreate<'a> {
         if self.find_container().await?.is_some() {
             return Err(CreateDockerError::ExistingContainer);
         }
+        if let Some(request) = self.standalone_request()? {
+            return self.create_standalone(&request).await;
+        }
         let mut args = self.compose_args()?;
         args.extend([
             "create".into(),
@@ -112,6 +116,47 @@ impl<'a> DockerCreate<'a> {
     /// The caller must journal intent and verify ownership and storage before this call.
     pub async fn recreate_stopped(&self) -> Result<(), CreateDockerError> {
         self.validate_config().await?;
+        if let Some(request) = self.standalone_request()? {
+            if let Some(id) = self.find_container().await? {
+                // The caller has verified the stopped container; check identity again before removal.
+                let check = self
+                    .docker
+                    .read(&[
+                        "container".into(),
+                        "inspect".into(),
+                        "--format".into(),
+                        r#"{"State":{{json .State.Status}},"Labels":{{json .Config.Labels}}}"#
+                            .into(),
+                        id.clone().into(),
+                    ])
+                    .await
+                    .map_err(|_| CreateDockerError::Unavailable)?;
+                check_read(&check)?;
+                let value: serde_json::Value = serde_json::from_slice(&check.stdout.bytes)
+                    .map_err(|_| CreateDockerError::Mismatch)?;
+                if !crate::docker_observation::owns_project(
+                    &value["Labels"],
+                    self.project,
+                    "service",
+                ) || value["Labels"]["io.composenest.scope"]
+                    != request["config"]["Labels"]["io.composenest.scope"]
+                    || value["Labels"]["io.composenest.instance"] != self.instance_id
+                    || !matches!(value["State"].as_str(), Some("created" | "exited"))
+                {
+                    return Err(CreateDockerError::Mismatch);
+                }
+                let removed = self
+                    .docker
+                    .change(
+                        &["container".into(), "rm".into(), id.into()],
+                        START_DEADLINE,
+                    )
+                    .await
+                    .map_err(|_| CreateDockerError::OutcomeUnknown)?;
+                check_change(&removed)?;
+            }
+            return self.create_standalone(&request).await;
+        }
         let mut args = self.compose_args()?;
         args.extend([
             "create".into(),
@@ -229,37 +274,141 @@ impl<'a> DockerCreate<'a> {
         ])
     }
 
-    async fn find_container(&self) -> Result<Option<String>, CreateDockerError> {
-        let args: [OsString; 9] = [
-            "container".into(),
-            "ls".into(),
-            "--all".into(),
-            "--no-trunc".into(),
-            "--quiet".into(),
-            "--filter".into(),
-            format!("label=com.docker.compose.project={}", self.project).into(),
-            "--filter".into(),
-            "label=com.docker.compose.service=main".into(),
-        ];
-        let result = self
+    fn standalone_request(&self) -> Result<Option<serde_json::Value>, CreateDockerError> {
+        let request = self
+            .artifacts
+            .read_container_config(self.artifact_id)
+            .map_err(|_| CreateDockerError::InvalidInput)?;
+        if let Some(request) = &request
+            && (request["config"]["Labels"]["io.composenest.project"] != self.project
+                || request["config"]["Labels"]["io.composenest.instance"] != self.instance_id)
+        {
+            return Err(CreateDockerError::InvalidInput);
+        }
+        Ok(request)
+    }
+
+    async fn create_standalone(
+        &self,
+        request: &serde_json::Value,
+    ) -> Result<(), CreateDockerError> {
+        let scope = request["config"]["Labels"]["io.composenest.scope"]
+            .as_str()
+            .filter(|scope| composenest_application::named_volumes::valid_label_value(scope))
+            .ok_or(CreateDockerError::InvalidInput)?;
+        self.ensure_standalone_network(scope).await?;
+        self.docker
+            .create_standalone(
+                request["name"]
+                    .as_str()
+                    .ok_or(CreateDockerError::InvalidInput)?,
+                request["platform"]
+                    .as_str()
+                    .ok_or(CreateDockerError::InvalidInput)?,
+                &request["config"],
+            )
+            .await
+    }
+
+    async fn ensure_standalone_network(&self, scope: &str) -> Result<(), CreateDockerError> {
+        let name = format!("{}_default", self.project);
+        let listing = self
             .docker
-            .read(&args)
+            .read(&[
+                "network".into(),
+                "ls".into(),
+                "--no-trunc".into(),
+                "--quiet".into(),
+                "--filter".into(),
+                format!("name=^{name}$").into(),
+            ])
             .await
             .map_err(|_| CreateDockerError::Unavailable)?;
-        check_read(&result)?;
-        let output = std::str::from_utf8(&result.stdout.bytes)
-            .map_err(|_| CreateDockerError::OutcomeUnknown)?;
-        let mut ids = output.lines();
-        let first = ids.next().map(str::trim);
-        if ids.next().is_some() {
-            return Err(CreateDockerError::ExistingContainer);
+        check_read(&listing)?;
+        if !listing.stdout.bytes.is_empty() {
+            let inspected = self.docker.read(&["network".into(), "inspect".into(), "--format".into(),
+                r#"{"Name":{{json .Name}},"Driver":{{json .Driver}},"Labels":{{json .Labels}}}"#.into(), name.clone().into()])
+                .await.map_err(|_| CreateDockerError::Unavailable)?;
+            check_read(&inspected)?;
+            let value: serde_json::Value = serde_json::from_slice(&inspected.stdout.bytes)
+                .map_err(|_| CreateDockerError::Mismatch)?;
+            if value["Name"] != name
+                || value["Driver"] != "bridge"
+                || value["Labels"]["io.composenest.project"] != self.project
+                || value["Labels"]["io.composenest.scope"] != scope
+                || value["Labels"]["io.composenest.instance"] != self.instance_id
+            {
+                return Err(CreateDockerError::Mismatch);
+            }
+            return Ok(());
         }
-        match first {
-            Some(id) if valid_container_id(id) => Ok(Some(id.to_owned())),
-            None => Ok(None),
-            _ => Err(CreateDockerError::OutcomeUnknown),
+        let result = self
+            .docker
+            .change(
+                &[
+                    "network".into(),
+                    "create".into(),
+                    "--driver".into(),
+                    "bridge".into(),
+                    "--label".into(),
+                    format!("io.composenest.scope={scope}").into(),
+                    "--label".into(),
+                    format!("io.composenest.instance={}", self.instance_id).into(),
+                    "--label".into(),
+                    format!("io.composenest.project={}", self.project).into(),
+                    "--label".into(),
+                    "io.composenest.network=default".into(),
+                    name.into(),
+                ],
+                START_DEADLINE,
+            )
+            .await
+            .map_err(|_| CreateDockerError::OutcomeUnknown)?;
+        check_change(&result)
+    }
+
+    async fn find_container(&self) -> Result<Option<String>, CreateDockerError> {
+        // Recovery must find runtime resources even when their execution artifact is modified.
+        let mut listings = Vec::new();
+        for prefix in ["com.docker.compose", "io.composenest"] {
+            let args: Vec<OsString> = vec![
+                "container".into(),
+                "ls".into(),
+                "--all".into(),
+                "--no-trunc".into(),
+                "--quiet".into(),
+                "--filter".into(),
+                format!("label={prefix}.project={}", self.project).into(),
+                "--filter".into(),
+                format!("label={prefix}.service=main").into(),
+            ];
+            let result = self
+                .docker
+                .read(&args)
+                .await
+                .map_err(|_| CreateDockerError::Unavailable)?;
+            check_read(&result)?;
+            listings.push(result.stdout.bytes);
+        }
+        unique_container_id(&listings)
+    }
+}
+
+fn unique_container_id(listings: &[Vec<u8>]) -> Result<Option<String>, CreateDockerError> {
+    let mut ids = BTreeSet::new();
+    for listing in listings {
+        let output = std::str::from_utf8(listing).map_err(|_| CreateDockerError::OutcomeUnknown)?;
+        for id in output.lines().map(str::trim) {
+            if !valid_container_id(id) {
+                return Err(CreateDockerError::OutcomeUnknown);
+            }
+            ids.insert(id.to_owned());
         }
     }
+    if ids.len() > 1 {
+        return Err(CreateDockerError::ExistingContainer);
+    }
+    Ok(ids.into_iter().next())
 }
 
 fn valid_project(value: &str) -> bool {
@@ -293,5 +442,38 @@ fn check_change(result: &CliOutcome) -> Result<(), CreateDockerError> {
         Ok(())
     } else {
         Err(CreateDockerError::OutcomeUnknown)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_and_standalone_listings_must_resolve_to_one_full_container_id() {
+        let id = "a".repeat(64);
+        let listed = format!("{id}\n").into_bytes();
+        for listings in [
+            vec![listed.clone(), vec![]],
+            vec![vec![], listed.clone()],
+            vec![listed.clone(), listed],
+        ] {
+            assert_eq!(unique_container_id(&listings), Ok(Some(id.clone())));
+        }
+        assert_eq!(unique_container_id(&[vec![], vec![]]), Ok(None));
+        assert_eq!(
+            unique_container_id(&[id.into_bytes(), "b".repeat(64).into_bytes()]),
+            Err(CreateDockerError::ExistingContainer)
+        );
+    }
+
+    #[test]
+    fn malformed_listing_cannot_be_hidden_by_a_valid_container_id() {
+        for invalid in [vec![0xff], b"short-id\n".to_vec(), b"\n".to_vec()] {
+            assert_eq!(
+                unique_container_id(&["a".repeat(64).into_bytes(), invalid]),
+                Err(CreateDockerError::OutcomeUnknown)
+            );
+        }
     }
 }

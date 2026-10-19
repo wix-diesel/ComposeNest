@@ -120,6 +120,7 @@ impl ClonePlans {
             .filter_map(|(key, field)| field.value.as_ref().map(|value| (key, value)))
             .collect();
         let instance = InstanceRecord {
+            container_name: Some(plan.container_name.clone()),
             id: request.instance_id.clone(),
             scope_id: request.scope_id.clone(),
             target_id: request.target_id,

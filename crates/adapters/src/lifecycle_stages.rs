@@ -384,6 +384,7 @@ exit 1
             binds: &binds,
             artifacts: &artifacts,
             confirmed: ConfirmedCreate {
+                container_name: None,
                 instance_id: instance.clone(),
                 scope_id: "scope".into(),
                 project_name: format!("cn-{instance}"),

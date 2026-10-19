@@ -173,6 +173,7 @@ impl CreateStateStore for DatabaseWorker {
                 return Err(DatabaseError::InvalidInput);
             }
             Ok(ConfirmedCreate {
+                container_name: owned.container_name,
                 instance_id: owned.id,
                 scope_id: owned.scope_id,
                 project_name: owned.project_name,

@@ -39,6 +39,7 @@ pub(crate) mod instance {
         pub lifecycle: String,
         pub revision: i64,
         pub project_name: String,
+        pub container_name: Option<String>,
         pub clone_source_id: Option<String>,
         pub applied_spec_revision: Option<i64>,
     }

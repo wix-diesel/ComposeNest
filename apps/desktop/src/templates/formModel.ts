@@ -4,6 +4,7 @@ import type { CloneEdit, ClonePlanView, CreatePlanView, JsonValue, PlanEdit, Sto
 export type FormPlan = { kind: "create"; view: CreatePlanView } | { kind: "clone"; view: ClonePlanView };
 /** Only user edits are retained locally; omitted fields stay in the Core plan. */
 export interface FormDraft {
+  containerName?: string;
   displayName?: string;
   storageMethod?: StorageMethod;
   inputs: Record<string, JsonValue>;
@@ -33,6 +34,7 @@ export function planEdit(plan: FormPlan, draft: FormDraft, action: FormAction = 
   const inputs = Object.fromEntries(Object.entries(draft.inputs).filter(([key]) => key !== action.generate && plan.view.templateForm.inputs.some((input) => input.key === key)));
   const ports = Object.fromEntries(Object.entries(draft.ports).filter(([key]) => plan.view.templateForm.ports.some((slot) => slot.key === key)));
   const shared = { expectedRevision: plan.view.planRevision, displayName: draft.displayName ?? null,
+    containerName: draft.containerName ?? null,
     version: action.version ?? null, storageMethod: draft.storageMethod ?? null, ports };
   if (plan.kind === "create") return { ...shared, inputs, regenerateSecrets: action.generate ? [action.generate] : [] };
   return { ...shared, inputs: { ...Object.fromEntries(Object.entries(inputs).map(([key, value]) =>
@@ -46,6 +48,7 @@ export function concernMessage(code: string): string {
     INPUT_REQUIRED_OR_INVALID: "入力内容を確認してください。",
     INPUT_TYPE_CHANGED: "入力型が変更されているため複製できません。別のバージョンを選択してください。",
     DISPLAY_NAME_INVALID: "環境名を確認してください。",
+    CONTAINER_NAME_INVALID: "128文字以内の半角英数字・ハイフン・アンダースコア・ピリオドで入力し、先頭を英数字にしてください。",
     VERSION_NEEDS_ANSWER: "バージョンを選択・確認してください。",
     STORAGE_NEEDS_ANSWER: "保存方式を選択してください。",
     SECRET_REUSE_NEEDS_CONFIRMATION: "秘密の引継ぎ確認が必要です。",

@@ -169,6 +169,15 @@ pub(crate) async fn inspect_locked(
             })
             .collect::<Result<Vec<_>, _>>()?;
         composenest_application::create_state::ConfirmedCreate {
+            container_name: database
+                .read(|db| {
+                    Ok(db.query_row(
+                        "SELECT container_name FROM instances WHERE id=?1 AND scope_id=?2",
+                        [instance, scope],
+                        |row| row.get(0),
+                    )?)
+                })
+                .map_err(|_| StoreConflict::Backend)?,
             instance_id: instance.into(),
             scope_id: scope.into(),
             project_name: progress.instance.project_name.clone(),
@@ -502,9 +511,11 @@ async fn find_container(
             "--no-trunc".into(),
             "--quiet".into(),
             "--filter".into(),
-            format!("label=com.docker.compose.project={project}").into(),
-            "--filter".into(),
-            "label=com.docker.compose.service=main".into(),
+            format!(
+                "label=io.composenest.instance={}",
+                project.strip_prefix("cn-").ok_or(())?
+            )
+            .into(),
         ])
         .await
         .map_err(|_| ())?;

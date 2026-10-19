@@ -77,7 +77,85 @@ fn docker_names_are_bounded_and_cannot_inject_paths_flags_or_shell_syntax() {
     ] {
         assert!(!valid_container_name(name), "{name}");
     }
+    assert!(valid_container_name(&"a".repeat(128)));
     assert!(!valid_container_name(&"a".repeat(129)));
+}
+
+#[test]
+fn standalone_ports_stay_on_localhost_and_join_only_the_dedicated_network() {
+    let mut model = model();
+    model.service.ports = vec![(15432, 5432), (18080, 8080)];
+    let config = configuration(&model);
+    assert_eq!(
+        config["HostConfig"]["PortBindings"],
+        json!({
+            "5432/tcp": [{"HostIp": "127.0.0.1", "HostPort": "15432"}],
+            "8080/tcp": [{"HostIp": "127.0.0.1", "HostPort": "18080"}]
+        })
+    );
+    assert_eq!(
+        config["ExposedPorts"],
+        json!({"5432/tcp": {}, "8080/tcp": {}})
+    );
+    let network = format!("{}_default", model.name);
+    assert_eq!(config["HostConfig"]["NetworkMode"], network);
+    assert_eq!(
+        config["NetworkingConfig"]["EndpointsConfig"],
+        json!({network: {}})
+    );
+}
+
+#[test]
+fn standalone_mounts_preserve_bind_paths_and_existing_volume_names() {
+    use composenest_domain::instance::StoragePresence;
+
+    for path in [r"C:\Users\test\data 日本語", "/home/test/data 日本語"] {
+        let mut model = model();
+        model.service.mounts = vec![
+            (Storage::Bind(path.into()), "/bind-data".into()),
+            (
+                Storage::Volume {
+                    name: "existing-db-data".into(),
+                    presence: StoragePresence::Present,
+                },
+                "/var/lib/database".into(),
+            ),
+        ];
+        let config = configuration(&model);
+        assert_eq!(
+            config["HostConfig"]["Mounts"],
+            json!([
+                {"Type": "bind", "Source": path, "Target": "/bind-data", "ReadOnly": false},
+                {"Type": "volume", "Source": "existing-db-data", "Target": "/var/lib/database", "ReadOnly": false}
+            ])
+        );
+    }
+}
+
+#[test]
+fn omitted_command_preserves_image_defaults_while_runtime_limits_are_applied() {
+    let mut model = model();
+    model.service.command = None;
+    model.service.healthcheck = vec!["check".into(), "value with spaces".into()];
+    model.service.health_timing = [30, 2, 10, 4];
+    model.service.restart = "unless-stopped".into();
+    model.service.mem_limit = Some(536_870_912);
+    let config = configuration(&model);
+    assert!(config.get("Cmd").is_none());
+    assert_eq!(config["HostConfig"]["Memory"], 536_870_912);
+    assert_eq!(
+        config["HostConfig"]["RestartPolicy"]["Name"],
+        "unless-stopped"
+    );
+    assert_eq!(
+        config["Healthcheck"],
+        json!({
+            "Test": ["CMD", "check", "value with spaces"],
+            "Interval": 30_000_000_000_i64, "Timeout": 2_000_000_000_i64,
+            "StartPeriod": 10_000_000_000_i64, "StartInterval": 5_000_000_000_i64,
+            "Retries": 4
+        })
+    );
 }
 
 #[tokio::test]

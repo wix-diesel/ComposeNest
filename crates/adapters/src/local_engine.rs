@@ -142,4 +142,88 @@ mod tests {
             writer.await.unwrap();
         }
     }
+
+    async fn exchange_response(response: Vec<u8>) -> Result<(), Error> {
+        let (client, mut server) = tokio::io::duplex(8);
+        let writer = tokio::spawn(async move {
+            let mut request = [0; 12];
+            server.read_exact(&mut request).await.unwrap();
+            assert_eq!(&request, b"headersecret");
+            for fragment in response.chunks(7) {
+                server.write_all(fragment).await.unwrap();
+            }
+        });
+        let result = exchange(client, b"header", b"secret").await;
+        writer.await.unwrap();
+        result
+    }
+
+    #[tokio::test]
+    async fn fragmented_responses_preserve_creation_and_rejection_results() {
+        for (status, expected) in [
+            ("201 Created", Ok(())),
+            ("400 Bad Request", Err(Error::InvalidInput)),
+            ("404 Not Found", Err(Error::InvalidInput)),
+            ("409 Conflict", Err(Error::ExistingContainer)),
+            ("503 Unavailable", Err(Error::OutcomeUnknown)),
+        ] {
+            for version in ["HTTP/1.0", "HTTP/1.1"] {
+                let response = format!("{version} {status}\r\nContent-Length: 0\r\n\r\n");
+                assert_eq!(exchange_response(response.into_bytes()).await, expected);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn incomplete_or_invalid_http_responses_never_report_creation() {
+        for response in [
+            "HTTP/1.1 201 Created\r\nContent-Length: 0\r\n",
+            "HTTP/2 201 Created\r\n\r\n",
+            "HTTP/1.1 success\r\n\r\n",
+            "201 Created\r\n\r\n",
+            "\r\n\r\n",
+        ] {
+            assert_eq!(
+                exchange_response(response.as_bytes().to_vec()).await,
+                Err(Error::OutcomeUnknown)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn response_limit_is_inclusive_and_oversized_success_is_unknown() {
+        for (length, expected) in [
+            (RESPONSE_LIMIT, Ok(())),
+            (RESPONSE_LIMIT + 1, Err(Error::OutcomeUnknown)),
+        ] {
+            let mut response = b"HTTP/1.1 201 Created\r\nConnection: close\r\n\r\n".to_vec();
+            response.resize(length as usize, b' ');
+            assert_eq!(exchange_response(response).await, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn disconnected_transport_leaves_the_creation_outcome_unknown() {
+        let (client, server) = tokio::io::duplex(8);
+        drop(server);
+        assert_eq!(
+            exchange(client, b"header", b"secret").await,
+            Err(Error::OutcomeUnknown)
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_names_and_platforms_are_rejected_before_connecting() {
+        for (name, platform) in [
+            ("db/other", "linux/amd64"),
+            ("db?name=other", "linux/amd64"),
+            ("db", "linux/amd64&name=other"),
+            ("db", "windows/amd64"),
+        ] {
+            assert_eq!(
+                create(OsStr::new("unreachable"), name, platform, &Value::Null).await,
+                Err(Error::InvalidInput)
+            );
+        }
+    }
 }

@@ -436,6 +436,59 @@ mod tests {
     }
 
     #[test]
+    fn standalone_ownership_requires_full_id_scope_instance_project_and_service() {
+        let expected = expected();
+        let mut actual = inspected(&expected);
+        actual["Config"]["Labels"] = json!({
+            "io.composenest.project": expected.project,
+            "io.composenest.service": "main",
+            "io.composenest.scope": expected.scope,
+            "io.composenest.instance": expected.instance,
+            "io.composenest.spec-revision": "1"
+        });
+        assert_eq!(ownership(&actual, &expected), Ownership::Verified);
+        assert!(configuration_matches(&actual, &expected));
+        for key in [
+            "io.composenest.project",
+            "io.composenest.service",
+            "io.composenest.scope",
+            "io.composenest.instance",
+        ] {
+            for replacement in [Value::Null, json!("other")] {
+                let mut changed = actual.clone();
+                changed["Config"]["Labels"][key] = replacement;
+                assert_eq!(ownership(&changed, &expected), Ownership::Foreign, "{key}");
+            }
+        }
+        actual["Id"] = json!(&expected.container_id[..12]);
+        assert_eq!(ownership(&actual, &expected), Ownership::Foreign);
+    }
+
+    #[test]
+    fn standalone_and_legacy_resources_require_matching_roles_and_project_labels() {
+        for (resource, role) in [("service", "main"), ("network", "default")] {
+            for prefix in ["io.composenest", "com.docker.compose"] {
+                let project_key = format!("{prefix}.project");
+                let role_key = format!("{prefix}.{resource}");
+                let labels = json!({project_key.clone(): "cn-project", role_key.clone(): role});
+                assert!(owns_project(&labels, "cn-project", resource));
+                assert!(!owns_project(&labels, "cn-other", resource));
+                let mut changed = labels.clone();
+                changed[&role_key] = json!("other");
+                assert!(!owns_project(&changed, "cn-project", resource));
+                changed.as_object_mut().unwrap().remove(&role_key);
+                assert!(!owns_project(&changed, "cn-project", resource));
+                let mut mixed = labels;
+                mixed["io.composenest.project"] = json!("cn-project");
+                mixed[format!("io.composenest.{resource}")] = json!(role);
+                mixed["com.docker.compose.project"] = json!("cn-project");
+                mixed[format!("com.docker.compose.{resource}")] = json!(role);
+                assert!(!owns_project(&mixed, "cn-project", resource));
+            }
+        }
+    }
+
+    #[test]
     fn normalizes_omitted_health_zeros_and_unspecified_host_address() {
         let mut expected = expected();
         expected.ports.get_mut("8080/tcp").unwrap()[0].host_ip = "0.0.0.0".into();
